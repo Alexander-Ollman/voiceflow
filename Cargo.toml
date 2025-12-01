@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/voiceflow-core",
+    "crates/voiceflow-cli",
+    "crates/voiceflow-ffi",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Era-Laboratories/voiceflow"
+authors = ["Era Laboratories"]
+
+[workspace.dependencies]
+# Audio
+cpal = "0.15"
+hound = "3.5"
+rubato = "0.15"
+
+# Speech-to-Text
+whisper-rs = "0.14"
+
+# LLM Inference
+llama-cpp-2 = "0.1"
+
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+indicatif = "0.17"
+console = "0.15"
+
+# Utilities
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+directories = "5.0"
+arboard = "3.4"
+
+# Internal crates
+voiceflow-core = { path = "crates/voiceflow-core" }

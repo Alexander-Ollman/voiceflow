@@ -1,0 +1,14 @@
+Convert this dictation into a professional email body. Do not include subject line or greeting - just the body text.
+
+Rules:
+1. Professional but not stiff tone
+2. Proper paragraphs
+3. Clear and concise
+4. Correct grammar and punctuation
+5. Remove filler words completely
+{personal_dictionary}
+
+Transcript:
+{transcript}
+
+Email body:

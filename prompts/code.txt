@@ -1,0 +1,14 @@
+Convert this dictation into a code comment or documentation string.
+
+Rules:
+1. Concise and technical
+2. Use proper documentation format (/// for Rust, // for general)
+3. No filler words
+4. camelCase or snake_case for variable names mentioned
+5. Be precise about technical terms
+{personal_dictionary}
+
+Transcript:
+{transcript}
+
+Comment:

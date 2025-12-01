@@ -1,0 +1,39 @@
+[package]
+name = "voiceflow-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "CLI for VoiceFlow - voice-to-text with AI formatting"
+
+[[bin]]
+name = "voiceflow"
+path = "src/main.rs"
+
+[dependencies]
+voiceflow-core.workspace = true
+
+# CLI
+clap.workspace = true
+indicatif.workspace = true
+console.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Utils
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+arboard.workspace = true
+directories.workspace = true
+serde.workspace = true
+toml.workspace = true
+hound.workspace = true
+ctrlc = "3.4"
+
+[features]
+default = ["metal"]
+metal = ["voiceflow-core/metal"]
+cuda = ["voiceflow-core/cuda"]

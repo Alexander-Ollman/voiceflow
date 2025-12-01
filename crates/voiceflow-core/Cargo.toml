@@ -1,0 +1,36 @@
+[package]
+name = "voiceflow-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Core library for VoiceFlow - audio capture, transcription, and LLM formatting"
+
+[dependencies]
+# Audio
+cpal.workspace = true
+hound.workspace = true
+rubato.workspace = true
+
+# Speech-to-Text
+whisper-rs.workspace = true
+
+# LLM
+llama-cpp-2.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Utils
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+toml.workspace = true
+directories.workspace = true
+
+[features]
+default = ["metal"]
+metal = ["whisper-rs/metal", "llama-cpp-2/metal"]
+cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]

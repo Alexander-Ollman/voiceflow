@@ -1,0 +1,14 @@
+Convert this dictation into a casual Slack message. Keep it conversational and concise.
+
+Rules:
+1. Casual, lowercase (except proper nouns)
+2. Minimal punctuation
+3. Short sentences
+4. Can use common abbreviations
+5. Remove filler words
+{personal_dictionary}
+
+Transcript:
+{transcript}
+
+Slack message:

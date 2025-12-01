@@ -1,0 +1,23 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Models (downloaded separately)
+/models/*.bin
+/models/*.gguf
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Build artifacts
+*.dylib
+*.so
+*.a
+
+# Local config
+config/local.toml
