@@ -37,16 +37,17 @@ pub async fn run(whisper: &str, llm: &str) -> Result<()> {
     };
 
     let llm_model = match llm.to_lowercase().replace("-", "_").as_str() {
-        "qwen3_1_7b" | "qwen3" | "qwen" => LlmModel::Qwen3_1_7B,
+        "qwen3_1_7b" | "qwen3_1.7b" => LlmModel::Qwen3_1_7B,
+        "qwen3_4b" | "qwen3" | "qwen" => LlmModel::Qwen3_4B,
         "smollm3_3b" | "smollm3" | "smollm" => LlmModel::SmolLM3_3B,
         "gemma2_2b" | "gemma2" | "gemma" => LlmModel::Gemma2_2B,
         _ => {
             term.write_line(&format!(
-                "{} Unknown LLM model '{}', using 'qwen3-1.7b'",
+                "{} Unknown LLM model '{}', using 'qwen3-4b'",
                 style("⚠").yellow(),
                 llm
             ))?;
-            LlmModel::Qwen3_1_7B
+            LlmModel::Qwen3_4B
         }
     };
 
