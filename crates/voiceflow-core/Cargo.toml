@@ -12,12 +12,16 @@ description = "Core library for VoiceFlow - audio capture, transcription, and LL
 cpal.workspace = true
 hound.workspace = true
 rubato.workspace = true
+pitch-detection.workspace = true
 
 # Speech-to-Text
 whisper-rs.workspace = true
+ort.workspace = true
+ndarray.workspace = true
+serde_json.workspace = true
 
-# LLM
-llama-cpp-2.workspace = true
+# LLM - mistral.rs for cross-platform inference
+mistralrs.workspace = true
 
 # Async
 tokio.workspace = true
@@ -32,5 +36,7 @@ directories.workspace = true
 
 [features]
 default = ["metal"]
-metal = ["whisper-rs/metal", "llama-cpp-2/metal"]
-cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
+metal = ["whisper-rs/metal", "mistralrs/metal"]
+cuda = ["whisper-rs/cuda", "mistralrs/cuda"]
+accelerate = ["mistralrs/accelerate"]
+mkl = ["mistralrs/mkl"]

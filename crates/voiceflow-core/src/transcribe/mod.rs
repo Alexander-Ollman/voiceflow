@@ -1,5 +1,7 @@
-//! Speech-to-text transcription using Whisper
+//! Speech-to-text transcription engines
 
 mod whisper;
+mod moonshine;
 
-pub use whisper::WhisperEngine;
+pub use whisper::{WhisperEngine, WordTimestamp, TranscriptionResult};
+pub use moonshine::MoonshineEngine;
