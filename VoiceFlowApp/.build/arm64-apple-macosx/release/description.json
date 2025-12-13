@@ -1,0 +1,287 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.VoiceFlowApp-arm64-apple-macosx15.0-release.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/sources",
+      "importPath" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/AudioRecorder.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowBridge.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "VoiceFlowApp",
+      "moduleOutputPath" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/Modules/VoiceFlowApp.swiftmodule",
+      "objects" : [
+        "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/AudioRecorder.swift.o",
+        "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/VoiceFlowApp.swift.o",
+        "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/VoiceFlowBridge.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-whole-module-optimization",
+        "-num-threads",
+        "16",
+        "-serialize-diagnostics",
+        "-O",
+        "-j16",
+        "-DSWIFT_PACKAGE",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-Xcc",
+        "-fmodule-map-file=/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowFFI/module.modulemap",
+        "-module-cache-path",
+        "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "VoiceFlowApp_main",
+        "-swift-version",
+        "5",
+        "-parse-as-library",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "voiceflowapp"
+      ],
+      "outputFileMapPath" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/AudioRecorder.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/VoiceFlowApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/VoiceFlowBridge.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/Modules/VoiceFlowApp.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/AudioRecorder.swift",
+        "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowApp.swift",
+        "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowBridge.swift"
+      ],
+      "tempsPath" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build",
+      "wholeModuleOptimization" : true
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "VoiceFlowApp" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "VoiceFlowApp",
+      "-package-name",
+      "voiceflowapp",
+      "-c",
+      "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/AudioRecorder.swift",
+      "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowApp.swift",
+      "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowBridge.swift",
+      "-I",
+      "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-whole-module-optimization",
+      "-num-threads",
+      "16",
+      "-serialize-diagnostics",
+      "-O",
+      "-j16",
+      "-DSWIFT_PACKAGE",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-Xcc",
+      "-fmodule-map-file=/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowFFI/module.modulemap",
+      "-module-cache-path",
+      "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "VoiceFlowApp_main",
+      "-swift-version",
+      "5",
+      "-parse-as-library",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "voiceflowapp",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "VoiceFlowApp" : [
+      "VoiceFlowFFI"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/AudioRecorder.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowBridge.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/sources"
+    },
+    "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/AudioRecorder.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/VoiceFlowApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.build/VoiceFlowBridge.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/VoiceFlowApp.product/Objects.LinkFileList"
+    },
+    "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/arm64-apple-macosx/release/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}

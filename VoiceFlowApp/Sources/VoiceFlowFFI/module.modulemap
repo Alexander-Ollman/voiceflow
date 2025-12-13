@@ -1,0 +1,5 @@
+module VoiceFlowFFI {
+    header "voiceflow.h"
+    link "voiceflow_ffi"
+    export *
+}
