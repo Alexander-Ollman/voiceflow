@@ -5,17 +5,20 @@
 //! - Speech-to-text via Whisper
 //! - LLM-based text reformatting with Qwen3/SmolLM3
 //! - Context-aware prompt selection
+//! - Prosody analysis for punctuation detection
 
 pub mod audio;
 pub mod config;
 pub mod context;
 pub mod llm;
+pub mod prosody;
 pub mod transcribe;
 
 mod pipeline;
 
-pub use config::{Config, LlmModel, WhisperModel};
-pub use pipeline::{Pipeline, PipelineResult, Timings};
+pub use config::{Config, LlmModel, WhisperModel, ConfigError, env_vars};
+pub use pipeline::{Pipeline, PipelineResult, ProsodyOptions, Timings, RecoveryConfig, PipelineError};
+pub use prosody::{ProsodyHints, PitchContour};
 
 /// Process audio samples and return formatted text
 ///
