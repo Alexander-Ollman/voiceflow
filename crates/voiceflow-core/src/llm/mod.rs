@@ -3,5 +3,5 @@
 mod engine;
 mod prompts;
 
-pub use engine::LlmEngine;
+pub use engine::{detect_hardware, LlmEngine};
 pub use prompts::format_prompt;

@@ -1,34 +1,21 @@
-//! LLM engine using llama.cpp
+//! LLM engine using mistral.rs for cross-platform inference
+//! Supports Metal (macOS), CUDA (Linux), and CPU fallback
 
 use crate::config::Config;
-use crate::llm::prompts::format_prompt;
+use crate::llm::prompts::{format_prompt, post_process_output};
 use anyhow::{Context, Result};
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::LlamaModel;
-use llama_cpp_2::token::data_array::LlamaTokenDataArray;
-use std::num::NonZeroU32;
-use std::sync::OnceLock;
+use mistralrs::{GgufModelBuilder, Model, RequestBuilder, TextMessages, TextMessageRole};
+use std::sync::Arc;
 
-// Global backend initialization
-static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
-
-fn get_backend() -> &'static LlamaBackend {
-    BACKEND.get_or_init(|| LlamaBackend::init().expect("Failed to initialize llama backend"))
-}
-
-/// LLM engine for text formatting
+/// LLM engine for text formatting using mistral.rs
 pub struct LlmEngine {
-    model: LlamaModel,
+    model: Arc<Model>,
     config: Config,
-    seed: u32,
 }
 
 impl LlmEngine {
-    /// Create a new LLM engine with the given configuration
-    pub fn new(config: &Config) -> Result<Self> {
+    /// Create a new LLM engine with the given configuration (async)
+    pub async fn new_async(config: &Config) -> Result<Self> {
         let model_path = config.llm_model_path()?;
 
         if !model_path.exists() {
@@ -40,108 +27,230 @@ impl LlmEngine {
 
         tracing::info!("Loading LLM model from {:?}", model_path);
 
-        let _backend = get_backend();
+        // Get parent directory and filename
+        let model_dir = model_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_string_lossy()
+            .to_string();
+        let model_file = model_path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| config.llm_model.filename().to_string());
 
-        // Configure model parameters
-        let model_params = LlamaModelParams::default()
-            .with_n_gpu_layers(config.llm_options.n_gpu_layers as u32);
-
-        let model = LlamaModel::load_from_file(
-            _backend,
-            model_path.to_str().unwrap(),
-            &model_params,
-        )
-        .context("Failed to load LLM model")?;
+        // Build model using mistral.rs async API
+        // Note: We avoid PagedAttention for now as it can cause Metal shader conflicts
+        let model = GgufModelBuilder::new(model_dir, vec![model_file])
+            .with_logging()
+            .build()
+            .await
+            .context("Failed to load LLM model with mistral.rs")?;
 
         tracing::info!("LLM model loaded: {}", config.llm_model.display_name());
 
-        // Generate a random seed based on current time
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as u32)
-            .unwrap_or(42);
-
         Ok(Self {
-            model,
+            model: Arc::new(model),
             config: config.clone(),
-            seed,
         })
     }
 
-    /// Format a transcript using the LLM
-    ///
-    /// # Arguments
-    /// * `transcript` - Raw transcript from Whisper
-    /// * `prompt_template` - Prompt template with {transcript} placeholder
-    pub fn format(&mut self, transcript: &str, prompt_template: &str) -> Result<String> {
+    /// Create a new LLM engine (blocking wrapper for sync contexts)
+    pub fn new(config: &Config) -> Result<Self> {
+        // Use tokio's current runtime if available, otherwise create one
+        match tokio::runtime::Handle::try_current() {
+            Ok(_handle) => {
+                // We're in an async context - use spawn_blocking to avoid nested runtime
+                let config = config.clone();
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let rt = tokio::runtime::Runtime::new()?;
+                        rt.block_on(Self::new_async(&config))
+                    }).join().unwrap()
+                })
+            }
+            Err(_) => {
+                // No runtime, create one
+                let rt = tokio::runtime::Runtime::new()
+                    .context("Failed to create tokio runtime")?;
+                rt.block_on(Self::new_async(config))
+            }
+        }
+    }
+
+    /// Format a transcript using the LLM (async)
+    pub async fn format_async(&self, transcript: &str, prompt_template: &str) -> Result<String> {
         let prompt = format_prompt(prompt_template, transcript, &self.config);
 
         tracing::debug!("LLM prompt length: {} chars", prompt.len());
 
-        // Create context
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(2048))
-            .with_n_batch(512);
+        // Build messages with thinking disabled for fast inference (enable_thinking defaults to false)
+        let messages = TextMessages::new()
+            .enable_thinking(self.config.llm_options.enable_thinking)
+            .add_message(TextMessageRole::User, &prompt);
 
-        let mut ctx = self
-            .model
-            .new_context(get_backend(), ctx_params)
-            .context("Failed to create LLM context")?;
+        // Build request with sampling parameters
+        let request = RequestBuilder::from(messages)
+            .set_sampler_max_len(self.config.llm_options.max_tokens as usize)
+            .set_sampler_temperature(self.config.llm_options.temperature as f64)
+            .set_sampler_topp(self.config.llm_options.top_p as f64);
 
-        // Tokenize prompt
-        let tokens = self
-            .model
-            .str_to_token(&prompt, llama_cpp_2::model::AddBos::Always)
-            .context("Failed to tokenize prompt")?;
+        // Run inference
+        let response = self.model.send_chat_request(request).await
+            .context("LLM inference failed")?;
 
-        tracing::debug!("Prompt tokenized to {} tokens", tokens.len());
+        // Extract response text and strip any thinking tags
+        let output = response
+            .choices
+            .first()
+            .and_then(|c| c.message.content.as_ref())
+            .map(|s| strip_thinking_tags(s.trim()))
+            .unwrap_or_default();
 
-        // Create batch and add tokens
-        let mut batch = LlamaBatch::new(512, 1);
+        tracing::debug!("LLM output length: {} chars", output.len());
 
-        for (i, token) in tokens.iter().enumerate() {
-            let is_last = i == tokens.len() - 1;
-            batch.add(*token, i as i32, &[0], is_last)?;
-        }
+        Ok(output)
+    }
 
-        // Decode prompt
-        ctx.decode(&mut batch)?;
+    /// Format a transcript using the LLM (blocking wrapper)
+    pub fn format(&self, transcript: &str, prompt_template: &str) -> Result<String> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(_handle) => {
+                // We're in an async context - use spawn_blocking
+                let model = Arc::clone(&self.model);
+                let config = self.config.clone();
+                let transcript = transcript.to_string();
+                let prompt_template = prompt_template.to_string();
 
-        // Generate response
-        let mut output_tokens = Vec::new();
-        let max_tokens = self.config.llm_options.max_tokens as usize;
-        let eos_token = self.model.token_eos();
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let rt = tokio::runtime::Runtime::new()?;
+                        rt.block_on(async {
+                            let prompt = format_prompt(&prompt_template, &transcript, &config);
+                            let messages = TextMessages::new()
+                                .enable_thinking(config.llm_options.enable_thinking)
+                                .add_message(TextMessageRole::User, &prompt);
 
-        for i in 0..max_tokens {
-            // Get logits for last token
-            let logits = ctx.candidates_ith(batch.n_tokens() - 1);
+                            let request = RequestBuilder::from(messages)
+                                .set_sampler_max_len(config.llm_options.max_tokens as usize)
+                                .set_sampler_temperature(config.llm_options.temperature as f64)
+                                .set_sampler_topp(config.llm_options.top_p as f64);
 
-            // Sample next token
-            let mut candidates = LlamaTokenDataArray::from_iter(logits, false);
+                            let response = model.send_chat_request(request).await
+                                .context("LLM inference failed")?;
 
-            // Simple token sampling with seed for reproducibility
-            let new_token = candidates.sample_token(self.seed.wrapping_add(i as u32));
+                            let output = response
+                                .choices
+                                .first()
+                                .and_then(|c| c.message.content.as_ref())
+                                .map(|s| strip_thinking_tags(s.trim()))
+                                .unwrap_or_default();
 
-            // Check for EOS
-            if new_token == eos_token {
-                break;
+                            Ok(output)
+                        })
+                    }).join().unwrap()
+                })
             }
-
-            output_tokens.push(new_token);
-
-            // Prepare next batch
-            batch.clear();
-            batch.add(new_token, tokens.len() as i32 + output_tokens.len() as i32 - 1, &[0], true)?;
-
-            ctx.decode(&mut batch)?;
+            Err(_) => {
+                // No runtime, create one
+                let rt = tokio::runtime::Runtime::new()
+                    .context("Failed to create tokio runtime")?;
+                rt.block_on(self.format_async(transcript, prompt_template))
+            }
         }
+    }
+}
 
-        // Detokenize output
-        let output = output_tokens
-            .iter()
-            .filter_map(|t| self.model.token_to_str(*t, llama_cpp_2::model::Special::Tokenize).ok())
-            .collect::<String>();
+/// Detect available hardware acceleration
+pub fn detect_hardware() -> &'static str {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        "Metal (Apple Silicon)"
+    }
+    #[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+    {
+        "CPU (Intel Mac)"
+    }
+    #[cfg(all(target_os = "linux", feature = "cuda"))]
+    {
+        "CUDA (NVIDIA GPU)"
+    }
+    #[cfg(all(target_os = "linux", not(feature = "cuda")))]
+    {
+        "CPU (Linux)"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        "CPU"
+    }
+}
 
-        Ok(output.trim().to_string())
+/// Strip <think>...</think> tags from model output and apply post-processing
+fn strip_thinking_tags(text: &str) -> String {
+    // Remove <think>...</think> blocks (including empty ones)
+    let mut result = text.to_string();
+
+    // Handle <think>content</think> pattern
+    while let Some(start) = result.find("<think>") {
+        if let Some(end) = result.find("</think>") {
+            let end_tag_end = end + "</think>".len();
+            result = format!(
+                "{}{}",
+                &result[..start],
+                result[end_tag_end..].trim_start()
+            );
+        } else {
+            break;
+        }
+    }
+
+    // Apply shared post-processing (punctuation spacing, UI quoting, ellipsis normalization)
+    post_process_output(&result)
+}
+
+// Post-processing functions moved to prompts.rs for better separation of concerns.
+// This module now uses crate::llm::prompts::post_process_output for output cleanup.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Tests for strip_thinking_tags (which now uses post_process_output internally)
+    #[test]
+    fn test_strip_thinking_tags_empty() {
+        assert_eq!(strip_thinking_tags("Hello world"), "Hello world");
+    }
+
+    #[test]
+    fn test_strip_thinking_tags_with_content() {
+        assert_eq!(
+            strip_thinking_tags("<think>some reasoning</think>Hello world"),
+            "Hello world"
+        );
+    }
+
+    #[test]
+    fn test_strip_thinking_tags_multiple() {
+        assert_eq!(
+            strip_thinking_tags("<think>first</think>Hello <think>second</think>world"),
+            "Hello world"
+        );
+    }
+
+    #[test]
+    fn test_strip_thinking_tags_empty_tags() {
+        assert_eq!(
+            strip_thinking_tags("<think></think>Hello"),
+            "Hello"
+        );
+    }
+
+    // Integration test for strip_thinking_tags with post-processing
+    #[test]
+    fn test_strip_thinking_tags_full_pipeline() {
+        let input = "<think>Let me think</think>go to Settings.Click Submit";
+        let result = strip_thinking_tags(input);
+        assert!(result.contains("'Settings'"));
+        assert!(result.contains("'Submit'"));
+        assert!(!result.contains("<think>"));
     }
 }
