@@ -1,121 +1,133 @@
-# VoiceFlow
+<p align="center">
+  <img src="logo.png" alt="VoiceFlow Logo" width="200" height="200">
+</p>
 
-Voice-to-text with AI formatting — runs entirely locally using Whisper.cpp and Qwen3/SmolLM3 on Apple Silicon and Linux.
+<h1 align="center">VoiceFlow</h1>
+
+<p align="center">
+  <strong>Lightning-fast voice-to-text for macOS</strong><br>
+  Hold Option+Space, speak, release to paste. It's that simple.
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#voice-commands">Voice Commands</a> •
+  <a href="#building-from-source">Building</a>
+</p>
+
+---
 
 ## Features
 
-- **Local-first**: No cloud APIs, complete privacy
-- **Fast inference**: Optimized for Apple Silicon (Metal) and Linux (CUDA/CPU)
-- **Smart formatting**: LLM cleans up transcripts, removes filler words, adds punctuation
-- **Context-aware**: Different prompts for email, Slack, code comments, etc.
-- **Cross-platform**: macOS CLI now, native app coming soon
-
-## Supported Models
-
-### Speech-to-Text
-- Whisper (tiny, base, small, medium) via whisper.cpp
-
-### LLM (Non-Meta, Apache/permissive licensed)
-- **Qwen3-1.7B** (default) - Fast, multilingual, Apache 2.0
-- **SmolLM3-3B** - Hugging Face's efficient model, Apache 2.0
-- **Gemma 2 2B** - Google's compact model, Gemma license
+- **Push-to-talk**: Hold `⌥ Space` to record, release to transcribe and paste
+- **Blazing fast**: ~1.5 second total latency (Whisper + LLM)
+- **100% local**: All processing happens on-device using Metal GPU acceleration
+- **Smart formatting**: Automatic punctuation, em-dashes, bullet lists
+- **Voice commands**: Say "new paragraph", "bullet point", "question mark" and more
+- **Menu bar app**: Minimal footprint, no dock icon
 
 ## Installation
 
-### Prerequisites
+### Download
 
-```bash
-# macOS
-brew install llvm cmake
+1. Download the latest `VoiceFlow-Installer.dmg` from [Releases](../../releases)
+2. Open the DMG and drag VoiceFlow to Applications
+3. Launch VoiceFlow from Applications
+4. Grant Microphone and Accessibility permissions when prompted
 
-# Ubuntu/Debian
-sudo apt install build-essential cmake libclang-dev
-```
+### Requirements
 
-### Build from source
-
-```bash
-git clone https://github.com/Era-Laboratories/voiceflow.git
-cd voiceflow
-
-# Download models
-./scripts/download-models.sh
-
-# Build
-cargo build --release
-
-# Install CLI
-cargo install --path crates/voiceflow-cli
-```
+- macOS 13.0 (Ventura) or later
+- Apple Silicon (M1/M2/M3) recommended for best performance
 
 ## Usage
 
-### Basic recording
+1. **Start VoiceFlow** - Look for the icon in your menu bar
+2. **Hold `⌥ Space`** - Start speaking
+3. **Release `⌥ Space`** - Text is transcribed, formatted, and pasted automatically
+
+The icon changes color to indicate status:
+- 🔴 **Red**: Recording
+- 🟡 **Yellow**: Processing
+- ⚪ **Normal**: Ready
+
+## Voice Commands
+
+VoiceFlow understands natural voice commands for formatting:
+
+| Say this | Get this |
+|----------|----------|
+| "new line" | Line break |
+| "new paragraph" | Paragraph break |
+| "bullet point" | • Bullet item |
+| "question mark" | ? |
+| "exclamation point" | ! |
+| "comma" | , |
+| "period" | . |
+| "colon" | : |
+| "open quote ... close quote" | "quoted text" |
+
+### Automatic Features
+
+- **Punctuation**: Added automatically based on speech patterns
+- **Lists**: Enumerated items converted to bullet points
+- **Em-dashes**: Mid-sentence pauses become — dashes
+- **Filler removal**: "um", "uh", "like", "you know" removed automatically
+
+## Building from Source
+
+### Prerequisites
+
+- Rust 1.70+
+- Xcode Command Line Tools
+- Swift 5.9+
+
+### Build
 
 ```bash
-# Record and format (press Ctrl+C to stop)
-voiceflow record
+# Clone the repository
+git clone https://github.com/yourusername/voiceflow.git
+cd voiceflow
 
-# Copy to clipboard instead of stdout
-voiceflow record --clipboard
+# Build the app
+cd VoiceFlowApp
+./build.sh
 
-# Use specific context
-voiceflow record --context email
+# Run
+open build/VoiceFlow.app
 
-# Raw transcript without LLM formatting
-voiceflow record --raw
-```
-
-### Configuration
-
-```bash
-# Show current config
-voiceflow config show
-
-# Change LLM model
-voiceflow config set-model smollm3-3b
-
-# Add word to personal dictionary
-voiceflow config add-word "VoiceFlow"
-```
-
-### Transcribe file
-
-```bash
-voiceflow file recording.wav --context slack
-```
-
-## Configuration
-
-Config file location: `~/.config/voiceflow/config.toml`
-
-```toml
-[models]
-whisper_model = "base"
-llm_model = "qwen3-1.7b"
-
-[llm]
-temperature = 0.3
-max_tokens = 512
-
-[audio]
-silence_duration_ms = 800
+# Create DMG installer
+./create-dmg.sh
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│              CLI / App                   │
-├─────────────────────────────────────────┤
-│           voiceflow-core                 │
-├──────────────────┬──────────────────────┤
-│   whisper-rs     │     llama-cpp-2      │
-│   (whisper.cpp)  │   (Qwen3/SmolLM3)    │
-└──────────────────┴──────────────────────┘
-        Metal / CUDA / CPU
+voiceflow/
+├── crates/
+│   ├── voiceflow-core/    # Whisper + LLM pipeline
+│   ├── voiceflow-cli/     # Command-line interface
+│   └── voiceflow-ffi/     # C FFI for Swift bindings
+├── VoiceFlowApp/          # macOS SwiftUI app
+├── models/                # ML models (Whisper, Qwen)
+└── prompts/               # LLM system prompts
 ```
+
+## Tech Stack
+
+- **Transcription**: [Whisper](https://github.com/openai/whisper) via whisper-rs
+- **LLM**: [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen2.5-0.5B) via mistral.rs
+- **GPU**: Metal acceleration on Apple Silicon
+- **App**: SwiftUI + Carbon (hotkeys)
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  Made with ❤️ for fast typists who'd rather talk
+</p>
