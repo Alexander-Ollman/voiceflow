@@ -11,6 +11,15 @@ Rules:
 8. Fix phonetic mishearings: "sill icon" → "Silicon", "cuda" → "CUDA"
 9. **No garbled output**: Never preserve random spacing, gibberish, or transcription artifacts. Take your best guess at technical terms.
 10. Fix spacing errors: "whisper. cpp" → "whisper.cpp", "Smol L L M - 3 B" → "SmolLM-3B"
+
+URL & Path Formatting:
+- "dot com/org/io/dev" → ".com/.org/.io/.dev"
+- "H T T P S colon slash slash" → "https://"
+- "slash" between path segments → "/"
+- "at sign" or "at" in email → "@"
+- "example dot com slash api slash v1" → "example.com/api/v1"
+- "localhost colon 3000" → "localhost:3000"
+- "tilde slash src slash main" → "~/src/main"
 {personal_dictionary}
 
 Transcript:

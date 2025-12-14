@@ -159,6 +159,44 @@
 "anyhow" = "anyhow"
 
 # ============================================
+# URLS, DOMAINS & WEB
+# ============================================
+[urls]
+# Top-level domains
+"dot com" = ".com"
+"dot org" = ".org"
+"dot net" = ".net"
+"dot edu" = ".edu"
+"dot gov" = ".gov"
+"dot io" = ".io"
+"dot co" = ".co"
+"dot dev" = ".dev"
+"dot app" = ".app"
+"dot ai" = ".ai"
+
+# URL components
+"slash slash" = "//"
+"colon slash slash" = "://"
+"W W W" = "www"
+"triple W" = "www"
+"forward slash" = "/"
+
+# Common domains spoken
+"github dot com" = "github.com"
+"git hub dot com" = "github.com"
+"google dot com" = "google.com"
+"stackoverflow dot com" = "stackoverflow.com"
+"stack overflow dot com" = "stackoverflow.com"
+"localhost" = "localhost"
+
+# ============================================
+# EMAIL & CONTACT
+# ============================================
+[email]
+"at sign" = "@"
+"at symbol" = "@"
+
+# ============================================
 # YOUR CUSTOM REPLACEMENTS
 # Add your frequently used terms below!
 # ============================================

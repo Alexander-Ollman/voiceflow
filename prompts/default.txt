@@ -232,6 +232,73 @@ Output:
 - Convert "at sign" to @
 - Convert "hashtag" to #
 
+## URLs, Email Addresses & Web Content
+
+When dictating URLs, email addresses, or web content, convert spoken forms to proper formatting:
+
+### URL Detection & Formatting
+- "dot" or "period" between words → "." (e.g., "google dot com" → "google.com")
+- "slash" or "forward slash" → "/" (e.g., "dot com slash path" → ".com/path")
+- "backslash" → "\"
+- "colon" before slashes → ":" (e.g., "H T T P S colon slash slash" → "https://")
+- "W W W" or "triple W" or "www" → "www"
+- "H T T P" or "H T T P S" → "http" or "https"
+- Remove spaces in URLs entirely
+
+**Common URL patterns:**
+- "www dot example dot com" → "www.example.com"
+- "H T T P S colon slash slash github dot com" → "https://github.com"
+- "example dot com slash users slash profile" → "example.com/users/profile"
+- "go to google dot com" → "go to google.com"
+- "the link is bit dot L Y slash abc123" → "the link is bit.ly/abc123"
+
+**Top-level domains (always merge):**
+- "dot com" → ".com"
+- "dot org" → ".org"
+- "dot net" → ".net"
+- "dot edu" → ".edu"
+- "dot gov" → ".gov"
+- "dot io" → ".io"
+- "dot co" → ".co"
+- "dot dev" → ".dev"
+- "dot app" → ".app"
+- "dot ai" → ".ai"
+
+### Email Address Formatting
+- "at" or "at sign" between name and domain → "@"
+- Merge the entire email into one unit with no spaces
+
+**Examples:**
+- "john at example dot com" → "john@example.com"
+- "support at company dot io" → "support@company.io"
+- "my email is jane dot doe at gmail dot com" → "my email is jane.doe@gmail.com"
+
+### Query Parameters & Special URL Characters
+- "question mark" in URL context → "?"
+- "equals" or "equals sign" → "="
+- "ampersand" or "and sign" → "&"
+- "underscore" → "_"
+- "dash" or "hyphen" → "-"
+
+**Examples:**
+- "example dot com slash search question mark Q equals test" → "example.com/search?q=test"
+- "api dot com slash v1 question mark key equals abc ampersand limit equals 10" → "api.com/v1?key=abc&limit=10"
+
+### IP Addresses
+When four numbers are separated by "dot" or "point", format as IP address:
+- "192 dot 168 dot 1 dot 1" → "192.168.1.1"
+- "localhost colon 3000" → "localhost:3000"
+- "127 dot 0 dot 0 dot 1 colon 8080" → "127.0.0.1:8080"
+
+### File Paths
+- "slash" between directory names → "/" (Unix/Mac paths)
+- "backslash" between directory names → "\" (Windows paths)
+- "tilde" → "~"
+
+**Examples:**
+- "tilde slash documents slash file dot txt" → "~/documents/file.txt"
+- "C colon backslash users backslash john" → "C:\users\john"
+
 ## Spelled-Out Letters & Technical Terms
 
 When you see sequences of individual letters (often from spelled-out acronyms or technical terms):
