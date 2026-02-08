@@ -26,12 +26,16 @@
 - **Multiple STT engines** &mdash; [Moonshine](https://github.com/usefulsensors/moonshine) (ONNX), [Whisper](https://github.com/openai/whisper) (whisper.cpp), and [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
 - **Multiple LLM backends** &mdash; [mistral.rs](https://github.com/EricLBuehler/mistral.rs) and [llama.cpp](https://github.com/ggerganov/llama.cpp) for wide model coverage
 - **Smart formatting** &mdash; Automatic punctuation, capitalization, em-dashes, bullet lists
+- **Number normalization** &mdash; "fifty thousand dollars" becomes "$50,000", "three thirty pm" becomes "3:30 PM", phone numbers, percentages, dates, and keyword numbers (port 8000) all converted automatically
 - **Voice commands** &mdash; Say "new paragraph", "bullet point", "question mark" and more
 - **Filler word removal** &mdash; "um", "uh", "hmm" removed automatically
 - **Customizable dictionary** &mdash; Editable replacement file for technical terms and proper nouns
 - **Context-aware** &mdash; Reads cursor context via Accessibility API for seamless spacing
-- **Application detection** &mdash; Adapts formatting for email, Slack, code editors
-- **Menu bar app** &mdash; Minimal footprint, no dock icon
+- **Visual context (VLM)** &mdash; Uses a local vision-language model to capture and analyze your screen, extracting names, terms, and writing context to improve spelling accuracy. Supports Jina VLM and Qwen3-VL models
+- **Per-app formatting** &mdash; Auto-detects apps (email, Slack, code editors, etc.) and lets you customize dictation style per application with custom prompts
+- **Correction learning** &mdash; Learns from your edits to fix recurring spelling mistakes automatically, with 30-day history and pattern management
+- **Voice snippets** &mdash; Create custom trigger phrases that expand into any text (e.g., "my signature" expands to your full sign-off)
+- **Menu bar app** &mdash; Minimal footprint, no dock icon, launch at login
 
 ## How It Works
 
@@ -41,6 +45,10 @@ VoiceFlow supports two pipeline modes:
 
 ```
 Audio → STT Engine (Moonshine/Whisper) → Prosody Processing → LLM Formatting → Output
+                                                                     ↑
+                                              Visual Context (VLM) ──┤
+                                              App Profile Prompt ────┤
+                                              Correction History ────┘
 ```
 
 **Consolidated** &mdash; A single model handles both transcription and formatting:
@@ -70,7 +78,14 @@ Audio → Qwen3-ASR (Python daemon) → Post-processing → Output
 │  - Whisper (cpp)       - llama.cpp     - Pause det.  │
 │  - Qwen3-ASR (ext.)                   - Pitch det.  │
 │                                        - Filler rem. │
-│                                        - Replacements│
+│  Post-processing:                      - Replacements│
+│  - Number normalization               - Spell concat │
+│  - Abbreviation fixing                               │
+│                                                      │
+│  Smart Context:                                      │
+│  - VLM visual context (Jina/Qwen3-VL)               │
+│  - Per-app profiles                                  │
+│  - Correction learning                               │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -83,10 +98,9 @@ Audio → Qwen3-ASR (Python daemon) → Post-processing → Output
 
 ### Download
 
-1. Download the latest `VoiceFlow.dmg` from [Releases](https://github.com/Era-Laboratories/voiceflow/releases)
-2. Open the DMG and drag VoiceFlow to Applications
-3. Launch VoiceFlow from Applications
-4. Grant **Microphone** and **Accessibility** permissions when prompted
+1. Download the latest `VoiceFlow.zip` from [Releases](https://github.com/Era-Laboratories/voiceflow/releases)
+2. Extract the ZIP and launch VoiceFlow — it will offer to move itself to Applications
+3. Grant **Microphone** and **Accessibility** permissions when prompted
 
 
 ## Building from Source
@@ -147,7 +161,7 @@ The menu bar icon changes color to show status:
 
 ### Settings
 
-Access settings from the menu bar icon. Configure your STT engine, LLM model, pipeline mode, and hotkey preferences.
+Access settings from the menu bar icon. Configure your STT engine, LLM model, pipeline mode, and hotkey preferences. The **Style** tab lets you adjust formatting level, spacing, punctuation, visual context, per-app profiles, and view your correction history.
 
 ## CLI Reference
 
@@ -239,11 +253,25 @@ All commands support `--verbose` for debug output and `--config <path>` for a cu
 
 - **Punctuation** &mdash; Added automatically based on speech patterns
 - **Capitalization** &mdash; Sentences capitalized after punctuation
+- **Number normalization** &mdash; Currency ($50,000), percentages (25%), times (3:30 PM), phone numbers (555-123-4567), dates (January 15), and keyword numbers (port 8000) converted automatically. Small numbers (one through nine) stay spelled out per style convention
+- **Abbreviations** &mdash; "doctor Smith" becomes "Dr. Smith", "follow up appointment" becomes "follow-up appointment"
 - **Lists** &mdash; Enumerated items converted to bullet points
 - **Em-dashes** &mdash; Mid-sentence pauses become `—` dashes
 - **Filler removal** &mdash; "um", "uh", "ah", "hmm", "er" removed
 - **Spelled-out words** &mdash; "S M O L L M" becomes "SMOLLM"
 - **Technical terms** &mdash; Configurable replacement dictionary (e.g., "G P T" &rarr; "GPT")
+
+## Smart Context
+
+VoiceFlow uses three complementary systems to improve accuracy over time:
+
+- **Visual context (VLM)** &mdash; When enabled, captures a screenshot of your active window and uses a local vision-language model (Jina VLM or Qwen3-VL) to extract names, terms, and writing context. This helps the LLM spell proper nouns correctly &mdash; names visible on screen, project names in code editors, technical terms in documentation. Screenshots are compressed locally (JPEG, max 1280x720) and never leave your machine. Requires a VLM model download and Screen Recording permission.
+
+- **Per-app formatting** &mdash; VoiceFlow auto-detects the frontmost application and adjusts formatting style. Email apps (Outlook, Apple Mail, Gmail) get professional tone, chat apps (Slack, Discord, Teams) get casual formatting with emoji support, and code editors (VS Code, Cursor, Xcode) preserve technical precision. VoiceFlow auto-creates a profile the first time it sees a new app. Customize any app's formatting prompt in Settings > Style > App Profiles.
+
+- **Correction learning** &mdash; After dictating, VoiceFlow monitors for edits to the pasted text. When you correct a word (e.g., fixing "kunal" to "Kunal"), VoiceFlow learns the pattern and applies it to future dictations automatically. Patterns are retained for 30 days (max 100). View and manage learned corrections in Settings > Style > Correction History.
+
+All three systems feed context into the LLM formatting stage, working together for increasingly accurate output.
 
 ## Supported Models
 
@@ -289,6 +317,13 @@ All commands support `--verbose` for debug output and `--config <path>` for a cu
 | Phi-2 | mistral.rs | 1.6 GB | MIT |
 
 Custom GGUF models are also supported via `llama.cpp`.
+
+### VLM Models (Visual Context)
+
+| Model | Size | Notes |
+|-------|------|-------|
+| Jina VLM | ~9.9 GB | Default, best quality |
+| Qwen3-VL 2B Instruct | ~4.3 GB | Lighter alternative |
 
 ## Configuration
 
@@ -337,6 +372,8 @@ auto_clipboard = true
 ```
 
 ### Context Types
+
+Context types are auto-detected based on the frontmost application and can be customized per app in Settings > Style > App Profiles.
 
 | Context | Behavior |
 |---------|----------|
@@ -398,7 +435,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture detai
 
 ## License
 
-MIT License &mdash; [Era Laboratories](https://github.com/Era-Laboratories) 2024
+MIT License &mdash; [Era Laboratories](https://github.com/Era-Laboratories) 2025
 
 See [LICENSE](LICENSE) for details.
 

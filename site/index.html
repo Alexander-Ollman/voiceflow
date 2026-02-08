@@ -968,12 +968,22 @@ footer {
       <div class="feature-card">
         <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg></div>
         <h3>Smart Formatting</h3>
-        <p>A local language model cleans up grammar, adds punctuation, removes filler words, and formats numbers, dates, and URLs automatically.</p>
+        <p>A local LLM cleans up grammar, adds punctuation, and removes filler words. Post-processing normalizes numbers ($50,000), percentages (25%), times (3:30 PM), phone numbers, dates, and abbreviations.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="8" y1="21" y2="17"/><line x1="16" x2="16" y1="21" y2="17"/><line x1="12" x2="12" y1="17" y2="21"/></svg></div>
         <h3>App-Aware Context</h3>
-        <p>Automatically detects whether you're in Slack, email, or a code editor &mdash; and adjusts tone, formatting, and even emoji style to match.</p>
+        <p>Detects your frontmost app and adjusts tone automatically. Professional for email, casual for Slack, technical for code editors. Custom prompts per app.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></div>
+        <h3>Visual Context (VLM)</h3>
+        <p>A local vision model reads your screen to extract names, project terms, and writing context &mdash; so proper nouns are spelled correctly without a cloud lookup.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
+        <h3>Learns Your Corrections</h3>
+        <p>Fix a word once and VoiceFlow remembers. It monitors your edits and applies learned corrections to future dictations automatically.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg></div>
@@ -994,7 +1004,7 @@ footer {
           Accuracy
         </div>
         <h2 class="section-title">Cloud-grade accuracy, without the&nbsp;cloud</h2>
-        <p class="section-subtitle">Two AI models run in tandem on your Mac: one captures every word, another rewrites it as clean, formatted text. The same quality you'd expect from a cloud API &mdash; running on your own hardware.</p>
+        <p class="section-subtitle">Multiple AI models run in tandem on your Mac: speech-to-text captures every word, a language model formats it, and a vision model reads your screen for context. The same quality you'd expect from a cloud API.</p>
         <ul class="feature-list">
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
@@ -1002,31 +1012,32 @@ footer {
           </li>
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
-            Voice-driven punctuation &mdash; say "period" or "question mark"
+            Numbers, currency, times, percentages, and phone numbers formatted automatically
           </li>
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
-            Pitch and pause analysis for natural sentence boundaries
+            Vision model reads your screen to spell names and terms correctly
           </li>
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
-            Auto-formats numbers, dates, URLs, and email addresses
+            Learns from your corrections and improves over time
           </li>
         </ul>
       </div>
       <div class="showcase-visual" data-animate data-delay="2">
         <div class="transcript-demo">
           <div class="transcript-label"><span class="dot"></span> Raw speech</div>
-          <div class="transcript-line transcript-raw">um so I was thinking we should uh move the deadline to like march twenty first because the uh the API migration is taking longer than we expected period</div>
+          <div class="transcript-line transcript-raw">um so the budget is like fifty thousand dollars and we need it done by january fifteenth uh that's about ninety five percent of what we asked for period</div>
           <div style="height: 24px"></div>
           <div class="transcript-label" style="color: var(--accent-2);">&#10003; Formatted output</div>
-          <div class="transcript-line transcript-formatted">I was thinking we should move the deadline to <mark>March 21st</mark> because the API migration is taking longer than we expected.</div>
+          <div class="transcript-line transcript-formatted">The budget is <mark>$50,000</mark> and we need it done by <mark>January 15</mark>. That's about <mark>95%</mark> of what we asked for.</div>
         </div>
         <div class="accuracy-tags">
           <span class="accuracy-tag">Filler words removed</span>
-          <span class="accuracy-tag">Date formatted</span>
+          <span class="accuracy-tag">Currency formatted</span>
+          <span class="accuracy-tag">Date normalized</span>
+          <span class="accuracy-tag">Percentage converted</span>
           <span class="accuracy-tag">Punctuation added</span>
-          <span class="accuracy-tag">Grammar corrected</span>
         </div>
       </div>
     </div>
@@ -1043,11 +1054,11 @@ footer {
           Customizable
         </div>
         <h2 class="section-title">Your workflow, your&nbsp;rules</h2>
-        <p class="section-subtitle">Unlike cloud dictation tools that give you a single mode, VoiceFlow lets you control everything &mdash; formatting level, AI model, punctuation behavior, and more.</p>
+        <p class="section-subtitle">Unlike cloud dictation tools that give you a single mode, VoiceFlow lets you control everything &mdash; AI models, visual context, per-app formatting, and more.</p>
         <ul class="feature-list">
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
-            Minimal, Moderate, or Aggressive formatting presets
+            Toggle visual context (VLM) for screen-aware dictation
           </li>
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
@@ -1055,11 +1066,11 @@ footer {
           </li>
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
-            Create custom voice snippets that expand on trigger
+            Customize formatting prompts per app
           </li>
           <li>
             <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/></svg>
-            Smart spacing adapts to cursor context automatically
+            Create voice snippets, manage corrections, and tune spacing
           </li>
         </ul>
       </div>
@@ -1082,7 +1093,11 @@ footer {
             <span class="config-row-toggle"></span>
           </div>
           <div class="config-row">
-            <span class="config-row-label">Pitch Analysis</span>
+            <span class="config-row-label">Visual Context (VLM)</span>
+            <span class="config-row-toggle"></span>
+          </div>
+          <div class="config-row">
+            <span class="config-row-label">Correction Learning</span>
             <span class="config-row-toggle"></span>
           </div>
           <div class="config-row">
@@ -1159,6 +1174,24 @@ footer {
             <td><span class="cross">No</span></td>
           </tr>
           <tr>
+            <td>Visual context (VLM)</td>
+            <td class="highlight"><span class="check">Free &mdash; local VLM</span></td>
+            <td><span class="muted">Pro plan only</span></td>
+            <td><span class="cross">No</span></td>
+          </tr>
+          <tr>
+            <td>Correction learning</td>
+            <td class="highlight"><span class="check">Learns from edits</span></td>
+            <td><span class="check">Auto-learns</span></td>
+            <td><span class="cross">No</span></td>
+          </tr>
+          <tr>
+            <td>Number formatting</td>
+            <td class="highlight"><span class="check">Currency, %, time, dates</span></td>
+            <td><span class="check">Yes</span></td>
+            <td><span class="cross">No</span></td>
+          </tr>
+          <tr>
             <td>Custom AI models</td>
             <td class="highlight"><span class="check">Swap anytime</span></td>
             <td><span class="cross">Locked to vendor</span></td>
@@ -1179,7 +1212,7 @@ footer {
         </tbody>
       </table>
     </div>
-    <p class="comparison-note" data-animate data-delay="4">Competitor information based on publicly available documentation as of January 2025.</p>
+    <p class="comparison-note" data-animate data-delay="4">Competitor information based on publicly available documentation as of February 2026.</p>
   </div>
 </section>
 
@@ -1189,9 +1222,9 @@ footer {
     <h2 data-animate>Start dictating<br><em>within minutes</em></h2>
     <p data-animate data-delay="1">Download VoiceFlow, run the setup wizard, pick your AI models, and you're ready. No account. No API key. No subscription. Free forever.</p>
     <div data-animate data-delay="2">
-      <a href="https://github.com/Era-Laboratories/voiceflow/releases/download/v0.1.0/VoiceFlow-Installer.dmg" class="btn btn-primary">
+      <a href="https://github.com/Era-Laboratories/voiceflow/releases/download/v0.1.0/VoiceFlow.zip" class="btn btn-primary">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10"/></svg>
-        Download .dmg
+        Download for macOS
       </a>
     </div>
     <p class="download-requirements" data-animate data-delay="3">Requires macOS 13+ &middot; Apple Silicon or Intel &middot; 8 GB RAM minimum</p>
@@ -1204,7 +1237,7 @@ footer {
     <div class="footer-inner">
       <div class="footer-left">
         <img src="img/app.png" alt="">
-        VoiceFlow &copy; 2025 Era Laboratories
+        VoiceFlow &copy; 2025&ndash;2026 Era Laboratories
       </div>
       <div class="footer-links">
         <a href="https://github.com/era-laboratories/voiceflow" target="_blank">GitHub</a>
