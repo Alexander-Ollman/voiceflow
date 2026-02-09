@@ -98,7 +98,7 @@ Audio → Qwen3-ASR (Python daemon) → Post-processing → Output
 
 ### Download
 
-1. Download the latest `VoiceFlow.zip` from [Releases](https://github.com/Era-Laboratories/voiceflow/releases)
+1. Download the latest `VoiceFlow.zip` from [Releases](https://github.com/Alexander-Ollman/voiceflow/releases)
 2. Extract the ZIP and launch VoiceFlow — it will offer to move itself to Applications
 3. Grant **Microphone** and **Accessibility** permissions when prompted
 
@@ -116,7 +116,7 @@ Audio → Qwen3-ASR (Python daemon) → Post-processing → Output
 
 ```bash
 # Clone the repository
-git clone https://github.com/Era-Laboratories/voiceflow.git
+git clone https://github.com/Alexander-Ollman/voiceflow.git
 cd voiceflow
 
 # Build the Rust library
@@ -435,7 +435,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture detai
 
 ## License
 
-MIT License &mdash; [Era Laboratories](https://github.com/Era-Laboratories) 2025
+MIT License &mdash; [Alex Ollman](https://github.com/Alexander-Ollman) 2025
 
 See [LICENSE](LICENSE) for details.
 
