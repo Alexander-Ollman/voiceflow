@@ -13,6 +13,7 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 voiceflow-core.workspace = true
 tokio.workspace = true
+once_cell = "1.19"
 
 [build-dependencies]
 cbindgen = "0.27"

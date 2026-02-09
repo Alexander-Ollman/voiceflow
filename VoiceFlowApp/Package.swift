@@ -19,7 +19,8 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedFramework("Carbon"),
-                .linkedFramework("ServiceManagement")
+                .linkedFramework("ServiceManagement"),
+                .linkedFramework("ScreenCaptureKit")
             ]
         ),
         .systemLibrary(

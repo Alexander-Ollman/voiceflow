@@ -189,6 +189,19 @@
 "stack overflow dot com" = "stackoverflow.com"
 "localhost" = "localhost"
 
+# Spaced URL patterns (transcription artifacts)
+"www. " = "www."
+". com" = ".com"
+". org" = ".org"
+". net" = ".net"
+". io" = ".io"
+". co" = ".co"
+". dev" = ".dev"
+". ai" = ".ai"
+". edu" = ".edu"
+". gov" = ".gov"
+". app" = ".app"
+
 # ============================================
 # EMAIL & CONTACT
 # ============================================

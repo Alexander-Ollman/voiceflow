@@ -6,7 +6,7 @@ import VoiceFlowFFI
 final class VoiceFlowBridge: ObservableObject {
     private var handle: OpaquePointer?
     private var isCleanedUp = false
-    private var asrEngine: Qwen3ASREngine?
+    var asrEngine: Qwen3ASREngine?
 
     @Published var isInitialized = false
     @Published var isProcessing = false
@@ -56,6 +56,9 @@ final class VoiceFlowBridge: ObservableObject {
     func cleanup() {
         guard !isCleanedUp else { return }
         isCleanedUp = true
+
+        // Unload VLM before stopping daemon
+        asrEngine?.unloadVlm()
 
         // Stop the Python ASR daemon if running
         asrEngine?.stopDaemon()
@@ -120,34 +123,60 @@ final class VoiceFlowBridge: ObservableObject {
                 self.lastError = "Failed to initialize VoiceFlow pipeline"
             }
 
-            // Start Qwen3-ASR daemon if needed (consolidated mode OR external STT in traditional mode)
-            let needsAsrDaemon = consolidatedMode || externalStt
-            if needsAsrDaemon {
+            // Check if we need a VLM model
+            let hasVlm: Bool = {
+                if let ptr = voiceflow_current_vlm_model() {
+                    voiceflow_free_string(ptr)
+                    return true
+                }
+                return false
+            }()
+
+            // Start Qwen3-ASR daemon if needed (consolidated mode, external STT, or VLM)
+            let needsDaemon = consolidatedMode || externalStt || hasVlm
+            if needsDaemon {
                 self.asrEngine = Qwen3ASREngine()
 
-                // Load model in background
+                // Load models in background
                 if let engine = self.asrEngine {
                     Task {
-                        // Get current consolidated model ID from config
-                        guard let modelIdPtr = voiceflow_current_consolidated_model() else {
-                            NSLog("[VoiceFlowBridge] No consolidated model configured")
-                            return
-                        }
-                        let modelId = String(cString: modelIdPtr)
-                        voiceflow_free_string(modelIdPtr)
+                        // Load ASR model if in consolidated/external STT mode
+                        if consolidatedMode || externalStt {
+                            if let modelIdPtr = voiceflow_current_consolidated_model() {
+                                let modelId = String(cString: modelIdPtr)
+                                voiceflow_free_string(modelIdPtr)
 
-                        // Get the model directory path
-                        guard let modelDirPtr = modelId.withCString({ cStr in
-                            voiceflow_consolidated_model_dir(cStr)
-                        }) else {
-                            NSLog("[VoiceFlowBridge] Failed to get model dir for \(modelId)")
-                            return
-                        }
-                        let modelDir = String(cString: modelDirPtr)
-                        voiceflow_free_string(modelDirPtr)
+                                if let modelDirPtr = modelId.withCString({ cStr in
+                                    voiceflow_consolidated_model_dir(cStr)
+                                }) {
+                                    let modelDir = String(cString: modelDirPtr)
+                                    voiceflow_free_string(modelDirPtr)
 
-                        NSLog("[VoiceFlowBridge] Loading Qwen3-ASR model from: \(modelDir)")
-                        await engine.loadModel(from: modelDir)
+                                    NSLog("[VoiceFlowBridge] Loading Qwen3-ASR model from: \(modelDir)")
+                                    await engine.loadModel(from: modelDir)
+                                } else {
+                                    NSLog("[VoiceFlowBridge] Failed to get model dir for \(modelId)")
+                                }
+                            } else {
+                                NSLog("[VoiceFlowBridge] No consolidated model configured")
+                            }
+                        }
+
+                        // Load VLM if one is configured (independent of ASR)
+                        if let vlmIdPtr = voiceflow_current_vlm_model() {
+                            let vlmId = String(cString: vlmIdPtr)
+                            voiceflow_free_string(vlmIdPtr)
+
+                            if let vlmDirPtr = vlmId.withCString({ cStr in
+                                voiceflow_vlm_model_dir(cStr)
+                            }) {
+                                let vlmDir = String(cString: vlmDirPtr)
+                                voiceflow_free_string(vlmDirPtr)
+
+                                NSLog("[VoiceFlowBridge] Loading VLM model (\(vlmId)) from: \(vlmDir)")
+                                _ = await engine.loadVlmModel(from: vlmDir, modelType: vlmId)
+                            }
+                        }
                     }
                 }
             }

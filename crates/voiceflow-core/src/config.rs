@@ -33,11 +33,14 @@ pub enum ConfigError {
 
 /// Speech-to-Text engine selection
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum SttEngine {
-    #[default]
     Whisper,
+    #[default]
     Moonshine,
+    /// Qwen3-ASR: external Python daemon handles transcription.
+    /// In traditional mode, output is piped through the LLM for formatting.
+    Qwen3Asr,
 }
 
 impl SttEngine {
@@ -45,7 +48,13 @@ impl SttEngine {
         match self {
             Self::Whisper => "Whisper",
             Self::Moonshine => "Moonshine",
+            Self::Qwen3Asr => "Qwen3-ASR",
         }
+    }
+
+    /// Whether this engine runs externally (not in the Rust pipeline).
+    pub fn is_external(&self) -> bool {
+        matches!(self, Self::Qwen3Asr)
     }
 }
 
@@ -53,8 +62,8 @@ impl SttEngine {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum MoonshineModel {
-    #[default]
     Tiny,
+    #[default]
     Base,
 }
 
@@ -107,6 +116,210 @@ impl MoonshineModel {
     }
 }
 
+/// Pipeline mode selection
+/// Determines whether the pipeline uses separate STT + LLM stages,
+/// or a single consolidated model that handles both.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PipelineMode {
+    /// Traditional pipeline: STT (Whisper/Moonshine) → Prosody → LLM
+    #[default]
+    SttPlusLlm,
+    /// Consolidated: a single model handles audio-to-formatted-text (e.g., Qwen3-ASR via MLX Swift)
+    Consolidated,
+}
+
+impl PipelineMode {
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::SttPlusLlm => "STT + LLM (traditional)",
+            Self::Consolidated => "Consolidated (single model)",
+        }
+    }
+}
+
+/// Consolidated model options — replaces both STT and LLM in a single model
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConsolidatedModel {
+    /// Qwen3-ASR 0.6B — lightweight, fast consolidated model
+    #[default]
+    Qwen3Asr0_6B,
+    /// Qwen3-ASR 1.7B — higher quality consolidated model
+    Qwen3Asr1_7B,
+}
+
+impl ConsolidatedModel {
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Qwen3Asr0_6B => "Qwen3-ASR 0.6B",
+            Self::Qwen3Asr1_7B => "Qwen3-ASR 1.7B",
+        }
+    }
+
+    pub fn dir_name(&self) -> &str {
+        match self {
+            Self::Qwen3Asr0_6B => "qwen3-asr-0.6b",
+            Self::Qwen3Asr1_7B => "qwen3-asr-1.7b",
+        }
+    }
+
+    pub fn hf_repo(&self) -> &str {
+        match self {
+            Self::Qwen3Asr0_6B => "Qwen/Qwen3-ASR-0.6B",
+            Self::Qwen3Asr1_7B => "Qwen/Qwen3-ASR-1.7B",
+        }
+    }
+
+    pub fn size_gb(&self) -> f32 {
+        match self {
+            Self::Qwen3Asr0_6B => 1.2,
+            Self::Qwen3Asr1_7B => 3.4,
+        }
+    }
+
+    /// Required files for PyTorch/qwen-asr inference
+    pub fn required_files(&self) -> Vec<&'static str> {
+        match self {
+            Self::Qwen3Asr0_6B => vec![
+                "config.json",
+                "chat_template.json",
+                "vocab.json",
+                "merges.txt",
+                "tokenizer_config.json",
+                "preprocessor_config.json",
+                "generation_config.json",
+                "model.safetensors",
+            ],
+            Self::Qwen3Asr1_7B => vec![
+                "config.json",
+                "chat_template.json",
+                "vocab.json",
+                "merges.txt",
+                "tokenizer_config.json",
+                "preprocessor_config.json",
+                "generation_config.json",
+                "model.safetensors.index.json",
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ],
+        }
+    }
+
+    pub fn all_models() -> Vec<ConsolidatedModel> {
+        vec![Self::Qwen3Asr0_6B, Self::Qwen3Asr1_7B]
+    }
+}
+
+/// Vision-Language Model options — multimodal models for image + text understanding
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VlmModel {
+    /// Jina VLM — jinaai's vision-language model (~9.9 GB)
+    #[default]
+    JinaVlm,
+    /// Qwen3-VL 2B Instruct — Qwen's compact vision-language model (~4.3 GB)
+    Qwen3VL2B,
+}
+
+impl VlmModel {
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::JinaVlm => "Jina VLM",
+            Self::Qwen3VL2B => "Qwen3-VL 2B Instruct",
+        }
+    }
+
+    pub fn dir_name(&self) -> &str {
+        match self {
+            Self::JinaVlm => "jina-vlm",
+            Self::Qwen3VL2B => "qwen3-vl-2b-instruct",
+        }
+    }
+
+    pub fn hf_repo(&self) -> &str {
+        match self {
+            Self::JinaVlm => "jinaai/jina-vlm",
+            Self::Qwen3VL2B => "Qwen/Qwen3-VL-2B-Instruct",
+        }
+    }
+
+    pub fn size_gb(&self) -> f32 {
+        match self {
+            Self::JinaVlm => 9.9,
+            Self::Qwen3VL2B => 4.3,
+        }
+    }
+
+    /// Required files for downloading and verifying the model
+    pub fn required_files(&self) -> Vec<&'static str> {
+        match self {
+            Self::JinaVlm => vec![
+                "config.json",
+                "generation_config.json",
+                "preprocessor_config.json",
+                "processor_config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+                "merges.txt",
+                "special_tokens_map.json",
+                "added_tokens.json",
+                "chat_template.jinja",
+                "model.safetensors.index.json",
+                "model-00001-of-00003.safetensors",
+                "model-00002-of-00003.safetensors",
+                "model-00003-of-00003.safetensors",
+                // Custom model code (needed for trust_remote_code)
+                "modeling_jvlm.py",
+                "blocks_jvlm.py",
+                "configuration_jvlm.py",
+                "image_processing_jvlm.py",
+                "processing_jvlm.py",
+            ],
+            Self::Qwen3VL2B => vec![
+                "config.json",
+                "generation_config.json",
+                "preprocessor_config.json",
+                "video_preprocessor_config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+                "merges.txt",
+                "chat_template.json",
+                "model.safetensors",
+            ],
+        }
+    }
+
+    pub fn all_models() -> Vec<VlmModel> {
+        vec![Self::JinaVlm, Self::Qwen3VL2B]
+    }
+}
+
+/// LLM inference backend selection
+/// Different backends support different model architectures
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LlmBackend {
+    /// mistral.rs - Good for Qwen, Gemma2, Phi-2
+    /// Some newer architectures (SmolLM3, Gemma3n, Phi-4) not yet supported
+    #[default]
+    MistralRs,
+    /// llama.cpp via llama-cpp-2 crate - Supports all GGUF architectures
+    /// Recommended for SmolLM3, Gemma3n, Phi-4, and other newer models
+    LlamaCpp,
+}
+
+impl LlmBackend {
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::MistralRs => "mistral.rs",
+            Self::LlamaCpp => "llama.cpp",
+        }
+    }
+}
+
 /// Supported LLM models (non-Meta, permissive licenses)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -119,6 +332,12 @@ pub enum LlmModel {
     SmolLM3_3B,
     /// Gemma 2 2B - Google's compact model
     Gemma2_2B,
+    /// Gemma 3n E2B - Google's multimodal model, 2B effective params (Gemma license)
+    Gemma3nE2B,
+    /// Gemma 3n E4B - Google's multimodal model, 4B effective params (Gemma license)
+    Gemma3nE4B,
+    /// Phi-4 Mini - Microsoft's latest small model (MIT)
+    Phi4Mini,
     /// Phi-2 - Microsoft's 2.7B model (test)
     Phi2,
     /// Custom model path
@@ -140,6 +359,9 @@ impl LlmModel {
             Self::Qwen3_4B => "Qwen3-4B-Q4_K_M.gguf",
             Self::SmolLM3_3B => "SmolLM3-Q4_K_M.gguf",
             Self::Gemma2_2B => "gemma-2-2b-it-Q4_K_M.gguf",
+            Self::Gemma3nE2B => "gemma-3n-E2B-it-Q4_K_M.gguf",
+            Self::Gemma3nE4B => "gemma-3n-E4B-it-Q4_K_M.gguf",
+            Self::Phi4Mini => "Phi-4-mini-instruct-Q4_K_M.gguf",
             Self::Phi2 => "phi-2-q4.gguf",
             Self::Custom(path) => path,
         }
@@ -152,6 +374,9 @@ impl LlmModel {
             Self::Qwen3_4B => Some("Qwen/Qwen3-4B-GGUF"),
             Self::SmolLM3_3B => Some("ggml-org/SmolLM3-3B-GGUF"),
             Self::Gemma2_2B => Some("bartowski/gemma-2-2b-it-GGUF"),
+            Self::Gemma3nE2B => Some("unsloth/gemma-3n-E2B-it-GGUF"),
+            Self::Gemma3nE4B => Some("unsloth/gemma-3n-E4B-it-GGUF"),
+            Self::Phi4Mini => Some("lmstudio-community/Phi-4-mini-instruct-GGUF"),
             Self::Phi2 => Some("TheBloke/phi-2-GGUF"),
             Self::Custom(_) => None,
         }
@@ -164,6 +389,9 @@ impl LlmModel {
             Self::Qwen3_4B => "Qwen3 4B",
             Self::SmolLM3_3B => "SmolLM3 3B",
             Self::Gemma2_2B => "Gemma 2 2B",
+            Self::Gemma3nE2B => "Gemma 3n E2B (Multimodal)",
+            Self::Gemma3nE4B => "Gemma 3n E4B (Multimodal)",
+            Self::Phi4Mini => "Phi-4 Mini 3.8B",
             Self::Phi2 => "Phi-2",
             Self::Custom(path) => path,
         }
@@ -176,8 +404,37 @@ impl LlmModel {
             Self::Qwen3_4B => 2.5,
             Self::SmolLM3_3B => 1.92,
             Self::Gemma2_2B => 1.71,
+            Self::Gemma3nE2B => 1.8,  // E2B = 2B effective params
+            Self::Gemma3nE4B => 3.2,  // E4B = 4B effective params
+            Self::Phi4Mini => 2.4,
             Self::Phi2 => 1.6,
             Self::Custom(_) => 0.0,
+        }
+    }
+
+    /// Whether this model supports multimodal input (images/screenshots)
+    pub fn is_multimodal(&self) -> bool {
+        matches!(self, Self::Gemma3nE2B | Self::Gemma3nE4B)
+    }
+
+    /// Get the recommended inference backend for this model
+    /// Models with architectures not supported by mistral.rs use llama.cpp
+    pub fn backend(&self) -> LlmBackend {
+        match self {
+            // Supported by mistral.rs
+            Self::Qwen3_1_7B => LlmBackend::MistralRs,
+            Self::Qwen3_4B => LlmBackend::MistralRs,
+            Self::Gemma2_2B => LlmBackend::MistralRs,
+            Self::Phi2 => LlmBackend::MistralRs,
+
+            // Require llama.cpp (architecture not supported by mistral.rs)
+            Self::SmolLM3_3B => LlmBackend::LlamaCpp,   // 'smollm3' architecture
+            Self::Gemma3nE2B => LlmBackend::LlamaCpp,   // 'gemma3n' architecture
+            Self::Gemma3nE4B => LlmBackend::LlamaCpp,   // 'gemma3n' architecture
+            Self::Phi4Mini => LlmBackend::LlamaCpp,     // 'phi4' architecture
+
+            // Custom models default to llama.cpp (more architecture coverage)
+            Self::Custom(_) => LlmBackend::LlamaCpp,
         }
     }
 
@@ -188,19 +445,40 @@ impl LlmModel {
             Self::Qwen3_4B,
             Self::SmolLM3_3B,
             Self::Gemma2_2B,
+            Self::Gemma3nE2B,
+            Self::Gemma3nE4B,
+            Self::Phi4Mini,
+        ]
+    }
+
+    /// Get benchmark-recommended models for dictation formatting
+    /// Now includes all models thanks to switchable backends (mistral.rs + llama.cpp)
+    pub fn benchmark_models() -> Vec<LlmModel> {
+        vec![
+            Self::Qwen3_1_7B,   // Fast baseline (mistral.rs)
+            Self::Qwen3_4B,     // Higher quality (mistral.rs)
+            Self::SmolLM3_3B,   // HuggingFace efficient model (llama.cpp)
+            Self::Gemma3nE2B,   // Google's multimodal (llama.cpp)
+            Self::Phi4Mini,     // Microsoft's latest (llama.cpp)
         ]
     }
 }
 
 /// Supported Whisper model sizes
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum WhisperModel {
     Tiny,
     #[default]
     Base,
     Small,
     Medium,
+    /// Large V3 - highest accuracy, slower
+    LargeV3,
+    /// Large V3 Turbo - 6x faster than V3, near-same accuracy
+    LargeV3Turbo,
+    /// Distil Large V3 - distilled for speed, ~3.5% WER
+    DistilLargeV3,
 }
 
 impl WhisperModel {
@@ -210,6 +488,9 @@ impl WhisperModel {
             Self::Base => "ggml-base.bin",
             Self::Small => "ggml-small.bin",
             Self::Medium => "ggml-medium.bin",
+            Self::LargeV3 => "ggml-large-v3.bin",
+            Self::LargeV3Turbo => "ggml-large-v3-turbo.bin",
+            Self::DistilLargeV3 => "ggml-distil-large-v3.bin",
         }
     }
 
@@ -219,7 +500,68 @@ impl WhisperModel {
             Self::Base => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
             Self::Small => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
             Self::Medium => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+            Self::LargeV3 => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+            Self::LargeV3Turbo => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+            Self::DistilLargeV3 => "https://huggingface.co/distil-whisper/distil-large-v3-ggml/resolve/main/ggml-distil-large-v3.bin",
         }
+    }
+
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Tiny => "Whisper Tiny (39M)",
+            Self::Base => "Whisper Base (74M)",
+            Self::Small => "Whisper Small (244M)",
+            Self::Medium => "Whisper Medium (769M)",
+            Self::LargeV3 => "Whisper Large V3 (1.5B)",
+            Self::LargeV3Turbo => "Whisper Large V3 Turbo (809M)",
+            Self::DistilLargeV3 => "Distil-Whisper Large V3 (756M)",
+        }
+    }
+
+    pub fn size_mb(&self) -> u32 {
+        match self {
+            Self::Tiny => 75,
+            Self::Base => 142,
+            Self::Small => 466,
+            Self::Medium => 1533,
+            Self::LargeV3 => 3094,
+            Self::LargeV3Turbo => 1624,
+            Self::DistilLargeV3 => 1510,
+        }
+    }
+
+    pub fn expected_wer(&self) -> f32 {
+        match self {
+            Self::Tiny => 7.5,
+            Self::Base => 5.0,
+            Self::Small => 4.2,
+            Self::Medium => 3.5,
+            Self::LargeV3 => 2.9,
+            Self::LargeV3Turbo => 3.0,
+            Self::DistilLargeV3 => 3.5,
+        }
+    }
+
+    /// Get all available Whisper models
+    pub fn all_models() -> Vec<WhisperModel> {
+        vec![
+            Self::Tiny,
+            Self::Base,
+            Self::Small,
+            Self::Medium,
+            Self::LargeV3,
+            Self::LargeV3Turbo,
+            Self::DistilLargeV3,
+        ]
+    }
+
+    /// Get benchmark-recommended models (good coverage of size/quality tradeoffs)
+    pub fn benchmark_models() -> Vec<WhisperModel> {
+        vec![
+            Self::Base,           // Current default
+            Self::LargeV3Turbo,   // Best speed/accuracy
+            Self::DistilLargeV3,  // Distilled alternative
+        ]
     }
 }
 
@@ -274,6 +616,12 @@ impl Default for AudioOptions {
 /// Main configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Pipeline mode: traditional STT+LLM or consolidated single-model
+    #[serde(default)]
+    pub pipeline_mode: PipelineMode,
+    /// Consolidated model selection (used when pipeline_mode is Consolidated)
+    #[serde(default)]
+    pub consolidated_model: ConsolidatedModel,
     /// STT engine selection (whisper or moonshine)
     #[serde(default)]
     pub stt_engine: SttEngine,
@@ -284,6 +632,9 @@ pub struct Config {
     pub moonshine_model: MoonshineModel,
     /// LLM model selection
     pub llm_model: LlmModel,
+    /// VLM model selection (None = no VLM, use LLM only)
+    #[serde(default)]
+    pub vlm_model: Option<VlmModel>,
     /// LLM generation options
     pub llm_options: LlmOptions,
     /// Audio capture options
@@ -299,10 +650,13 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            pipeline_mode: PipelineMode::default(),
+            consolidated_model: ConsolidatedModel::default(),
             stt_engine: SttEngine::default(),
             whisper_model: WhisperModel::default(),
             moonshine_model: MoonshineModel::default(),
             llm_model: LlmModel::default(),
+            vlm_model: None,
             llm_options: LlmOptions::default(),
             audio: AudioOptions::default(),
             default_context: "default".to_string(),
@@ -314,6 +668,8 @@ impl Default for Config {
 
 /// Environment variable names for configuration overrides
 pub mod env_vars {
+    pub const PIPELINE_MODE: &str = "VOICEFLOW_PIPELINE_MODE";
+    pub const CONSOLIDATED_MODEL: &str = "VOICEFLOW_CONSOLIDATED_MODEL";
     pub const STT_ENGINE: &str = "VOICEFLOW_STT_ENGINE";
     pub const WHISPER_MODEL: &str = "VOICEFLOW_WHISPER_MODEL";
     pub const MOONSHINE_MODEL: &str = "VOICEFLOW_MOONSHINE_MODEL";
@@ -358,6 +714,28 @@ impl Config {
 
     /// Apply environment variable overrides to the configuration
     pub fn apply_env_overrides(&mut self) {
+        // Pipeline mode
+        if let Ok(val) = env::var(env_vars::PIPELINE_MODE) {
+            match val.to_lowercase().replace("-", "_").as_str() {
+                "stt_plus_llm" | "traditional" | "default" => self.pipeline_mode = PipelineMode::SttPlusLlm,
+                "consolidated" => self.pipeline_mode = PipelineMode::Consolidated,
+                _ => tracing::warn!("Unknown pipeline mode from env: {}", val),
+            }
+        }
+
+        // Consolidated model
+        if let Ok(val) = env::var(env_vars::CONSOLIDATED_MODEL) {
+            match val.to_lowercase().replace(['-', '.'], "_").as_str() {
+                "qwen3_asr_0_6b" | "qwen3_asr_0.6b" | "0.6b" | "0_6b" => {
+                    self.consolidated_model = ConsolidatedModel::Qwen3Asr0_6B;
+                }
+                "qwen3_asr_1_7b" | "qwen3_asr_1.7b" | "1.7b" | "1_7b" => {
+                    self.consolidated_model = ConsolidatedModel::Qwen3Asr1_7B;
+                }
+                _ => tracing::warn!("Unknown consolidated model from env: {}", val),
+            }
+        }
+
         // STT engine
         if let Ok(val) = env::var(env_vars::STT_ENGINE) {
             match val.to_lowercase().as_str() {
@@ -369,11 +747,14 @@ impl Config {
 
         // Whisper model
         if let Ok(val) = env::var(env_vars::WHISPER_MODEL) {
-            match val.to_lowercase().as_str() {
+            match val.to_lowercase().replace("-", "_").as_str() {
                 "tiny" => self.whisper_model = WhisperModel::Tiny,
                 "base" => self.whisper_model = WhisperModel::Base,
                 "small" => self.whisper_model = WhisperModel::Small,
                 "medium" => self.whisper_model = WhisperModel::Medium,
+                "large_v3" | "largev3" => self.whisper_model = WhisperModel::LargeV3,
+                "large_v3_turbo" | "largev3turbo" | "turbo" => self.whisper_model = WhisperModel::LargeV3Turbo,
+                "distil_large_v3" | "distillargev3" | "distil" => self.whisper_model = WhisperModel::DistilLargeV3,
                 _ => tracing::warn!("Unknown Whisper model from env: {}", val),
             }
         }
@@ -551,6 +932,47 @@ impl Config {
         }
     }
 
+    /// Get directory for a consolidated model
+    pub fn consolidated_model_dir(&self) -> Result<PathBuf> {
+        Ok(Self::models_dir()?.join(self.consolidated_model.dir_name()))
+    }
+
+    /// Check if the configured consolidated model files are downloaded
+    pub fn consolidated_model_downloaded(&self) -> bool {
+        self.consolidated_model_downloaded_for(&self.consolidated_model)
+    }
+
+    /// Check if a specific consolidated model's files are downloaded
+    pub fn consolidated_model_downloaded_for(&self, model: &ConsolidatedModel) -> bool {
+        if let Ok(models_dir) = Self::models_dir() {
+            let model_dir = models_dir.join(model.dir_name());
+            model
+                .required_files()
+                .iter()
+                .all(|f| model_dir.join(f).exists())
+        } else {
+            false
+        }
+    }
+
+    /// Check if a specific VLM model's files are downloaded
+    pub fn vlm_model_downloaded_for(&self, model: &VlmModel) -> bool {
+        if let Ok(models_dir) = Self::models_dir() {
+            let model_dir = models_dir.join(model.dir_name());
+            model
+                .required_files()
+                .iter()
+                .all(|f| model_dir.join(f).exists())
+        } else {
+            false
+        }
+    }
+
+    /// Check if the pipeline is in consolidated mode
+    pub fn is_consolidated_mode(&self) -> bool {
+        self.pipeline_mode == PipelineMode::Consolidated
+    }
+
     /// Get prompt template for a given context
     pub fn get_prompt_for_context(&self, context: Option<&str>) -> String {
         let ctx = context.unwrap_or(&self.default_context);
@@ -663,9 +1085,37 @@ mod tests {
     }
 
     #[test]
+    fn test_consolidated_model_properties() {
+        let model_0_6b = ConsolidatedModel::Qwen3Asr0_6B;
+        assert_eq!(model_0_6b.display_name(), "Qwen3-ASR 0.6B");
+        assert_eq!(model_0_6b.dir_name(), "qwen3-asr-0.6b");
+        assert!(!model_0_6b.required_files().is_empty());
+
+        let model_1_7b = ConsolidatedModel::Qwen3Asr1_7B;
+        assert_eq!(model_1_7b.display_name(), "Qwen3-ASR 1.7B");
+        assert_eq!(model_1_7b.dir_name(), "qwen3-asr-1.7b");
+        assert!(model_1_7b.size_gb() > model_0_6b.size_gb());
+
+        assert_eq!(ConsolidatedModel::all_models().len(), 2);
+    }
+
+    #[test]
+    fn test_pipeline_mode() {
+        let config = Config::default();
+        assert_eq!(config.pipeline_mode, PipelineMode::SttPlusLlm);
+        assert!(!config.is_consolidated_mode());
+
+        let mut config = Config::default();
+        config.pipeline_mode = PipelineMode::Consolidated;
+        assert!(config.is_consolidated_mode());
+    }
+
+    #[test]
     fn test_env_var_names() {
         // Ensure all env var names are unique and properly prefixed
         let vars = [
+            env_vars::PIPELINE_MODE,
+            env_vars::CONSOLIDATED_MODEL,
             env_vars::STT_ENGINE,
             env_vars::WHISPER_MODEL,
             env_vars::MOONSHINE_MODEL,

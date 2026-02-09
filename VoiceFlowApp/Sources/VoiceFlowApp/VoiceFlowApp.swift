@@ -127,6 +127,436 @@ class SnippetManager: ObservableObject {
     }
 }
 
+// MARK: - App Profiles
+
+/// A per-app profile for customizing dictation formatting
+struct AppProfile: Codable, Identifiable, Equatable {
+    let id: String           // bundle identifier
+    var displayName: String  // localized app name
+    var category: String     // email, slack, code, default
+    var customPrompt: String? // user override, nil = use category default
+    let firstSeenDate: Date
+}
+
+/// Manages auto-detected per-app profiles with optional custom prompts
+class AppProfileManager: ObservableObject {
+    static let shared = AppProfileManager()
+
+    @Published var profiles: [AppProfile] = []
+
+    private let storageKey = "voiceflow.appProfiles"
+
+    init() {
+        loadProfiles()
+    }
+
+    // MARK: - Storage
+
+    func loadProfiles() {
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([AppProfile].self, from: data) {
+            profiles = decoded
+        }
+    }
+
+    func saveProfiles() {
+        if let encoded = try? JSONEncoder().encode(profiles) {
+            UserDefaults.standard.set(encoded, forKey: storageKey)
+        }
+    }
+
+    // MARK: - Auto-detect & CRUD
+
+    /// Auto-creates a profile on first encounter, returns existing if already known
+    @discardableResult
+    func ensureProfile(for app: NSRunningApplication) -> AppProfile? {
+        guard let bundleId = app.bundleIdentifier else { return nil }
+
+        if let existing = profiles.first(where: { $0.id == bundleId }) {
+            return existing
+        }
+
+        let appName = app.localizedName ?? bundleId
+        let context = AppContextDetector.detectContext(for: bundleId, appName: appName)
+        let profile = AppProfile(
+            id: bundleId,
+            displayName: appName,
+            category: context.rawValue,
+            customPrompt: nil,
+            firstSeenDate: Date()
+        )
+        profiles.append(profile)
+        saveProfiles()
+        return profile
+    }
+
+    /// Returns the custom prompt or the category default for the given app
+    func promptForApp(bundleId: String) -> String {
+        guard let profile = profiles.first(where: { $0.id == bundleId }) else {
+            return ""
+        }
+
+        // Custom prompt takes priority
+        if let custom = profile.customPrompt, !custom.isEmpty {
+            return "\n[APPLICATION CONTEXT: \(profile.displayName)]\n\(custom)"
+        }
+
+        // Fall back to category default
+        let context = AppContext(rawValue: profile.category) ?? .general
+        return context.contextHint
+    }
+
+    func updateProfile(_ profile: AppProfile) {
+        if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
+            profiles[index] = profile
+            saveProfiles()
+        }
+    }
+
+    func deleteProfile(_ profile: AppProfile) {
+        profiles.removeAll { $0.id == profile.id }
+        saveProfiles()
+    }
+}
+
+// MARK: - Transcription Log
+
+/// A single transcription history entry
+struct TranscriptionEntry: Codable, Identifiable {
+    let id: UUID
+    let timestamp: Date
+    let rawTranscript: String
+    let formattedText: String
+    let modelId: String       // LLM or VLM model ID
+    let sttEngine: String     // whisper, moonshine, qwen3-asr
+    let transcriptionMs: UInt64
+    let llmMs: UInt64
+    let totalMs: UInt64
+    let targetApp: String     // frontmost app name
+    var editedText: String?   // text after user correction (if detected)
+    var editDetectedAt: Date? // when the edit was detected
+
+    init(rawTranscript: String, formattedText: String, modelId: String, sttEngine: String,
+         transcriptionMs: UInt64, llmMs: UInt64, totalMs: UInt64, targetApp: String) {
+        self.id = UUID()
+        self.timestamp = Date()
+        self.rawTranscript = rawTranscript
+        self.formattedText = formattedText
+        self.modelId = modelId
+        self.sttEngine = sttEngine
+        self.transcriptionMs = transcriptionMs
+        self.llmMs = llmMs
+        self.totalMs = totalMs
+        self.targetApp = targetApp
+        self.editedText = nil
+        self.editDetectedAt = nil
+    }
+}
+
+/// Manages transcription history with JSONL persistence
+class TranscriptionLog: ObservableObject {
+    static let shared = TranscriptionLog()
+
+    @Published var entries: [TranscriptionEntry] = []
+
+    private let maxAgeDays: Int = 30
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    private var logFileURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent("com.era-laboratories.voiceflow")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("history.jsonl")
+    }
+
+    init() {
+        encoder.dateEncodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .iso8601
+        loadEntries()
+    }
+
+    func append(_ entry: TranscriptionEntry) {
+        entries.insert(entry, at: 0)
+
+        // Append to JSONL file
+        if let data = try? encoder.encode(entry),
+           let line = String(data: data, encoding: .utf8) {
+            let lineWithNewline = line + "\n"
+            if let fileHandle = try? FileHandle(forWritingTo: logFileURL) {
+                fileHandle.seekToEndOfFile()
+                fileHandle.write(lineWithNewline.data(using: .utf8)!)
+                fileHandle.closeFile()
+            } else {
+                // File doesn't exist yet — create it
+                try? lineWithNewline.data(using: .utf8)?.write(to: logFileURL)
+            }
+        }
+    }
+
+    func loadEntries() {
+        guard FileManager.default.fileExists(atPath: logFileURL.path) else {
+            entries = []
+            return
+        }
+
+        guard let data = try? String(contentsOf: logFileURL, encoding: .utf8) else {
+            entries = []
+            return
+        }
+
+        let cutoff = Calendar.current.date(byAdding: .day, value: -maxAgeDays, to: Date()) ?? Date.distantPast
+        var loaded: [TranscriptionEntry] = []
+
+        for line in data.components(separatedBy: "\n") where !line.isEmpty {
+            if let lineData = line.data(using: .utf8),
+               let entry = try? decoder.decode(TranscriptionEntry.self, from: lineData) {
+                if entry.timestamp >= cutoff {
+                    loaded.append(entry)
+                }
+            }
+        }
+
+        // Sort newest first
+        entries = loaded.sorted { $0.timestamp > $1.timestamp }
+
+        // Prune old entries from file if needed
+        if loaded.count < data.components(separatedBy: "\n").filter({ !$0.isEmpty }).count {
+            pruneOldEntries()
+        }
+    }
+
+    private func pruneOldEntries() {
+        let lines = entries.reversed().compactMap { entry -> String? in
+            guard let data = try? encoder.encode(entry),
+                  let line = String(data: data, encoding: .utf8) else { return nil }
+            return line
+        }
+        let content = lines.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
+        try? content.data(using: .utf8)?.write(to: logFileURL)
+    }
+
+    // MARK: - Stats
+
+    /// Total words dictated (from formatted text)
+    var totalWords: Int {
+        entries.reduce(0) { $0 + $1.formattedText.split(separator: " ").count }
+    }
+
+    /// Current streak days (consecutive days with at least one dictation)
+    var streakDays: Int {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        var streak = 0
+        var checkDate = today
+
+        let daysWithEntries = Set(entries.map { calendar.startOfDay(for: $0.timestamp) })
+
+        while daysWithEntries.contains(checkDate) {
+            streak += 1
+            guard let prev = calendar.date(byAdding: .day, value: -1, to: checkDate) else { break }
+            checkDate = prev
+        }
+        return streak
+    }
+
+    /// Average words per minute (based on total_ms timings)
+    var averageWPM: Int {
+        let validEntries = entries.filter { $0.totalMs > 0 }
+        guard !validEntries.isEmpty else { return 0 }
+        let totalWords = validEntries.reduce(0) { $0 + $1.formattedText.split(separator: " ").count }
+        let totalMinutes = validEntries.reduce(0.0) { $0 + Double($1.totalMs) / 60000.0 }
+        guard totalMinutes > 0 else { return 0 }
+        return Int(Double(totalWords) / totalMinutes)
+    }
+
+    /// Entries grouped by day for display
+    var entriesByDay: [(String, [TranscriptionEntry])] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        var groups: [String: [TranscriptionEntry]] = [:]
+        var groupOrder: [String] = []
+
+        for entry in entries {
+            let day = calendar.startOfDay(for: entry.timestamp)
+            let label: String
+            if day == today {
+                label = "TODAY"
+            } else if day == yesterday {
+                label = "YESTERDAY"
+            } else {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "EEEE, MMM d"
+                label = formatter.string(from: day).uppercased()
+            }
+
+            if groups[label] == nil {
+                groups[label] = []
+                groupOrder.append(label)
+            }
+            groups[label]?.append(entry)
+        }
+
+        return groupOrder.map { ($0, groups[$0]!) }
+    }
+}
+
+// MARK: - Correction Learning
+
+/// A learned correction pattern (before → after)
+struct CorrectionPattern: Codable, Identifiable, Equatable {
+    let id: UUID
+    let original: String
+    let corrected: String
+    let timestamp: Date
+    let targetApp: String
+}
+
+/// Manages learned correction patterns from user edits
+class CorrectionManager: ObservableObject {
+    static let shared = CorrectionManager()
+
+    @Published var patterns: [CorrectionPattern] = []
+
+    private let storageKey = "voiceflow.correctionPatterns"
+    private let maxPatterns = 100
+    private let maxAgeDays = 30
+
+    init() {
+        loadPatterns()
+    }
+
+    // MARK: - Storage
+
+    func loadPatterns() {
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([CorrectionPattern].self, from: data) {
+            let cutoff = Calendar.current.date(byAdding: .day, value: -maxAgeDays, to: Date()) ?? Date.distantPast
+            patterns = decoded.filter { $0.timestamp >= cutoff }
+        }
+    }
+
+    func savePatterns() {
+        if let encoded = try? JSONEncoder().encode(patterns) {
+            UserDefaults.standard.set(encoded, forKey: storageKey)
+        }
+    }
+
+    // MARK: - Detection
+
+    /// Detect word-level corrections between original pasted text and current text
+    func detectCorrections(original: String, current: String, targetApp: String) {
+        let origWords = original.split(separator: " ").map(String.init)
+        let currWords = current.split(separator: " ").map(String.init)
+
+        // Simple word-level comparison: walk both arrays looking for differences
+        let minCount = min(origWords.count, currWords.count)
+        var newPatterns: [CorrectionPattern] = []
+
+        for i in 0..<minCount {
+            let origWord = origWords[i]
+            let currWord = currWords[i]
+
+            // Skip if identical
+            guard origWord != currWord else { continue }
+
+            // Only learn if it's a case change or small edit distance (≤2)
+            let isCaseChange = origWord.lowercased() == currWord.lowercased()
+            let distance = levenshtein(origWord.lowercased(), currWord.lowercased())
+
+            if isCaseChange || distance <= 2 {
+                // Check for duplicate
+                let isDuplicate = patterns.contains {
+                    $0.original.lowercased() == origWord.lowercased() &&
+                    $0.corrected == currWord
+                }
+
+                if !isDuplicate {
+                    let pattern = CorrectionPattern(
+                        id: UUID(),
+                        original: origWord,
+                        corrected: currWord,
+                        timestamp: Date(),
+                        targetApp: targetApp
+                    )
+                    newPatterns.append(pattern)
+                }
+            }
+        }
+
+        if !newPatterns.isEmpty {
+            patterns.append(contentsOf: newPatterns)
+            // Enforce max limit (keep newest)
+            if patterns.count > maxPatterns {
+                patterns = Array(patterns.suffix(maxPatterns))
+            }
+            savePatterns()
+        }
+    }
+
+    // MARK: - Delete & Clear
+
+    func deletePattern(id: UUID) {
+        patterns.removeAll { $0.id == id }
+        savePatterns()
+    }
+
+    func clearAll() {
+        patterns.removeAll()
+        savePatterns()
+    }
+
+    // MARK: - Context Injection
+
+    /// Returns a correction history context block for the LLM
+    func correctionContext(for transcript: String) -> String {
+        guard !patterns.isEmpty else { return "" }
+
+        // Use recent patterns (last 20)
+        let recent = patterns.suffix(20)
+        let pairs = recent.map { "'\($0.original)' -> '\($0.corrected)'" }
+
+        return """
+
+        [CORRECTION HISTORY]
+        The user has previously corrected: \(pairs.joined(separator: ", "))
+        Apply these corrections when you see the same or similar words.
+        """
+    }
+
+    // MARK: - Levenshtein Distance
+
+    private func levenshtein(_ a: String, _ b: String) -> Int {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        let aLen = aChars.count
+        let bLen = bChars.count
+
+        if aLen == 0 { return bLen }
+        if bLen == 0 { return aLen }
+
+        var prev = Array(0...bLen)
+        var curr = [Int](repeating: 0, count: bLen + 1)
+
+        for i in 1...aLen {
+            curr[0] = i
+            for j in 1...bLen {
+                let cost = aChars[i - 1] == bChars[j - 1] ? 0 : 1
+                curr[j] = min(
+                    prev[j] + 1,      // deletion
+                    curr[j - 1] + 1,  // insertion
+                    prev[j - 1] + cost // substitution
+                )
+            }
+            prev = curr
+        }
+
+        return prev[bLen]
+    }
+}
+
 // MARK: - Formatting Level
 
 enum FormattingLevel: String, CaseIterable {
@@ -320,10 +750,11 @@ enum AppContext: String {
         case .code:
             return """
 
-            [APPLICATION CONTEXT: Code Editor]
-            Format for code comments or documentation:
+            [APPLICATION CONTEXT: Code Editor / Terminal]
+            Format for code-related communication:
             - Be technical and precise
-            - Use appropriate comment syntax if dictating a comment
+            - Preserve exact project names, package names, and identifiers as they appear on screen
+            - When a spoken word is phonetically close to a technical term visible on screen, use the on-screen spelling
             - Variable names should be camelCase or snake_case as appropriate
             - Keep explanations concise
             """
@@ -394,16 +825,22 @@ struct AppContextDetector {
             return .general
         }
 
+        let bundleID = frontmostApp.bundleIdentifier ?? ""
+        let appName = frontmostApp.localizedName ?? ""
+        return detectContext(for: bundleID, appName: appName)
+    }
+
+    /// Detect context for explicit bundle ID and app name (used by AppProfileManager)
+    static func detectContext(for bundleID: String, appName: String) -> AppContext {
         // First try bundle identifier (most reliable)
-        if let bundleID = frontmostApp.bundleIdentifier,
-           let context = bundleContextMap[bundleID] {
+        if let context = bundleContextMap[bundleID] {
             return context
         }
 
         // Fall back to app name matching
-        let appName = frontmostApp.localizedName?.lowercased() ?? ""
+        let lowerName = appName.lowercased()
         for (namePattern, context) in appNameContextMap {
-            if appName.contains(namePattern) {
+            if lowerName.contains(namePattern) {
                 return context
             }
         }
@@ -498,6 +935,74 @@ struct CursorContext {
 
         return .character(char)
     }
+
+    /// Get the text content before the cursor in the focused text field (up to `maxLength` chars).
+    /// Returns nil if accessibility is unavailable or no text field is focused.
+    static func getTextBeforeCursor(maxLength: Int = 500) -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+
+        let systemWide = AXUIElementCreateSystemWide()
+
+        var focusedElementRef: CFTypeRef?
+        let focusedError = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElementRef
+        )
+
+        guard focusedError == .success,
+              let focusedElement = focusedElementRef else {
+            return nil
+        }
+
+        let element = focusedElement as! AXUIElement
+
+        // Get cursor position from selected text range
+        var selectedRangeRef: CFTypeRef?
+        let rangeError = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &selectedRangeRef
+        )
+
+        guard rangeError == .success,
+              let rangeValue = selectedRangeRef else {
+            return nil
+        }
+
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else {
+            return nil
+        }
+
+        let cursorPosition = range.location
+        guard cursorPosition > 0 else { return nil }
+
+        // Read up to maxLength characters before the cursor
+        let readLength = min(cursorPosition, maxLength)
+        let startPos = cursorPosition - readLength
+        var textRange = CFRange(location: startPos, length: readLength)
+
+        guard let rangeParam = AXValueCreate(.cfRange, &textRange) else {
+            return nil
+        }
+
+        var textRef: CFTypeRef?
+        let textError = AXUIElementCopyParameterizedAttributeValue(
+            element,
+            kAXStringForRangeParameterizedAttribute as CFString,
+            rangeParam,
+            &textRef
+        )
+
+        guard textError == .success,
+              let text = textRef as? String,
+              !text.isEmpty else {
+            return nil
+        }
+
+        return text
+    }
 }
 
 // MARK: - App Delegate
@@ -514,7 +1019,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
     var wizardController: SetupWizardController?
     private var audioLevelCancellable: AnyCancellable?
+    private var screenshotCapture = ScreenshotCapture()
+    private var pendingVisualContext: Task<String?, Never>?
 
+    private var lastPastedText: String?
     private var isRecording = false
     private var recordingMenuItem: NSMenuItem?
     private var formattingMenuItems: [FormattingLevel: NSMenuItem] = [:]
@@ -545,6 +1053,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // User preference for visual context
+    var visualContextEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "visualContextEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "visualContextEnabled") }
+    }
+
     // User preferences for punctuation options
     func isPunctuationOptionEnabled(_ option: PunctuationOption) -> Bool {
         let key = "punctuation_\(option.rawValue)"
@@ -564,10 +1078,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hide dock icon - menu bar only
         NSApp.setActivationPolicy(.accessory)
 
+        // Offer to move to /Applications if running from elsewhere (e.g. Downloads)
+        offerRelocationIfNeeded()
+
         if !SetupWizardController.isSetupComplete {
             showSetupWizard()
         } else {
             proceedWithNormalLaunch()
+        }
+    }
+
+    /// If the app is not in /Applications, offer to move it there.
+    private func offerRelocationIfNeeded() {
+        let appPath = Bundle.main.bundlePath
+        let applicationsDir = "/Applications"
+
+        // Already in /Applications — nothing to do
+        if appPath.hasPrefix(applicationsDir) { return }
+
+        // Don't nag on every launch — only ask once per location
+        let lastAskedPath = UserDefaults.standard.string(forKey: "relocateLastAskedPath")
+        if lastAskedPath == appPath { return }
+        UserDefaults.standard.set(appPath, forKey: "relocateLastAskedPath")
+
+        // Temporarily show in dock so the dialog is visible
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "Move to Applications?"
+        alert.informativeText = "VoiceFlow works best when run from your Applications folder. Would you like to move it there now?"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Move to Applications")
+        alert.addButton(withTitle: "Not Now")
+
+        let response = alert.runModal()
+
+        // Restore menu-bar-only mode
+        NSApp.setActivationPolicy(.accessory)
+
+        guard response == .alertFirstButtonReturn else { return }
+
+        let destPath = (applicationsDir as NSString).appendingPathComponent(
+            (appPath as NSString).lastPathComponent
+        )
+
+        do {
+            let fm = FileManager.default
+            // Remove existing copy if present
+            if fm.fileExists(atPath: destPath) {
+                try fm.removeItem(atPath: destPath)
+            }
+            try fm.copyItem(atPath: appPath, toPath: destPath)
+
+            // Relaunch from new location
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-n", destPath]
+            try process.run()
+
+            NSApp.terminate(nil)
+        } catch {
+            let errAlert = NSAlert()
+            errAlert.messageText = "Could Not Move App"
+            errAlert.informativeText = "Failed to move VoiceFlow to Applications: \(error.localizedDescription)\n\nYou can move it manually by dragging VoiceFlow.app into your Applications folder."
+            errAlert.alertStyle = .warning
+            errAlert.addButton(withTitle: "OK")
+            errAlert.runModal()
         }
     }
 
@@ -805,9 +1382,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(rootView: settingsView)
 
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "VoiceFlow Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 450, height: 500))
+        window.title = "VoiceFlow"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 780, height: 560))
+        window.minSize = NSSize(width: 680, height: 480)
         window.center()
         window.isReleasedWhenClosed = false
 
@@ -943,6 +1521,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Determine if a transcript is complex enough to benefit from visual context (VLM).
+    /// Short or trivial transcripts don't need screen context — saves VLM + LLM prompt overhead.
+    private func needsVisualContext(transcript: String) -> Bool {
+        let words = transcript.split(separator: " ")
+
+        // Rule 1: Very short transcripts (< 5 words) rarely need visual context
+        guard words.count >= 5 else { return false }
+
+        // Rule 2: If transcript contains only common/stop words, skip
+        // (e.g., "yes I think so too" doesn't need screen context)
+        let commonWords: Set<String> = [
+            "yes", "no", "ok", "okay", "sure", "thanks", "thank", "you",
+            "please", "hello", "hi", "hey", "bye", "goodbye", "right",
+            "i", "me", "my", "we", "the", "a", "an", "is", "are", "was",
+            "it", "that", "this", "so", "and", "but", "or", "not", "just",
+            "do", "did", "have", "has", "had", "will", "would", "can",
+            "could", "should", "think", "know", "like", "go", "get",
+            "see", "look", "make", "want", "need", "let", "say", "said",
+            "well", "also", "too", "very", "really", "actually", "maybe",
+            "here", "there", "now", "then", "when", "what", "how", "why",
+            "who", "where", "which", "all", "some", "any", "much", "many",
+            "good", "great", "fine", "new", "old", "big", "little", "more",
+            "one", "two", "three", "four", "five", "first", "last", "next",
+            "up", "down", "in", "on", "at", "to", "for", "of", "with",
+            "from", "by", "about", "into", "over", "after", "before",
+            "been", "being", "going", "come", "back", "out", "still",
+            "if", "them", "they", "their", "he", "she", "his", "her",
+            "its", "our", "your", "be", "am", "were", "done", "got",
+        ]
+        let hasUncommonWord = words.contains { word in
+            !commonWords.contains(word.lowercased().trimmingCharacters(in: .punctuationCharacters))
+        }
+
+        return hasUncommonWord
+    }
+
     private func startRecording() {
         guard !isRecording else { return }
 
@@ -960,6 +1574,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .sink { [weak self] level in
                     self?.overlayState.audioLevel = level
                 }
+
+            // Start visual context capture in parallel with recording
+            let hasVlm: Bool = {
+                if let ptr = voiceflow_current_vlm_model() {
+                    voiceflow_free_string(ptr)
+                    return true
+                }
+                return false
+            }()
+            if visualContextEnabled && hasVlm {
+                if !ScreenshotCapture.hasPermission() {
+                    // Show one-time alert directing user to grant Screen Recording
+                    let alert = NSAlert()
+                    alert.messageText = "Screen Recording Permission Required"
+                    alert.informativeText = "Visual Context is enabled but VoiceFlow doesn't have Screen Recording permission. Please go to System Settings > Privacy & Security > Screen Recording and enable VoiceFlow, or disable Visual Context in Settings."
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "Open System Settings")
+                    alert.addButton(withTitle: "Continue Without")
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                } else {
+                    let capture = screenshotCapture
+                    let engine = voiceFlow.asrEngine
+                    pendingVisualContext = Task {
+                        do {
+                            let imageData = try await capture.captureActiveWindow()
+                            return await engine?.analyzeImage(imageData: imageData)
+                        } catch {
+                            NSLog("[VoiceFlow] Visual context capture failed: \(error)")
+                            return nil
+                        }
+                    }
+                }
+            }
         } catch {
             showAlert(title: "Recording Error", message: error.localizedDescription)
         }
@@ -978,6 +1630,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard !audio.isEmpty else {
             hideOverlay()
+            pendingVisualContext?.cancel()
+            pendingVisualContext = nil
             showNotification(title: "No Audio", body: "No audio was captured")
             return
         }
@@ -985,15 +1639,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Show processing state in overlay
         showOverlay(state: .processing)
 
-        // Detect the application context (email, slack, code, etc.)
-        let appContext = AppContextDetector.detectContext()
+        // Detect the application context via AppProfileManager (auto-creates on first encounter)
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        let _ = frontmostApp.flatMap { AppProfileManager.shared.ensureProfile(for: $0) }
+        let appPrompt = frontmostApp?.bundleIdentifier.flatMap {
+            AppProfileManager.shared.promptForApp(bundleId: $0)
+        } ?? ""
+        let frontApp = frontmostApp?.localizedName ?? "Unknown"
 
-        // Combine formatting level prompt with app-specific context
-        let context = formattingLevel.systemPrompt + appContext.contextHint
+        // Read existing text from the focused input field (must be on main thread before async)
+        let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
+
+        let visualContextTask = pendingVisualContext
+        pendingVisualContext = nil
+        let baseContext = formattingLevel.systemPrompt + appPrompt
         let currentSpacingMode = spacingMode
 
+        // Gate visual context based on recording duration (audio is 16kHz mono)
+        let recordingDurationSecs = Double(audio.count) / 16000.0
+        let skipVisualContext = recordingDurationSecs < 1.5
+        if skipVisualContext {
+            NSLog("[VoiceFlow] Short recording (%.1fs) — skipping visual context", recordingDurationSecs)
+            visualContextTask?.cancel()
+        }
+
         Task {
+            // Await pending visual context (with 5s timeout) — only if recording was long enough
+            let visualDescription: String? = await {
+                guard !skipVisualContext, let task = visualContextTask else { return nil }
+                return await withTaskGroup(of: String?.self) { group in
+                    group.addTask { await task.value }
+                    group.addTask {
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        return nil
+                    }
+                    let result = await group.next() ?? nil
+                    group.cancelAll()
+                    return result
+                }
+            }()
+
+            // Combine formatting level prompt + app context + visual context + input field context
+            var context = baseContext
+            if let visualDescription = visualDescription, !visualDescription.isEmpty {
+                context += """
+
+                [VISUAL CONTEXT — HIGH PRIORITY]
+                The following was extracted from the user's active screen:
+                \(visualDescription)
+                CRITICAL: When the speaker says a word that sounds like a term visible on screen, \
+                ALWAYS use the on-screen spelling. Screen text is ground truth — it overrides phonetic guesses. \
+                Examples: if screen shows "era-code" and speaker says something like "era core", output "Era Code". \
+                If screen shows "OAuth" and speaker says "oh auth", output "OAuth". \
+                Use NAMES and TERMS for proper noun spelling. Use CONTEXT and NEARBY_TEXT to match tone and style.
+                """
+            }
+            // Terminal apps have unreliable AX text buffers (includes shell output,
+            // prompts, status bars). Only trust mid-sentence detection for standard text fields.
+            let terminalBundleIds: Set<String> = [
+                "com.apple.Terminal",
+                "com.googlecode.iterm2",
+                "com.mitchellh.ghostty",
+                "dev.warp.Warp-Stable",
+                "io.alacritty",
+                "com.github.wez.wezterm",
+                "net.kovidgoyal.kitty",
+            ]
+            let isTerminal = terminalBundleIds.contains(frontmostApp?.bundleIdentifier ?? "")
+
+            // Determine mid-sentence state for continuation casing fix.
+            // For standard text apps: use AX buffer (reliable).
+            // For terminal apps: use last VoiceFlow output (AX buffer includes shell chrome).
+            let isMidSentence: Bool
+            if isTerminal {
+                let lastOutput = self.lastPastedText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let lastOutputChar = lastOutput.last
+                isMidSentence = lastOutputChar != nil && !".?!".contains(String(lastOutputChar!))
+                NSLog("[VoiceFlow] INPUT CONTEXT: terminal mode, lastPastedText='%@', isMidSentence=%d",
+                      String(lastOutput.suffix(40)),
+                      isMidSentence ? 1 : 0)
+            } else if let inputText = inputFieldText, !inputText.isEmpty {
+                let trimmedInput = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let lastChar = trimmedInput.last
+                isMidSentence = lastChar != nil && !".?!".contains(String(lastChar!))
+                NSLog("[VoiceFlow] INPUT CONTEXT: text field, got %d chars, lastChar='%@', isMidSentence=%d",
+                      inputText.count,
+                      lastChar.map { String($0) } ?? "nil",
+                      isMidSentence ? 1 : 0)
+            } else {
+                isMidSentence = false
+                NSLog("[VoiceFlow] INPUT CONTEXT: no text before cursor (inputFieldText=%@)",
+                      inputFieldText == nil ? "nil" : "empty")
+            }
+
+            if let inputText = inputFieldText, !inputText.isEmpty {
+                context += """
+
+                [INPUT CONTEXT]
+                Text already in the input field (before the cursor):
+                \(inputText)
+                You are CONTINUING from this text. Rules:
+                - Do NOT repeat or rewrite any of the existing text.
+                - If the existing text ends mid-sentence (no final . ? ! or newline), your output must seamlessly continue the sentence. Do NOT capitalize your first word (unless it is "I" or a proper noun). Do NOT add a period at the end unless the thought is truly complete.
+                - If the existing text ends with sentence-ending punctuation (. ? !) or a newline, start a new sentence with a capital letter.
+                - Your output should read as a natural continuation — as if the existing text and your output were written together.
+                """
+            }
+
+            if isMidSentence {
+                context += "\n[MID_SENTENCE_CONTINUATION]"
+            }
+
+            // Inject correction history from previous user edits
+            let correctionHint = CorrectionManager.shared.correctionContext(for: "")
+            if !correctionHint.isEmpty {
+                context += correctionHint
+            }
+
             if let result = await voiceFlow.process(audio: audio, context: context) {
+                // Log visual context decision for tuning heuristics
+                let wouldNeedVLM = self.needsVisualContext(transcript: result.rawTranscript)
+                if !skipVisualContext && !wouldNeedVLM {
+                    NSLog("[VoiceFlow] VLM ran but transcript didn't need it: \"%@\" (%d words)",
+                          result.rawTranscript,
+                          result.rawTranscript.split(separator: " ").count)
+                }
+
                 // Apply snippet expansion (e.g., "my signature" → "Best regards,\nJohn")
                 let expandedText = SnippetManager.shared.expandSnippets(in: result.formattedText)
 
@@ -1004,6 +1775,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if !spacedText.isEmpty && !spacedText.hasSuffix(" ") && !spacedText.hasSuffix("\n") {
                     spacedText += " "
                 }
+
+                // Log the transcription
+                let currentModel: String = {
+                    if let vlmPtr = voiceflow_current_vlm_model() {
+                        let s = String(cString: vlmPtr)
+                        voiceflow_free_string(vlmPtr)
+                        return s
+                    }
+                    if let llmPtr = voiceflow_current_model() {
+                        let s = String(cString: llmPtr)
+                        voiceflow_free_string(llmPtr)
+                        return s
+                    }
+                    return "unknown"
+                }()
+                let currentEngine: String = {
+                    if let ptr = voiceflow_current_stt_engine() {
+                        let s = String(cString: ptr)
+                        voiceflow_free_string(ptr)
+                        return s
+                    }
+                    return "unknown"
+                }()
+                let logEntry = TranscriptionEntry(
+                    rawTranscript: result.rawTranscript,
+                    formattedText: spacedText.trimmingCharacters(in: .whitespaces),
+                    modelId: currentModel,
+                    sttEngine: currentEngine,
+                    transcriptionMs: result.transcriptionMs,
+                    llmMs: result.llmMs,
+                    totalMs: result.totalMs,
+                    targetApp: frontApp
+                )
+                TranscriptionLog.shared.append(logEntry)
 
                 // Copy to clipboard
                 let pasteboard = NSPasteboard.general
@@ -1027,6 +1832,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     title: "Pasted (\(result.totalMs)ms)",
                     body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                 )
+
+                // Track last pasted text for terminal continuation detection
+                self.lastPastedText = spacedText
+
+                // Post-paste correction detection: read back text after delay to detect user edits
+                let pastedText = spacedText.trimmingCharacters(in: .whitespaces)
+                let pastedLength = pastedText.count
+                let correctionApp = frontApp
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3s delay
+                    if let currentText = CursorContext.getTextBeforeCursor(maxLength: pastedLength + 50) {
+                        let region = String(currentText.suffix(pastedLength + 10))
+                        if region != pastedText && !region.isEmpty && region.count >= pastedText.count / 2 {
+                            CorrectionManager.shared.detectCorrections(
+                                original: pastedText, current: region, targetApp: correctionApp
+                            )
+                        }
+                    }
+                }
             } else {
                 await MainActor.run {
                     hideOverlay()
@@ -1237,6 +2061,30 @@ struct MicrophonePermissionButton: View {
     }
 }
 
+struct ScreenRecordingPermissionButton: View {
+    @State private var isGranted: Bool = CGPreflightScreenCaptureAccess()
+
+    var body: some View {
+        Group {
+            if isGranted {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+            } else {
+                Button("Grant") {
+                    CGRequestScreenCaptureAccess()
+                    // Check again after a delay (user needs to interact with system dialog)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        isGranted = CGPreflightScreenCaptureAccess()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            isGranted = CGPreflightScreenCaptureAccess()
+        }
+    }
+}
+
 // MARK: - Settings View
 
 struct SettingsHeaderView: View {
@@ -1271,43 +2119,742 @@ struct SettingsHeaderView: View {
     }
 }
 
+// MARK: - Sidebar Navigation
+
+enum SidebarPage: String, CaseIterable, Identifiable {
+    case home = "Home"
+    case models = "Models"
+    case snippets = "Snippets"
+    case style = "Style"
+    case settings = "Settings"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .home: return "house"
+        case .models: return "cpu"
+        case .snippets: return "scissors"
+        case .style: return "textformat"
+        case .settings: return "gearshape"
+        }
+    }
+
+    var isBottom: Bool {
+        self == .settings
+    }
+}
+
+struct MainAppView: View {
+    @EnvironmentObject var voiceFlow: VoiceFlowBridge
+    @EnvironmentObject var snippetManager: SnippetManager
+    @ObservedObject var transcriptionLog = TranscriptionLog.shared
+    @StateObject private var modelManager = ModelManager()
+    @State private var selectedPage: SidebarPage = .home
+
+    var body: some View {
+        NavigationSplitView {
+            VStack(spacing: 0) {
+                // Logo header
+                HStack(spacing: 10) {
+                    if let logoPath = Bundle.main.path(forResource: "AppLogo", ofType: "png"),
+                       let logoImage = NSImage(contentsOfFile: logoPath) {
+                        Image(nsImage: logoImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 28, height: 28)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    Text("VoiceFlow")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 16)
+
+                // Top pages
+                VStack(spacing: 2) {
+                    ForEach(SidebarPage.allCases.filter { !$0.isBottom }) { page in
+                        SidebarItemView(page: page, isSelected: selectedPage == page)
+                            .onTapGesture { selectedPage = page }
+                    }
+                }
+                .padding(.horizontal, 8)
+
+                Spacer()
+
+                // Bottom pages
+                VStack(spacing: 2) {
+                    ForEach(SidebarPage.allCases.filter { $0.isBottom }) { page in
+                        SidebarItemView(page: page, isSelected: selectedPage == page)
+                            .onTapGesture { selectedPage = page }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 12)
+            }
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
+        } detail: {
+            Group {
+                switch selectedPage {
+                case .home:
+                    HomeView()
+                        .environmentObject(transcriptionLog)
+                case .models:
+                    ModelSettingsView()
+                        .environmentObject(modelManager)
+                case .snippets:
+                    SnippetsSettingsView()
+                        .environmentObject(snippetManager)
+                case .style:
+                    StyleSettingsView()
+                case .settings:
+                    GeneralSettingsView()
+                        .environmentObject(voiceFlow)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: 780, height: 560)
+    }
+}
+
+struct SidebarItemView: View {
+    let page: SidebarPage
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: page.icon)
+                .font(.system(size: 14))
+                .frame(width: 20)
+                .foregroundColor(isSelected ? .accentColor : .secondary)
+            Text(page.rawValue)
+                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                .foregroundColor(isSelected ? .primary : .secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        )
+        .contentShape(Rectangle())
+    }
+}
+
+// Legacy SettingsView wrapper (for SwiftUI Settings scene)
 struct SettingsView: View {
     @EnvironmentObject var voiceFlow: VoiceFlowBridge
     @EnvironmentObject var snippetManager: SnippetManager
-    @StateObject private var modelManager = ModelManager()
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header with logo
-            SettingsHeaderView()
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
+        MainAppView()
+            .environmentObject(voiceFlow)
+            .environmentObject(snippetManager)
+    }
+}
 
-            Divider()
-                .padding(.horizontal, 16)
+// MARK: - Home View
 
-            // Tabs
-            TabView {
-                GeneralSettingsView()
-                    .environmentObject(voiceFlow)
-                    .tabItem {
-                        Label("General", systemImage: "gear")
+struct HomeView: View {
+    @EnvironmentObject var transcriptionLog: TranscriptionLog
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Welcome header
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Welcome back")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    Text("Your voice-to-text activity")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.bottom, 4)
+
+                // Stats row
+                HStack(spacing: 16) {
+                    StatCardView(
+                        title: "Streak",
+                        value: "\(transcriptionLog.streakDays)",
+                        unit: transcriptionLog.streakDays == 1 ? "day" : "days",
+                        icon: "flame",
+                        color: .orange
+                    )
+                    StatCardView(
+                        title: "Words",
+                        value: formatNumber(transcriptionLog.totalWords),
+                        unit: "total",
+                        icon: "text.word.spacing",
+                        color: .blue
+                    )
+                    StatCardView(
+                        title: "Speed",
+                        value: "\(transcriptionLog.averageWPM)",
+                        unit: "wpm",
+                        icon: "gauge.medium",
+                        color: .green
+                    )
+                }
+
+                // Transcription history
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Recent Activity")
+                        .font(.headline)
+
+                    if transcriptionLog.entries.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 32))
+                                .foregroundColor(.secondary.opacity(0.5))
+                            Text("No transcriptions yet")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Text("Press ⌥ Space to start dictating")
+                                .font(.caption)
+                                .foregroundColor(.secondary.opacity(0.7))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(transcriptionLog.entriesByDay, id: \.0) { dayLabel, dayEntries in
+                                // Day header
+                                Text(dayLabel)
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, 12)
+                                    .padding(.bottom, 6)
+
+                                ForEach(dayEntries) { entry in
+                                    TranscriptionRowView(entry: entry)
+                                }
+                            }
+                        }
                     }
+                }
+            }
+            .padding()
+        }
+    }
 
-                ModelSettingsView()
-                    .environmentObject(modelManager)
-                    .tabItem {
-                        Label("Models", systemImage: "cpu")
-                    }
+    private func formatNumber(_ n: Int) -> String {
+        if n >= 1000 {
+            let k = Double(n) / 1000.0
+            return String(format: "%.1fk", k)
+        }
+        return "\(n)"
+    }
+}
 
-                SnippetsSettingsView()
-                    .environmentObject(snippetManager)
-                    .tabItem {
-                        Label("Snippets", systemImage: "text.badge.plus")
-                    }
+struct StatCardView: View {
+    let title: String
+    let value: String
+    let unit: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundColor(color)
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value)
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                Text(unit)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
-        .frame(width: 520, height: 560)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
+    }
+}
+
+struct TranscriptionRowView: View {
+    let entry: TranscriptionEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(entry.formattedText)
+                    .font(.system(size: 13))
+                    .lineLimit(2)
+                Spacer()
+                if entry.editedText != nil {
+                    Text("Learned")
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.green.opacity(0.15))
+                        .foregroundColor(.green)
+                        .clipShape(Capsule())
+                }
+                Text(timeString(entry.timestamp))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            HStack(spacing: 8) {
+                if !entry.targetApp.isEmpty {
+                    Label(entry.targetApp, systemImage: "app")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Text("\(entry.totalMs)ms")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
+        .overlay(
+            Rectangle()
+                .fill(Color.secondary.opacity(0.1))
+                .frame(height: 1),
+            alignment: .bottom
+        )
+    }
+
+    private func timeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Style Settings View
+
+struct StyleSettingsView: View {
+    @AppStorage("visualContextEnabled") private var visualContextEnabled = false
+    @AppStorage("appProfilesEnabled") private var appProfilesEnabled = true
+    @ObservedObject private var profileManager = AppProfileManager.shared
+    @ObservedObject private var correctionManager = CorrectionManager.shared
+    @State private var editingProfile: AppProfile? = nil
+
+    @State private var formattingLevel: FormattingLevel = {
+        let raw = UserDefaults.standard.string(forKey: "formattingLevel") ?? FormattingLevel.moderate.rawValue
+        return FormattingLevel(rawValue: raw) ?? .moderate
+    }()
+
+    @State private var spacingMode: SpacingMode = {
+        let raw = UserDefaults.standard.string(forKey: "spacingMode") ?? SpacingMode.contextAware.rawValue
+        return SpacingMode(rawValue: raw) ?? .contextAware
+    }()
+
+    @State private var punctuationToggles: [PunctuationOption: Bool] = {
+        var toggles: [PunctuationOption: Bool] = [:]
+        for option in PunctuationOption.allCases {
+            let key = "punctuation_\(option.rawValue)"
+            if UserDefaults.standard.object(forKey: key) == nil {
+                toggles[option] = option.defaultEnabled
+            } else {
+                toggles[option] = UserDefaults.standard.bool(forKey: key)
+            }
+        }
+        return toggles
+    }()
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Page header
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Style & Formatting")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    Text("Control how VoiceFlow formats your dictations")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.bottom, 4)
+
+                // Formatting Level
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(FormattingLevel.allCases, id: \.self) { level in
+                            HStack(spacing: 10) {
+                                Image(systemName: formattingLevel == level ? "largecircle.fill.circle" : "circle")
+                                    .foregroundColor(formattingLevel == level ? .accentColor : .secondary)
+                                    .font(.system(size: 16))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(level.displayName)
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text(level.description)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(formattingLevel == level ? Color.accentColor.opacity(0.08) : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                formattingLevel = level
+                                UserDefaults.standard.set(level.rawValue, forKey: "formattingLevel")
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                } label: {
+                    Label("Formatting Level", systemImage: "textformat")
+                        .font(.headline)
+                }
+
+                // Spacing Mode
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(SpacingMode.allCases, id: \.self) { mode in
+                            HStack(spacing: 10) {
+                                Image(systemName: spacingMode == mode ? "largecircle.fill.circle" : "circle")
+                                    .foregroundColor(spacingMode == mode ? .accentColor : .secondary)
+                                    .font(.system(size: 16))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mode.displayName)
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text(mode.description)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(spacingMode == mode ? Color.accentColor.opacity(0.08) : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                spacingMode = mode
+                                UserDefaults.standard.set(mode.rawValue, forKey: "spacingMode")
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                } label: {
+                    Label("Spacing", systemImage: "arrow.left.and.right.text.vertical")
+                        .font(.headline)
+                }
+
+                // Punctuation Options
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(PunctuationOption.allCases, id: \.self) { option in
+                            Toggle(isOn: Binding(
+                                get: { punctuationToggles[option] ?? option.defaultEnabled },
+                                set: { newValue in
+                                    punctuationToggles[option] = newValue
+                                    UserDefaults.standard.set(newValue, forKey: "punctuation_\(option.rawValue)")
+                                }
+                            )) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.displayName)
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text(option.description)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .toggleStyle(.switch)
+                            .padding(.vertical, 2)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Label("Punctuation", systemImage: "textformat.abc.dottedunderline")
+                        .font(.headline)
+                }
+
+                // Smart Context section header
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Smart Context")
+                        .font(.headline)
+                    Text("Context signals that feed into the LLM for better accuracy")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 4)
+
+                // Visual Context
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: $visualContextEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Screen Capture")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text("Extract names and terms from your active window to improve spelling.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        .disabled(!hasVlmModel)
+                        .onChange(of: visualContextEnabled) { newValue in
+                            if newValue && !ScreenshotCapture.hasPermission() {
+                                ScreenshotCapture.requestPermission()
+                            }
+                        }
+
+                        if !hasVlmModel {
+                            HStack(spacing: 6) {
+                                Image(systemName: "info.circle")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                Text("Download a VLM model in the Models tab to enable.")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.orange.opacity(0.08))
+                            .cornerRadius(6)
+                        } else if visualContextEnabled && !ScreenshotCapture.hasPermission() {
+                            HStack(spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                Text("Screen Recording permission required.")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.orange.opacity(0.08))
+                            .cornerRadius(6)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Label("Visual Context", systemImage: "eye")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                }
+
+                // App Profiles
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle(isOn: $appProfilesEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Per-App Formatting")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text("Adapt dictation style for email, Slack, code editors, and more.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+
+                        if !profileManager.profiles.isEmpty {
+                            Divider()
+
+                            HStack {
+                                Text("\(profileManager.profiles.count) app\(profileManager.profiles.count == 1 ? "" : "s") detected")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button(action: {
+                                    for profile in profileManager.profiles {
+                                        profileManager.deleteProfile(profile)
+                                    }
+                                }) {
+                                    Text("Clear All")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            VStack(spacing: 2) {
+                                ForEach(Array(profileManager.profiles.sorted(by: { $0.displayName < $1.displayName }).enumerated()), id: \.element.id) { index, profile in
+                                    HStack(spacing: 10) {
+                                        Text(profile.displayName)
+                                            .font(.system(size: 12, weight: .medium))
+                                        Spacer()
+                                        Text(appProfileCategoryLabel(profile.category))
+                                            .font(.caption2)
+                                            .fontWeight(.medium)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(appProfileCategoryColor(profile.category).opacity(0.12))
+                                            .foregroundColor(appProfileCategoryColor(profile.category))
+                                            .clipShape(Capsule())
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(.secondary.opacity(0.4))
+                                    }
+                                    .padding(.vertical, 7)
+                                    .padding(.horizontal, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(index % 2 == 0 ? Color(NSColor.controlBackgroundColor).opacity(0.5) : Color.clear)
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        editingProfile = profile
+                                    }
+                                }
+                            }
+                        } else {
+                            HStack(spacing: 6) {
+                                Image(systemName: "app.dashed")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("No apps detected yet. Dictate in any app and it'll appear here.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Label("App Profiles", systemImage: "app.badge")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                }
+                .sheet(item: $editingProfile) { profile in
+                    AppProfileEditView(profile: profile) { updated in
+                        profileManager.updateProfile(updated)
+                    }
+                }
+
+                // Correction History
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Learns from your edits to fix recurring mistakes automatically.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        if !correctionManager.patterns.isEmpty {
+                            Divider()
+
+                            HStack {
+                                Text("\(correctionManager.patterns.count) correction\(correctionManager.patterns.count == 1 ? "" : "s") learned")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button(action: {
+                                    correctionManager.clearAll()
+                                }) {
+                                    Text("Clear All")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            VStack(spacing: 0) {
+                                ForEach(Array(correctionManager.patterns.suffix(10).reversed().enumerated()), id: \.element.id) { index, pattern in
+                                    HStack(spacing: 0) {
+                                        Text(pattern.original)
+                                            .font(.system(size: 12, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        Image(systemName: "arrow.right")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundColor(.accentColor.opacity(0.6))
+                                            .frame(width: 24)
+                                        Text(pattern.corrected)
+                                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                            .foregroundColor(.primary)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        Button(action: {
+                                            withAnimation(.easeOut(duration: 0.2)) {
+                                                correctionManager.deletePattern(id: pattern.id)
+                                            }
+                                        }) {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 9, weight: .semibold))
+                                                .foregroundColor(.secondary.opacity(0.4))
+                                                .frame(width: 20, height: 20)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(.vertical, 6)
+                                    .padding(.horizontal, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(index % 2 == 0 ? Color(NSColor.controlBackgroundColor).opacity(0.5) : Color.clear)
+                                    )
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        } else {
+                            HStack(spacing: 6) {
+                                Image(systemName: "sparkles")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("No corrections learned yet. Edit text after dictating and VoiceFlow will learn your preferences.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Label("Correction History", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func appProfileCategoryLabel(_ category: String) -> String {
+        switch category {
+        case "email": return "Email"
+        case "slack": return "Slack/Chat"
+        case "code": return "Code"
+        default: return "General"
+        }
+    }
+
+    private func appProfileCategoryColor(_ category: String) -> Color {
+        switch category {
+        case "email": return .blue
+        case "slack": return .purple
+        case "code": return .green
+        default: return .gray
+        }
+    }
+
+    private var hasVlmModel: Bool {
+        // Check if any VLM model is downloaded (not just selected)
+        let count = voiceflow_vlm_model_count()
+        for i in 0..<count {
+            let info = voiceflow_vlm_model_info(UInt(i))
+            let downloaded = info.is_downloaded
+            voiceflow_free_vlm_model_info(info)
+            if downloaded { return true }
+        }
+        return false
     }
 }
 
@@ -1453,6 +3000,24 @@ struct GeneralSettingsView: View {
                             Spacer()
                             MicrophonePermissionButton()
                         }
+
+                        Divider()
+
+                        HStack {
+                            HStack(spacing: 8) {
+                                Image(systemName: "rectangle.dashed.badge.record")
+                                    .foregroundColor(.purple)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Screen Recording")
+                                    Text("Required for visual context")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            ScreenRecordingPermissionButton()
+                        }
                     }
                     .padding(.vertical, 4)
                 } label: {
@@ -1483,24 +3048,23 @@ struct GeneralSettingsView: View {
     }
 
     private func restartApp() {
-        // Get the path to the current app bundle
         let bundlePath = Bundle.main.bundlePath
 
-        // Create a shell script that waits briefly then relaunches
-        let script = """
-            sleep 0.5
-            open "\(bundlePath)"
-            """
-
-        // Run the script in background
+        // Use /bin/sh -c with nohup + disown so the relaunch survives our termination
+        let script = "sleep 1 && open \"\(bundlePath)\" &"
         let task = Process()
-        task.launchPath = "/bin/bash"
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
         task.arguments = ["-c", script]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        // Setting qualityOfService to .background helps the process survive parent exit
+        task.qualityOfService = .background
         try? task.run()
 
-        // Terminate the current instance
-        // applicationWillTerminate will handle cleanup
-        NSApp.terminate(nil)
+        // Terminate after a brief delay to let the shell process detach
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSApp.terminate(nil)
+        }
     }
 }
 
@@ -1665,6 +3229,176 @@ struct SnippetEditView: View {
     }
 }
 
+// MARK: - App Profiles Settings View
+
+struct AppProfilesSettingsView: View {
+    @ObservedObject var profileManager = AppProfileManager.shared
+    @State private var editingProfile: AppProfile? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("App Profiles")
+                    .font(.headline)
+                Spacer()
+            }
+
+            Text("Apps are auto-detected when you dictate. Customize formatting per app.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if profileManager.profiles.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "app.badge")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text("No apps detected yet")
+                        .foregroundColor(.secondary)
+                    Text("Start dictating and they'll appear here")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                List {
+                    ForEach(profileManager.profiles.sorted(by: { $0.displayName < $1.displayName })) { profile in
+                        AppProfileRowView(profile: profile)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                editingProfile = profile
+                            }
+                    }
+                    .onDelete { offsets in
+                        let sorted = profileManager.profiles.sorted(by: { $0.displayName < $1.displayName })
+                        for offset in offsets {
+                            profileManager.deleteProfile(sorted[offset])
+                        }
+                    }
+                }
+                .listStyle(.bordered)
+            }
+        }
+        .padding()
+        .sheet(item: $editingProfile) { profile in
+            AppProfileEditView(profile: profile) { updated in
+                profileManager.updateProfile(updated)
+            }
+        }
+    }
+}
+
+struct AppProfileRowView: View {
+    let profile: AppProfile
+
+    private var categoryColor: Color {
+        switch profile.category {
+        case "email": return .blue
+        case "slack": return .purple
+        case "code": return .green
+        default: return .gray
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(profile.displayName)
+                    .fontWeight(.medium)
+                Spacer()
+                Text(profile.category.capitalized)
+                    .font(.caption)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(categoryColor.opacity(0.2))
+                    .foregroundColor(categoryColor)
+                    .clipShape(Capsule())
+            }
+            if let custom = profile.customPrompt, !custom.isEmpty {
+                Text(String(custom.prefix(60)) + (custom.count > 60 ? "..." : ""))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct AppProfileEditView: View {
+    let profile: AppProfile
+    let onSave: (AppProfile) -> Void
+
+    @Environment(\.dismiss) var dismiss
+    @State private var category: String = "default"
+    @State private var customPrompt: String = ""
+
+    private let categories = ["default", "email", "slack", "code"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Edit \(profile.displayName)")
+                .font(.headline)
+
+            Text("Bundle ID: \(profile.id)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Category")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Picker("", selection: $category) {
+                    Text("General").tag("default")
+                    Text("Email").tag("email")
+                    Text("Slack/Chat").tag("slack")
+                    Text("Code").tag("code")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Custom Prompt (optional)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("Overrides the category default. Leave empty to use category formatting.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                TextEditor(text: $customPrompt)
+                    .font(.body)
+                    .frame(height: 100)
+                    .border(Color.secondary.opacity(0.3), width: 1)
+            }
+
+            HStack {
+                Button("Cancel") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("Save") {
+                    var updated = profile
+                    updated.category = category
+                    updated.customPrompt = customPrompt.isEmpty ? nil : customPrompt
+                    onSave(updated)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 400, height: 320)
+        .onAppear {
+            category = profile.category
+            customPrompt = profile.customPrompt ?? ""
+        }
+    }
+}
+
 // MARK: - Model Manager
 
 struct LLMModel: Identifiable {
@@ -1744,6 +3478,15 @@ struct ConsolidatedModelItem: Identifiable {
     var isDownloaded: Bool
 }
 
+/// VLM (Vision-Language Model) info (mirrors Rust VlmModel)
+struct VlmModelItem: Identifiable {
+    let id: String
+    let displayName: String
+    let dirName: String
+    let sizeGB: Float
+    var isDownloaded: Bool
+}
+
 class ModelManager: ObservableObject {
     @Published var models: [LLMModel] = []
     @Published var currentModelId: String = ""
@@ -1766,6 +3509,12 @@ class ModelManager: ObservableObject {
     @Published var consolidatedModels: [ConsolidatedModelItem] = []
     @Published var downloadingConsolidatedModelId: String?
     @Published var consolidatedDownloadProgress: Double = 0
+
+    // VLM (Vision-Language Model) settings
+    @Published var currentVlmModelId: String? = nil
+    @Published var vlmModels: [VlmModelItem] = []
+    @Published var downloadingVlmModelId: String?
+    @Published var vlmDownloadProgress: Double = 0
 
     private var downloadTask: URLSessionDownloadTask?
     private var moonshineDownloadTasks: [URLSessionDownloadTask] = []
@@ -1827,6 +3576,7 @@ class ModelManager: ObservableObject {
         loadCurrentModel()
         loadSttSettings()
         loadConsolidatedSettings()
+        loadVlmSettings()
     }
 
     // MARK: - Pipeline Mode and Consolidated Model Management
@@ -1984,6 +3734,179 @@ class ModelManager: ObservableObject {
                     DispatchQueue.main.async {
                         self?.downloadError = "Failed to save \(filename): \(error.localizedDescription)"
                         self?.downloadingConsolidatedModelId = nil
+                    }
+                }
+            }
+            task.resume()
+        }
+
+        // Start downloading first file
+        downloadNextFile(0)
+    }
+
+    // MARK: - VLM (Vision-Language Model) Management
+
+    func loadVlmSettings() {
+        // Load current VLM model selection
+        if let vlmPtr = voiceflow_current_vlm_model() {
+            currentVlmModelId = String(cString: vlmPtr)
+            voiceflow_free_string(vlmPtr)
+        } else {
+            currentVlmModelId = nil
+        }
+
+        let count = voiceflow_vlm_model_count()
+        var items: [VlmModelItem] = []
+        for i in 0..<count {
+            let info = voiceflow_vlm_model_info(i)
+            if let idPtr = info.id, let namePtr = info.display_name, let dirPtr = info.dir_name {
+                let item = VlmModelItem(
+                    id: String(cString: idPtr),
+                    displayName: String(cString: namePtr),
+                    dirName: String(cString: dirPtr),
+                    sizeGB: info.size_gb,
+                    isDownloaded: info.is_downloaded
+                )
+                items.append(item)
+            }
+            voiceflow_free_vlm_model_info(info)
+        }
+        vlmModels = items
+    }
+
+    func selectVlmModel(_ modelId: String) {
+        guard modelId != currentVlmModelId else { return }
+        guard let model = vlmModels.first(where: { $0.id == modelId }), model.isDownloaded else { return }
+
+        let success = modelId.withCString { cString in
+            voiceflow_set_vlm_model(cString)
+        }
+
+        if success {
+            currentVlmModelId = modelId
+            needsRestart = true
+        } else {
+            downloadError = "Failed to set VLM model"
+        }
+    }
+
+    func deselectVlmModel() {
+        guard currentVlmModelId != nil else { return }
+
+        let success = voiceflow_set_vlm_model(nil)
+
+        if success {
+            currentVlmModelId = nil
+            needsRestart = true
+        } else {
+            downloadError = "Failed to clear VLM model"
+        }
+    }
+
+    func downloadVlmModel(_ modelId: String) {
+        guard downloadingVlmModelId == nil else { return }
+        guard let model = vlmModels.first(where: { $0.id == modelId }) else {
+            downloadError = "VLM model not found"
+            return
+        }
+
+        // Get HF repo from FFI
+        guard let repoPtr = modelId.withCString({ voiceflow_vlm_model_hf_repo($0) }) else {
+            downloadError = "No HuggingFace repo for VLM model \(modelId)"
+            return
+        }
+        let hfRepo = String(cString: repoPtr)
+        voiceflow_free_string(repoPtr)
+
+        // Get required files from FFI
+        let fileCount = modelId.withCString { voiceflow_vlm_model_file_count($0) }
+        var files: [String] = []
+        for i in 0..<fileCount {
+            if let namePtr = modelId.withCString({ voiceflow_vlm_model_file_name($0, i) }) {
+                files.append(String(cString: namePtr))
+                voiceflow_free_string(namePtr)
+            }
+        }
+
+        guard !files.isEmpty else {
+            downloadError = "No file list for VLM model \(modelId)"
+            return
+        }
+
+        let destDir = modelsDir.appendingPathComponent(model.dirName)
+
+        // Create model directory
+        do {
+            try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true, attributes: nil)
+        } catch {
+            downloadError = "Failed to create model directory: \(error.localizedDescription)"
+            return
+        }
+
+        downloadingVlmModelId = modelId
+        vlmDownloadProgress = 0
+        downloadError = nil
+
+        var completedFiles = 0
+        let totalFiles = files.count
+
+        func downloadNextFile(_ index: Int) {
+            guard index < files.count else {
+                // All done
+                DispatchQueue.main.async { [weak self] in
+                    self?.downloadingVlmModelId = nil
+                    self?.vlmDownloadProgress = 1.0
+                    self?.loadVlmSettings() // Refresh model status
+                }
+                return
+            }
+
+            let filename = files[index]
+            let urlString = "https://huggingface.co/\(hfRepo)/resolve/main/\(filename)"
+            guard let url = URL(string: urlString) else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.downloadError = "Invalid URL for \(filename)"
+                    self?.downloadingVlmModelId = nil
+                }
+                return
+            }
+
+            let destFile = destDir.appendingPathComponent(filename)
+
+            let task = URLSession.shared.downloadTask(with: url) { [weak self] tempURL, response, error in
+                if let error = error {
+                    DispatchQueue.main.async {
+                        self?.downloadError = "Download failed: \(error.localizedDescription)"
+                        self?.downloadingVlmModelId = nil
+                    }
+                    return
+                }
+
+                guard let tempURL = tempURL else {
+                    DispatchQueue.main.async {
+                        self?.downloadError = "Download failed: no file"
+                        self?.downloadingVlmModelId = nil
+                    }
+                    return
+                }
+
+                do {
+                    if FileManager.default.fileExists(atPath: destFile.path) {
+                        try FileManager.default.removeItem(at: destFile)
+                    }
+                    try FileManager.default.moveItem(at: tempURL, to: destFile)
+
+                    completedFiles += 1
+                    DispatchQueue.main.async {
+                        self?.vlmDownloadProgress = Double(completedFiles) / Double(totalFiles)
+                    }
+
+                    // Download next file
+                    downloadNextFile(index + 1)
+                } catch {
+                    DispatchQueue.main.async {
+                        self?.downloadError = "Failed to save \(filename): \(error.localizedDescription)"
+                        self?.downloadingVlmModelId = nil
                     }
                 }
             }
@@ -2204,7 +4127,7 @@ class ModelManager: ObservableObject {
     }
 
     func selectModel(_ modelId: String) {
-        guard modelId != currentModelId else { return }
+        guard modelId != currentModelId || currentVlmModelId != nil else { return }
         guard let model = models.first(where: { $0.id == modelId }), model.isDownloaded else { return }
 
         // Use FFI function to properly save config (handles TOML format correctly)
@@ -2214,6 +4137,11 @@ class ModelManager: ObservableObject {
 
         if success {
             currentModelId = modelId
+            // Clear VLM selection — only one can be active
+            if currentVlmModelId != nil {
+                voiceflow_set_vlm_model(nil)
+                currentVlmModelId = nil
+            }
             needsRestart = true
         } else {
             downloadError = "Failed to save config"
@@ -2568,7 +4496,7 @@ struct ModelSettingsView: View {
                         ForEach(modelManager.models) { model in
                             ModelRowView(
                                 model: model,
-                                isSelected: model.id == modelManager.currentModelId,
+                                isSelected: model.id == modelManager.currentModelId && modelManager.currentVlmModelId == nil,
                                 isDownloading: modelManager.downloadingModelId == model.id,
                                 downloadProgress: modelManager.downloadProgress,
                                 onSelect: {
@@ -2592,6 +4520,42 @@ struct ModelSettingsView: View {
                         .font(.headline)
                 }
                 } // end if sttPlusLlm
+
+                // VLM Models Section
+                GroupBox {
+                    VStack(spacing: 12) {
+                        ForEach(modelManager.vlmModels) { model in
+                            VlmModelRowView(
+                                model: model,
+                                isSelected: model.id == modelManager.currentVlmModelId,
+                                isDownloading: modelManager.downloadingVlmModelId == model.id,
+                                downloadProgress: modelManager.vlmDownloadProgress,
+                                onSelect: {
+                                    modelManager.selectVlmModel(model.id)
+                                },
+                                onDownload: {
+                                    modelManager.downloadVlmModel(model.id)
+                                }
+                            )
+
+                            if model.id != modelManager.vlmModels.last?.id {
+                                Divider()
+                            }
+                        }
+
+                        HStack(spacing: 4) {
+                            Image(systemName: "info.circle")
+                                .foregroundColor(.blue)
+                            Text("VLM models are downloaded from HuggingFace (PyTorch safetensors format).")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Label("Vision-Language Models", systemImage: "eye")
+                        .font(.headline)
+                }
 
                 // Error display
                 if let error = modelManager.downloadError {
@@ -2629,6 +4593,7 @@ struct ModelSettingsView: View {
         }
         .onAppear {
             modelManager.loadModels()
+            modelManager.loadVlmSettings()
         }
     }
 
@@ -2850,6 +4815,85 @@ struct MoonshineModelRowView: View {
             }
         }
         .opacity(model.isDownloaded || isDownloading ? 1.0 : 0.8)
+    }
+}
+
+// MARK: - VLM Model Row View
+
+struct VlmModelRowView: View {
+    let model: VlmModelItem
+    let isSelected: Bool
+    let isDownloading: Bool
+    let downloadProgress: Double
+    let onSelect: () -> Void
+    let onDownload: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Selection indicator (radio button)
+            ZStack {
+                Circle()
+                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
+                    .frame(width: 20, height: 20)
+
+                if isSelected {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 12, height: 12)
+                }
+            }
+
+            // Model info
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(model.displayName)
+                        .fontWeight(.medium)
+                    if isSelected {
+                        Text("Active")
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.2))
+                            .cornerRadius(4)
+                    }
+                }
+
+                Text(String(format: "%.1f GB", model.sizeGB))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            // Download/Status indicator
+            if model.isDownloaded {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+            } else if isDownloading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("\(Int(downloadProgress * 100))%")
+                        .font(.caption)
+                        .monospacedDigit()
+                }
+            } else {
+                Button(action: onDownload) {
+                    Label("Download", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if model.isDownloaded && !isSelected {
+                onSelect()
+            }
+        }
+        .opacity(model.isDownloaded || isDownloading ? 1.0 : 0.7)
     }
 }
 

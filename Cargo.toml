@@ -22,13 +22,15 @@ pitch-detection = "0.3"
 
 # Speech-to-Text
 whisper-rs = "0.14"
-ort = { version = "2.0.0-rc.10", features = ["load-dynamic"] }  # ONNX Runtime for Moonshine
+ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Moonshine (bundles library automatically)
 ndarray = "0.16"  # For tensor operations with ONNX
 serde_json = "1.0"  # For tokenizer loading
 
-# LLM Inference - mistral.rs with platform-specific acceleration
-# Metal for macOS Apple Silicon, CUDA for Linux
+# LLM Inference - Multiple backends for architecture support
+# mistral.rs: Good for Qwen, Gemma2, Phi-2 (some newer architectures unsupported)
+# llama-cpp-2: Supports all architectures via upstream llama.cpp (SmolLM3, Gemma3n, Phi-4, etc.)
 mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", branch = "master" }
+llama-cpp-2 = { version = "0.1" }  # Metal disabled for testing - add "metal" feature for GPU acceleration
 
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }

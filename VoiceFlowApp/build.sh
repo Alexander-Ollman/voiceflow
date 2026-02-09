@@ -159,6 +159,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>VoiceFlow needs microphone access to transcribe your speech.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>VoiceFlow uses screen capture for visual context to improve dictation. All processing is local.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
@@ -167,19 +169,69 @@ EOF
 
 # Step 6: Code signing
 SIGN_IDENTITY="Developer ID Application: Era Laboratories Inc. (JVSQ3LCY64)"
+SIGNED=false
 if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
     echo "Step 6: Signing app bundle..."
     xattr -cr "$APP_BUNDLE"
     codesign --deep --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "  Signed and verified."
+    SIGNED=true
 else
     echo "Step 6: Skipping code signing (Developer ID certificate not found in keychain)"
 fi
 
+# Step 7: Create distributable ZIP and notarize
+DIST_DIR="$SCRIPT_DIR/dist"
+mkdir -p "$DIST_DIR"
+ZIP_PATH="$DIST_DIR/VoiceFlow.zip"
+
+echo "Step 7: Creating distributable ZIP..."
+rm -f "$ZIP_PATH"
+ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+
+if [ "$SIGNED" = true ]; then
+    # Notarize if Apple ID credentials are available
+    APPLE_ID="${NOTARIZE_APPLE_ID:-}"
+    TEAM_ID="JVSQ3LCY64"
+    KEYCHAIN_PROFILE="${NOTARIZE_KEYCHAIN_PROFILE:-}"
+
+    if [ -n "$KEYCHAIN_PROFILE" ]; then
+        echo "  Notarizing with keychain profile '$KEYCHAIN_PROFILE'..."
+        xcrun notarytool submit "$ZIP_PATH" \
+            --keychain-profile "$KEYCHAIN_PROFILE" \
+            --wait
+        echo "  Stapling notarization ticket..."
+        xcrun stapler staple "$APP_BUNDLE"
+
+        # Re-create ZIP with stapled app
+        rm -f "$ZIP_PATH"
+        ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+        echo "  Notarized and stapled."
+    elif [ -n "$APPLE_ID" ]; then
+        echo "  Notarizing with Apple ID..."
+        xcrun notarytool submit "$ZIP_PATH" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --wait
+        echo "  Stapling notarization ticket..."
+        xcrun stapler staple "$APP_BUNDLE"
+
+        # Re-create ZIP with stapled app
+        rm -f "$ZIP_PATH"
+        ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+        echo "  Notarized and stapled."
+    else
+        echo "  Skipping notarization (set NOTARIZE_KEYCHAIN_PROFILE or NOTARIZE_APPLE_ID to enable)"
+    fi
+fi
+
+ZIP_SIZE=$(du -h "$ZIP_PATH" | awk '{print $1}')
+
 echo ""
 echo "Build complete!"
 echo "App bundle: $APP_BUNDLE"
+echo "Distributable: $ZIP_PATH ($ZIP_SIZE)"
 echo ""
 echo "To run: open $APP_BUNDLE"
-echo "To install: cp -r $APP_BUNDLE /Applications/"
+echo "To distribute: upload $ZIP_PATH"

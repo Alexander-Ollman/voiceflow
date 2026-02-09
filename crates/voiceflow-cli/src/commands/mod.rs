@@ -2,7 +2,7 @@
 
 pub mod bench;
 pub mod config;
+pub mod eval;
 pub mod file;
-pub mod models;
 pub mod record;
 pub mod setup;

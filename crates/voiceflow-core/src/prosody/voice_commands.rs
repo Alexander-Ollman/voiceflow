@@ -19,7 +19,12 @@ pub fn replace_voice_commands(text: &str) -> String {
     let mut sorted_keys: Vec<_> = replacements.keys().collect();
     sorted_keys.sort_by(|a, b| b.len().cmp(&a.len()));
 
-    // Apply replacements (case-insensitive)
+    // Apply wrapping commands FIRST so "in quotes" isn't partially consumed
+    // by the " quote" → '"' simple substitution. Simple subs then handle
+    // punctuation ("question mark" → "?") inside the wrapped text.
+    result = apply_wrapping_commands(&result);
+
+    // Apply simple substitutions
     for key in sorted_keys {
         let replacement = replacements.get(*key).unwrap();
         result = replace_case_insensitive(&result, key, replacement);
@@ -154,6 +159,23 @@ fn replace_case_insensitive(text: &str, pattern: &str, replacement: &str) -> Str
     result
 }
 
+/// Check if text starting at position looks like a URL component
+/// Only matches unambiguous signals: www. or http(s):// prefix nearby.
+/// TLD-based guessing is left to the LLM to avoid false positives
+/// like "mind. It" → "mind.it".
+fn is_url_context(chars: &[char], pos: usize) -> bool {
+    // Check if "www" or "http" appears earlier in the text (within ~50 chars)
+    if pos >= 3 {
+        let lookback: String = chars[pos.saturating_sub(50)..pos].iter().collect();
+        let lower = lookback.to_lowercase();
+        if lower.contains("www") || lower.contains("http") {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Clean up spacing around punctuation
 fn cleanup_punctuation_spacing(text: &str) -> String {
     let mut result = text.to_string();
@@ -170,6 +192,7 @@ fn cleanup_punctuation_spacing(text: &str) -> String {
     }
 
     // Ensure space after sentence-ending punctuation (if followed by letter)
+    // BUT NOT for URLs (e.g., "www.google.com" should stay together)
     let chars: Vec<char> = result.chars().collect();
     let mut final_result = String::with_capacity(result.len());
 
@@ -177,10 +200,16 @@ fn cleanup_punctuation_spacing(text: &str) -> String {
         final_result.push(chars[i]);
 
         // After sentence-ending punctuation, ensure space before next letter
+        // Skip this for periods that look like they're part of a URL
         if matches!(chars[i], '.' | '?' | '!' | ':') {
             if let Some(&next) = chars.get(i + 1) {
                 if next.is_alphabetic() {
-                    final_result.push(' ');
+                    // Don't add space if this looks like a URL
+                    if chars[i] == '.' && is_url_context(&chars, i + 1) {
+                        // Skip adding space - this is likely a URL
+                    } else {
+                        final_result.push(' ');
+                    }
                 }
             }
         }
@@ -190,14 +219,39 @@ fn cleanup_punctuation_spacing(text: &str) -> String {
     capitalize_after_punctuation(&final_result)
 }
 
+/// Check if text at the given position looks like the start of a URL
+fn starts_with_url(chars: &[char], pos: usize) -> bool {
+    let remaining: String = chars[pos..].iter().take(10).collect();
+    let lower = remaining.to_lowercase();
+    lower.starts_with("www.") || lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 /// Capitalize the first letter after sentence-ending punctuation
+/// But NOT inside URLs (don't capitalize "google" in "www.google.com")
 fn capitalize_after_punctuation(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut capitalize_next = true;
+    let chars: Vec<char> = text.chars().collect();
 
-    for c in text.chars() {
+    for (i, &c) in chars.iter().enumerate() {
         if capitalize_next && c.is_alphabetic() {
-            result.push(c.to_uppercase().next().unwrap_or(c));
+            // Check if we're in a URL context
+            let in_url = if i > 0 && chars[i - 1] == '.' {
+                // After a dot - check URL context
+                is_url_context(&chars, i)
+            } else if i == 0 || (i > 0 && chars[i - 1] == ' ') {
+                // Start of text or after space - check if URL starts here
+                starts_with_url(&chars, i)
+            } else {
+                false
+            };
+
+            if in_url {
+                // Don't capitalize inside URLs
+                result.push(c);
+            } else {
+                result.push(c.to_uppercase().next().unwrap_or(c));
+            }
             capitalize_next = false;
         } else {
             result.push(c);
@@ -210,6 +264,88 @@ fn capitalize_after_punctuation(text: &str) -> String {
     }
 
     result
+}
+
+/// Apply wrapping voice commands: "in parentheses X" → "(X)", "in brackets X" → "(X)", etc.
+///
+/// Wraps all text from the trigger to the end of the string (or until an explicit
+/// close delimiter already present from simple substitution).
+/// Handles STT-inserted punctuation after the trigger (e.g., "in parentheses, X").
+fn apply_wrapping_commands(text: &str) -> String {
+    // Triggers WITHOUT trailing space — we handle separator matching ourselves
+    let triggers: &[(&str, &str, &str)] = &[
+        ("in parentheses", "(", ")"),
+        ("in parenthesis", "(", ")"),
+        ("in parens", "(", ")"),
+        ("in brackets", "(", ")"),
+        ("in square brackets", "[", "]"),
+        ("in quotes", "\"", "\""),
+        ("in curly braces", "{", "}"),
+    ];
+
+    let lower = text.to_lowercase();
+
+    // Find the first (longest) matching trigger
+    let mut best: Option<(usize, usize, &str, &str)> = None; // (pos, trigger_end, open, close)
+    for &(trigger, open, close) in triggers {
+        if let Some(pos) = lower.find(trigger) {
+            let after_trigger = pos + trigger.len();
+
+            // Verify this isn't a partial word match (e.g., "in parenthesized")
+            let next_char = lower[after_trigger..].chars().next();
+            if let Some(c) = next_char {
+                if c.is_alphanumeric() {
+                    continue; // partial word match, skip
+                }
+            }
+
+            // Skip any punctuation and whitespace between trigger and content
+            // (STT may insert ", " or ": " or just " " after the trigger phrase)
+            let content_start = after_trigger
+                + lower[after_trigger..]
+                    .chars()
+                    .take_while(|c| c.is_whitespace() || matches!(c, ',' | ':' | ';' | '-'))
+                    .map(|c| c.len_utf8())
+                    .sum::<usize>();
+
+            if best.is_none()
+                || pos < best.unwrap().0
+                || (pos == best.unwrap().0 && trigger.len() > (best.unwrap().1 - best.unwrap().0))
+            {
+                best = Some((pos, content_start, open, close));
+            }
+        }
+    }
+
+    let (pos, content_start, open, close) = match best {
+        Some(b) => b,
+        None => return text.to_string(),
+    };
+
+    let before = text[..pos].trim_end();
+    let content = text[content_start..].trim();
+
+    if content.is_empty() {
+        return text.to_string();
+    }
+
+    // If the content already ends with the close delimiter (from explicit "close parenthesis"),
+    // don't double it
+    let content = if close == ")" && content.ends_with(')') {
+        content[..content.len() - 1].trim_end()
+    } else if close == "]" && content.ends_with(']') {
+        content[..content.len() - 1].trim_end()
+    } else if close == "\"" && content.ends_with('"') {
+        content[..content.len() - 1].trim_end()
+    } else {
+        content
+    };
+
+    if before.is_empty() {
+        format!("{}{}{}", open, content, close)
+    } else {
+        format!("{} {}{}{}", before, open, content, close)
+    }
 }
 
 #[cfg(test)]
@@ -254,5 +390,299 @@ mod tests {
             replace_voice_commands("Wow exclamation mark That's amazing"),
             "Wow! That's amazing"
         );
+    }
+
+    #[test]
+    fn test_url_no_spacing() {
+        // URLs with www prefix should not get spaces added after dots
+        assert_eq!(
+            cleanup_punctuation_spacing("www.google.com"),
+            "www.google.com"
+        );
+        assert_eq!(
+            cleanup_punctuation_spacing("visit www.google.com today"),
+            "Visit www.google.com today"
+        );
+        // Without www/http prefix, dots get normal sentence spacing
+        // (the LLM handles bare domain detection via prompt)
+        assert_eq!(
+            cleanup_punctuation_spacing("go to example.io"),
+            "Go to example. Io"
+        );
+    }
+
+    #[test]
+    fn test_url_vs_sentence() {
+        // Regular sentences should still get spacing
+        assert_eq!(
+            cleanup_punctuation_spacing("Hello.World"),
+            "Hello. World"
+        );
+        // Without www/http prefix, bare TLDs get normal spacing
+        // (the LLM handles this ambiguity via prompt)
+        assert_eq!(
+            cleanup_punctuation_spacing("Hello.com"),
+            "Hello. Com"
+        );
+        // The key fix: "mind.It" should NOT be treated as a URL
+        assert_eq!(
+            cleanup_punctuation_spacing("Never mind.It appears"),
+            "Never mind. It appears"
+        );
+    }
+
+    // ========================================================================
+    // Wrapping commands — unit tests for apply_wrapping_commands
+    // ========================================================================
+
+    #[test]
+    fn test_wrap_in_parentheses_basic() {
+        assert_eq!(
+            apply_wrapping_commands("not quite in parentheses see?"),
+            "not quite (see?)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_parentheses_with_comma() {
+        // STT often inserts a comma after "in parentheses"
+        assert_eq!(
+            apply_wrapping_commands("not quite in parentheses, see?"),
+            "not quite (see?)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_parentheses_with_colon() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses: about 50%"),
+            "(about 50%)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_brackets() {
+        assert_eq!(
+            apply_wrapping_commands("hello in brackets world"),
+            "hello (world)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_brackets_with_comma() {
+        assert_eq!(
+            apply_wrapping_commands("hello in brackets, world"),
+            "hello (world)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_quotes() {
+        assert_eq!(
+            apply_wrapping_commands("he said in quotes hello world"),
+            "he said \"hello world\""
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_quotes_with_comma() {
+        assert_eq!(
+            apply_wrapping_commands("he said in quotes, hello world"),
+            "he said \"hello world\""
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_parens() {
+        assert_eq!(
+            apply_wrapping_commands("check in parens see above"),
+            "check (see above)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_square_brackets() {
+        assert_eq!(
+            apply_wrapping_commands("add in square brackets citation needed"),
+            "add [citation needed]"
+        );
+    }
+
+    #[test]
+    fn test_wrap_in_curly_braces() {
+        assert_eq!(
+            apply_wrapping_commands("in curly braces name"),
+            "{name}"
+        );
+    }
+
+    #[test]
+    fn test_wrap_at_start() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses see?"),
+            "(see?)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_at_start_with_comma() {
+        assert_eq!(
+            apply_wrapping_commands("In parentheses, are you sure?"),
+            "(are you sure?)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_no_double_close() {
+        // If "close parenthesis" was already substituted to ")", don't double it
+        assert_eq!(
+            apply_wrapping_commands("in parentheses see?)"),
+            "(see?)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_case_insensitive() {
+        assert_eq!(
+            apply_wrapping_commands("In Parentheses hello"),
+            "(hello)"
+        );
+        assert_eq!(
+            apply_wrapping_commands("IN BRACKETS world"),
+            "(world)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_no_match() {
+        // "parentheses" alone without "in" shouldn't trigger
+        assert_eq!(
+            apply_wrapping_commands("use parentheses for grouping"),
+            "use parentheses for grouping"
+        );
+    }
+
+    #[test]
+    fn test_wrap_empty_content() {
+        // Trigger with no content after → leave unchanged
+        assert_eq!(
+            apply_wrapping_commands("in parentheses"),
+            "in parentheses"
+        );
+        assert_eq!(
+            apply_wrapping_commands("in parentheses, "),
+            "in parentheses, "
+        );
+    }
+
+    #[test]
+    fn test_wrap_no_partial_word_match() {
+        // "in parenthesized" should NOT trigger
+        assert_eq!(
+            apply_wrapping_commands("in parenthesized form"),
+            "in parenthesized form"
+        );
+    }
+
+    // ========================================================================
+    // Wrapping commands — full pipeline (voice commands + wrapping)
+    // ========================================================================
+
+    #[test]
+    fn test_wrap_full_pipeline_question_mark() {
+        assert_eq!(
+            replace_voice_commands("not quite in parentheses see question mark"),
+            "Not quite (see?)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_full_pipeline_with_comma_from_stt() {
+        // Simulates STT producing "In parentheses, are you sure question mark"
+        assert_eq!(
+            replace_voice_commands("In parentheses, are you sure question mark"),
+            "(Are you sure?)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_full_pipeline_period() {
+        assert_eq!(
+            replace_voice_commands("in brackets see above period"),
+            "(See above.)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_full_pipeline_exclamation() {
+        assert_eq!(
+            replace_voice_commands("in parentheses wow exclamation mark"),
+            "(Wow!)"
+        );
+    }
+
+    #[test]
+    fn test_wrap_full_pipeline_quotes_with_comma() {
+        let result = replace_voice_commands("he said in quotes, hello world");
+        // cleanup_punctuation_spacing strips space before " (pre-existing behavior)
+        assert!(result.contains("\"hello world\""), "got: {}", result);
+    }
+
+    // ========================================================================
+    // Standard voice commands — comprehensive punctuation tests
+    // ========================================================================
+
+    #[test]
+    fn test_colon() {
+        assert_eq!(
+            replace_voice_commands("Dear sir colon"),
+            "Dear sir:"
+        );
+    }
+
+    #[test]
+    fn test_semicolon() {
+        assert_eq!(
+            replace_voice_commands("first item semicolon second item"),
+            "First item; second item"
+        );
+    }
+
+    #[test]
+    fn test_open_close_parenthesis() {
+        let result = replace_voice_commands("see open parenthesis above close parenthesis");
+        assert!(result.contains("(") && result.contains(")") && result.contains("above"));
+    }
+
+    #[test]
+    fn test_open_close_bracket() {
+        let result = replace_voice_commands("citation open bracket 1 close bracket");
+        assert!(result.contains("[") && result.contains("]") && result.contains("1"));
+    }
+
+    #[test]
+    fn test_em_dash() {
+        let result = replace_voice_commands("well em dash I think so");
+        assert!(result.contains("—") && result.to_lowercase().contains("think"));
+    }
+
+    #[test]
+    fn test_ellipsis() {
+        let result = replace_voice_commands("wait ellipsis okay");
+        assert!(result.contains("...") && result.to_lowercase().contains("okay"));
+    }
+
+    #[test]
+    fn test_multiple_punctuation() {
+        assert_eq!(
+            replace_voice_commands("Hello comma world period How are you question mark"),
+            "Hello, world. How are you?"
+        );
+    }
+
+    #[test]
+    fn test_new_paragraph() {
+        let result = replace_voice_commands("End of first new paragraph Start of second");
+        assert!(result.contains("\n\n"));
     }
 }

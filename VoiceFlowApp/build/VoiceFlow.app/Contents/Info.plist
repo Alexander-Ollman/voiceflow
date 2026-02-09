@@ -24,6 +24,8 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>VoiceFlow needs microphone access to transcribe your speech.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>VoiceFlow uses screen capture for visual context to improve dictation. All processing is local.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

@@ -50,6 +50,37 @@ typedef struct MoonshineModelInfo {
 } MoonshineModelInfo;
 
 /**
+ * Consolidated model info struct for FFI
+ */
+typedef struct ConsolidatedModelInfo {
+  char *id;
+  char *display_name;
+  char *dir_name;
+  float size_gb;
+  bool is_downloaded;
+} ConsolidatedModelInfo;
+
+/**
+ * VLM model info struct for FFI
+ */
+typedef struct VlmModelInfo {
+  char *id;
+  char *display_name;
+  char *dir_name;
+  float size_gb;
+  bool is_downloaded;
+} VlmModelInfo;
+
+/**
+ * Memory info struct for FFI
+ */
+typedef struct MemoryInfo {
+  uintptr_t resident_bytes;
+  uintptr_t virtual_bytes;
+  uintptr_t peak_bytes;
+} MemoryInfo;
+
+/**
  * Initialize the VoiceFlow pipeline
  *
  * # Safety
@@ -147,12 +178,12 @@ bool voiceflow_set_model(const char *modelId);
 char *voiceflow_model_download_url(const char *modelId);
 
 /**
- * Get the current STT engine ("whisper" or "moonshine")
+ * Get the current STT engine ("whisper", "moonshine", or "qwen3-asr")
  */
 char *voiceflow_current_stt_engine(void);
 
 /**
- * Set the current STT engine ("whisper" or "moonshine")
+ * Set the current STT engine ("whisper", "moonshine", or "qwen3-asr")
  *
  * # Safety
  * engine_id must be a valid null-terminated string
@@ -205,5 +236,218 @@ bool voiceflow_moonshine_model_downloaded(const char *modelId);
  * Get the Moonshine models directory path
  */
 char *voiceflow_moonshine_models_dir(void);
+
+/**
+ * Get the current pipeline mode ("stt-plus-llm" or "consolidated")
+ */
+char *voiceflow_current_pipeline_mode(void);
+
+/**
+ * Set the pipeline mode ("stt-plus-llm" or "consolidated")
+ *
+ * # Safety
+ * mode must be a valid null-terminated string
+ */
+bool voiceflow_set_pipeline_mode(const char *mode);
+
+/**
+ * Get the current consolidated model ID
+ */
+char *voiceflow_current_consolidated_model(void);
+
+/**
+ * Set the consolidated model
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string
+ */
+bool voiceflow_set_consolidated_model(const char *modelId);
+
+/**
+ * Get the number of available consolidated models
+ */
+uintptr_t voiceflow_consolidated_model_count(void);
+
+/**
+ * Get consolidated model info by index
+ *
+ * # Safety
+ * index must be < voiceflow_consolidated_model_count()
+ */
+struct ConsolidatedModelInfo voiceflow_consolidated_model_info(uintptr_t index);
+
+/**
+ * Free consolidated model info strings
+ *
+ * # Safety
+ * Only call once per ConsolidatedModelInfo
+ */
+void voiceflow_free_consolidated_model_info(struct ConsolidatedModelInfo info);
+
+/**
+ * Check if a consolidated model is downloaded
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string
+ */
+bool voiceflow_consolidated_model_downloaded(const char *modelId);
+
+/**
+ * Get the directory path for a consolidated model
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string
+ */
+char *voiceflow_consolidated_model_dir(const char *modelId);
+
+/**
+ * Get the number of available VLM models
+ */
+uintptr_t voiceflow_vlm_model_count(void);
+
+/**
+ * Get VLM model info by index
+ *
+ * # Safety
+ * index must be < voiceflow_vlm_model_count()
+ */
+struct VlmModelInfo voiceflow_vlm_model_info(uintptr_t index);
+
+/**
+ * Free VLM model info strings
+ *
+ * # Safety
+ * Only call once per VlmModelInfo
+ */
+void voiceflow_free_vlm_model_info(struct VlmModelInfo info);
+
+/**
+ * Check if a VLM model is downloaded
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string
+ */
+bool voiceflow_vlm_model_downloaded(const char *modelId);
+
+/**
+ * Get the HuggingFace repo for a VLM model
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string
+ */
+char *voiceflow_vlm_model_hf_repo(const char *modelId);
+
+/**
+ * Get the number of required files for a VLM model
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string
+ */
+uintptr_t voiceflow_vlm_model_file_count(const char *modelId);
+
+/**
+ * Get a required file name for a VLM model by index
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string, index must be < file_count
+ */
+char *voiceflow_vlm_model_file_name(const char *modelId, uintptr_t index);
+
+/**
+ * Get the directory path for a VLM model
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string
+ */
+char *voiceflow_vlm_model_dir(const char *modelId);
+
+/**
+ * Get the current VLM model ID from config, or null if none selected
+ */
+char *voiceflow_current_vlm_model(void);
+
+/**
+ * Set the current VLM model in config (requires restart to take effect)
+ * Pass null to clear the VLM selection (revert to LLM-only mode)
+ *
+ * # Safety
+ * model_id must be a valid null-terminated string or null to clear
+ */
+bool voiceflow_set_vlm_model(const char *modelId);
+
+/**
+ * Apply post-processing to text (tokenization fix, voice commands, spelled words, replacements).
+ * Used by consolidated mode where MLX Swift handles inference but Rust handles post-processing.
+ *
+ * # Safety
+ * text must be a valid null-terminated string
+ */
+char *voiceflow_post_process_text(const char *text);
+
+/**
+ * Process pre-transcribed text through post-processing + LLM formatting.
+ * Used when an external STT engine (e.g. Qwen3-ASR Python daemon) provides the raw transcript
+ * and we want the traditional pipeline's LLM formatting applied.
+ *
+ * Returns a VoiceFlowResult with formatted_text and raw_transcript.
+ *
+ * # Safety
+ * - handle must be a valid pointer from voiceflow_init
+ * - text must be a valid null-terminated string
+ * - context can be null
+ */
+struct VoiceFlowResult voiceflow_format_text(struct VoiceFlowHandle *handle,
+                                             const char *text,
+                                             const char *context);
+
+/**
+ * Check if the current STT engine is external (handled outside Rust pipeline)
+ */
+bool voiceflow_is_external_stt(void);
+
+/**
+ * Check if the current config is in consolidated mode
+ */
+bool voiceflow_is_consolidated_mode(void);
+
+/**
+ * Unload all models from memory (LLM and STT)
+ * Call this before app termination or when switching models
+ *
+ * # Safety
+ * handle must be a valid pointer from voiceflow_init
+ */
+void voiceflow_unload_models(struct VoiceFlowHandle *handle);
+
+/**
+ * Reset the LLM engine, allowing re-initialization on next use
+ *
+ * # Safety
+ * handle must be a valid pointer from voiceflow_init
+ */
+void voiceflow_reset_llm(struct VoiceFlowHandle *handle);
+
+/**
+ * Get approximate memory usage in bytes
+ * This is a rough estimate based on tracked allocations
+ */
+uintptr_t voiceflow_memory_usage(void);
+
+/**
+ * Get detailed memory information
+ */
+struct MemoryInfo voiceflow_memory_info(void);
+
+/**
+ * Force a garbage collection hint
+ * On Rust, this mainly drops any cached allocator memory
+ */
+void voiceflow_force_gc(void);
+
+/**
+ * Prepare for app shutdown - ensures clean resource release
+ * Call this before NSApp.terminate() for clean shutdown
+ */
+void voiceflow_prepare_shutdown(void);
 
 #endif  /* VOICEFLOW_H */

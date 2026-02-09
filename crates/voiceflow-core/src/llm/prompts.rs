@@ -96,28 +96,10 @@ fn lowercase_urls(text: &str) -> String {
 }
 
 /// Fix spacing in URLs - remove spaces around dots in URL patterns
-/// "www. google. com" → "www.google.com"
+/// Only handles unambiguous URL signals (www., http://, https://)
+/// The LLM handles ambiguous cases (TLD detection) via prompt instructions.
 fn fix_url_spacing(text: &str) -> String {
     let mut result = text.to_string();
-
-    // Common TLDs to detect URLs
-    const TLDS: &[&str] = &[
-        "com", "org", "net", "edu", "gov", "io", "co", "dev", "app", "ai", "ly", "me",
-        "uk", "us", "ca", "de", "fr", "jp", "au", "in", "ru", "br", "it", "es", "nl",
-    ];
-
-    // Fix ". tld" patterns (space before TLD)
-    for tld in TLDS {
-        // ". com" → ".com"
-        result = result.replace(&format!(". {}", tld), &format!(".{}", tld));
-        // ". Com" → ".com" (case insensitive)
-        let tld_cap: String = tld.chars().enumerate()
-            .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c })
-            .collect();
-        result = result.replace(&format!(". {}", tld_cap), &format!(".{}", tld));
-        // ". COM" → ".com"
-        result = result.replace(&format!(". {}", tld.to_uppercase()), &format!(".{}", tld));
-    }
 
     // Fix "www. " pattern
     result = result.replace("www. ", "www.");
@@ -130,87 +112,46 @@ fn fix_url_spacing(text: &str) -> String {
     result = result.replace("Http:// ", "http://");
     result = result.replace("Https:// ", "https://");
 
-    // Now handle middle parts of URLs (e.g., "google. " when followed by a TLD)
-    // This is trickier - we need to find patterns like "word. word. tld"
-    for tld in TLDS {
-        // Look for patterns like "something. tld" that we haven't caught yet
-        let pattern = format!(". {}", tld);
-        if result.contains(&pattern) {
-            result = result.replace(&pattern, &format!(".{}", tld));
-        }
-    }
-
-    // Clean up any remaining "word. word" patterns that are clearly part of URLs
-    // by checking if they're near www or end with a TLD
-    let words: Vec<&str> = result.split_whitespace().collect();
-    if words.len() >= 2 {
-        let mut new_result = String::new();
-        let mut i = 0;
-        let chars: Vec<char> = result.chars().collect();
-
-        while i < chars.len() {
-            new_result.push(chars[i]);
-
-            // If we just pushed a dot followed by space, check if we should remove the space
-            if chars[i] == '.' && i + 1 < chars.len() && chars[i + 1] == ' ' {
-                // Look ahead to see if this could be a URL
-                let remaining: String = chars[i + 2..].iter().take(20).collect();
-                let next_word: String = remaining.chars().take_while(|c| c.is_alphabetic()).collect();
-                let next_lower = next_word.to_lowercase();
-
-                // Check if next word is followed by a TLD pattern
-                let has_tld_after = TLDS.iter().any(|tld| {
-                    remaining.to_lowercase().contains(&format!(".{}", tld)) ||
-                    next_lower == *tld
-                });
-
-                // Check if we recently had "www"
-                let lookback: String = new_result.chars().rev().take(20).collect::<String>().chars().rev().collect();
-                let has_www = lookback.to_lowercase().contains("www");
-
-                if has_tld_after || has_www {
-                    // Skip the space
-                    i += 1;
+    // For www-prefixed URLs, collapse any remaining "dot space" within the URL
+    // e.g., "www.google. com" → "www.google.com"
+    // Only do this when we can see a clear www/http prefix
+    if let Some(www_pos) = result.to_lowercase().find("www.") {
+        let url_start = www_pos;
+        // Find end of URL (next whitespace after the domain starts)
+        let after_www = &result[url_start + 4..];
+        if let Some(first_space) = after_www.find(' ') {
+            // Check if there are more "dot space" patterns within this URL region
+            let mut url_part: String = result[url_start..].to_string();
+            // Collapse ". " within the URL until we hit a sentence-like boundary
+            loop {
+                if let Some(dot_space) = url_part.find(". ") {
+                    let after = &url_part[dot_space + 2..];
+                    let next_word: String = after.chars().take_while(|c| c.is_alphanumeric()).collect();
+                    // Only collapse if the next word is lowercase (domain-like, not a sentence)
+                    if !next_word.is_empty() && next_word.chars().next().unwrap().is_lowercase() {
+                        url_part = format!("{}.{}", &url_part[..dot_space], &url_part[dot_space + 2..]);
+                        continue;
+                    }
                 }
+                break;
             }
-
-            i += 1;
+            result = format!("{}{}", &result[..url_start], url_part);
         }
-        result = new_result;
     }
 
     result
 }
 
 /// Check if we're in a URL context (should not add space after dot)
+/// Only matches unambiguous signals: www. or http(s):// prefix nearby.
+/// TLD-based guessing is left to the LLM to avoid false positives
+/// like "mind. It" → "mind.it".
 fn is_url_context(chars: &[char], dot_pos: usize) -> bool {
-    const TLDS: &[&str] = &[
-        "com", "org", "net", "edu", "gov", "io", "co", "dev", "app", "ai", "ly", "me",
-        "uk", "us", "ca", "de", "fr", "jp", "au", "in", "ru", "br", "it", "es", "nl",
-    ];
-
-    // Get word after the dot
-    let after: String = chars[dot_pos + 1..].iter().take(15).collect();
-    let word: String = after.chars().take_while(|c| c.is_alphabetic()).collect();
-    let word_lower = word.to_lowercase();
-
-    // If next word is a TLD, it's a URL
-    if TLDS.contains(&word_lower.as_str()) {
-        return true;
-    }
-
-    // Check if "www" or "http" appears before this dot
+    // Check if "www" or "http" appears before this dot (within 50 chars)
     if dot_pos >= 3 {
-        let before: String = chars[dot_pos.saturating_sub(20)..dot_pos].iter().collect();
+        let before: String = chars[dot_pos.saturating_sub(50)..dot_pos].iter().collect();
         let before_lower = before.to_lowercase();
         if before_lower.contains("www") || before_lower.contains("http") {
-            return true;
-        }
-    }
-
-    // Check if there's a TLD coming up (e.g., we're at "google" in "www.google.com")
-    for tld in TLDS {
-        if after.to_lowercase().contains(&format!(".{}", tld)) {
             return true;
         }
     }

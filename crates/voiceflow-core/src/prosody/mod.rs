@@ -11,12 +11,16 @@ mod pause_analysis;
 mod pitch_analysis;
 mod spelled_words;
 mod replacements;
+mod tokenization_fix;
+mod filler_words;
 
 pub use voice_commands::replace_voice_commands;
 pub use pause_analysis::{PauseHint, analyze_pauses};
 pub use pitch_analysis::{PitchContour, analyze_pitch_contour};
 pub use spelled_words::{concatenate_spelled_words, concatenate_spelled_words_aggressive};
 pub use replacements::ReplacementDictionary;
+pub use tokenization_fix::fix_tokenization_artifacts;
+pub use filler_words::remove_filler_words;
 
 /// Combined prosody analysis result
 #[derive(Debug, Clone, Default)]

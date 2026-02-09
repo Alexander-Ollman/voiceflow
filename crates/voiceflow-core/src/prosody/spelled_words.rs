@@ -208,18 +208,36 @@ fn fix_partial_spellings(text: &str) -> String {
     result
 }
 
-/// Case-insensitive string replacement
+/// Case-insensitive string replacement with word boundary awareness
+///
+/// Only replaces if the match is at word boundaries (not in the middle of words).
+/// This prevents "him like" from matching "M L" → "ML" and becoming "hiMLike".
 fn case_insensitive_replace(text: &str, pattern: &str, replacement: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
     let lower_text = text.to_lowercase();
     let lower_pattern = pattern.to_lowercase();
 
-    if let Some(pos) = lower_text.find(&lower_pattern) {
-        format!(
-            "{}{}{}",
-            &text[..pos],
-            replacement,
-            &text[pos + pattern.len()..]
-        )
+    if let Some(start) = lower_text.find(&lower_pattern) {
+        let end = start + pattern.len();
+
+        // Check if this match is at word boundaries
+        let at_word_start = start == 0 || !chars.get(start.saturating_sub(1))
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false);
+        let at_word_end = end >= chars.len() || !chars.get(end)
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false);
+
+        if at_word_start && at_word_end {
+            format!(
+                "{}{}{}",
+                &text[..start],
+                replacement,
+                &text[start + pattern.len()..]
+            )
+        } else {
+            text.to_string()
+        }
     } else {
         text.to_string()
     }

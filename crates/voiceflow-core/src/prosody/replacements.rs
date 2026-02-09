@@ -135,20 +135,37 @@ impl ReplacementDictionary {
     }
 }
 
-/// Case-insensitive replace all occurrences
+/// Case-insensitive replace all occurrences, respecting word boundaries
+///
+/// Only replaces if the match is at word boundaries (not in the middle of words).
+/// This prevents "great saint" from matching "T S" → ".ts" and becoming "grea.tsaint".
 fn case_insensitive_replace_all(text: &str, pattern: &str, replacement: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
     let lower_text = text.to_lowercase();
     let lower_pattern = pattern.to_lowercase();
 
     let mut result = String::with_capacity(text.len());
     let mut last_end = 0;
 
-    for (start, _) in lower_text.match_indices(&lower_pattern) {
-        // Add text before this match
-        result.push_str(&text[last_end..start]);
-        // Add replacement
-        result.push_str(replacement);
-        last_end = start + pattern.len();
+    for (start, matched) in lower_text.match_indices(&lower_pattern) {
+        let end = start + matched.len();
+
+        // Check if this match is at word boundaries
+        // A word boundary is: start/end of text, or non-alphabetic character
+        let at_word_start = start == 0 || !chars.get(start.saturating_sub(1))
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false);
+        let at_word_end = end >= chars.len() || !chars.get(end)
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false);
+
+        if at_word_start && at_word_end {
+            // Add text before this match
+            result.push_str(&text[last_end..start]);
+            // Add replacement
+            result.push_str(replacement);
+            last_end = start + pattern.len();
+        }
     }
 
     // Add remaining text
@@ -184,5 +201,18 @@ mod tests {
 
         let result = dict.apply("whisper. cpp is great");
         assert_eq!(result, "whisper.cpp is great");
+    }
+
+    #[test]
+    fn test_word_boundary_respected() {
+        let dict = ReplacementDictionary::builtin();
+
+        // "T S" → ".ts" should NOT match in "great saint" (t and s are parts of different words)
+        let result = dict.apply("A great saint");
+        assert_eq!(result, "A great saint", "Should not replace across word boundaries");
+
+        // But "T S" → ".ts" SHOULD match when standalone
+        let result = dict.apply("Use T S files");
+        assert_eq!(result, "Use .ts files", "Should replace standalone T S");
     }
 }

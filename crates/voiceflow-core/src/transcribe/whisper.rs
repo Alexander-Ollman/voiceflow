@@ -90,9 +90,11 @@ impl WhisperEngine {
         params.set_print_timestamps(false);
 
         // Enable token-level timestamps for word extraction
+        // Note: Do NOT use set_max_len(1) as it severely degrades transcription quality
+        // by forcing per-token segmentation without context. Whisper can still provide
+        // token-level timestamps without this constraint.
         if enable_timestamps {
             params.set_token_timestamps(true);
-            params.set_max_len(1); // Force word-level segmentation
         }
 
         // Suppress non-speech tokens

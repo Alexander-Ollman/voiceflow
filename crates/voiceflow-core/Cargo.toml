@@ -20,11 +20,13 @@ ort.workspace = true
 ndarray.workspace = true
 serde_json.workspace = true
 
-# LLM - mistral.rs for cross-platform inference
+# LLM - Multiple backends for architecture support
 mistralrs.workspace = true
+llama-cpp-2.workspace = true
 
 # Async
 tokio.workspace = true
+once_cell = "1.19"
 
 # Utils
 anyhow.workspace = true

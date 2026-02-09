@@ -1,20 +1,29 @@
-//! LLM engine using mistral.rs for cross-platform inference
-//! Supports Metal (macOS), CUDA (Linux), and CPU fallback
+//! LLM engine with switchable backends
+//!
+//! Supports multiple inference backends:
+//! - mistral.rs: Good for Qwen, Gemma2, Phi-2
+//! - llama.cpp: Supports all GGUF architectures (SmolLM3, Gemma3n, Phi-4, etc.)
 
-use crate::config::Config;
+use crate::config::{Config, LlmBackend};
+use crate::llm::backend::LlmBackendTrait;
+use crate::llm::llamacpp_backend::LlamaCppBackend;
+use crate::llm::mistralrs_backend::MistralRsBackend;
 use crate::llm::prompts::{format_prompt, post_process_output};
+use crate::runtime;
 use anyhow::{Context, Result};
-use mistralrs::{GgufModelBuilder, Model, RequestBuilder, TextMessages, TextMessageRole};
-use std::sync::Arc;
 
-/// LLM engine for text formatting using mistral.rs
+/// LLM engine for text formatting with switchable backends
 pub struct LlmEngine {
-    model: Arc<Model>,
+    backend: Box<dyn LlmBackendTrait>,
     config: Config,
 }
 
 impl LlmEngine {
     /// Create a new LLM engine with the given configuration (async)
+    ///
+    /// Automatically selects the appropriate backend based on model architecture:
+    /// - mistral.rs for Qwen, Gemma2, Phi-2
+    /// - llama.cpp for SmolLM3, Gemma3n, Phi-4, and other architectures
     pub async fn new_async(config: &Config) -> Result<Self> {
         let model_path = config.llm_model_path()?;
 
@@ -25,56 +34,47 @@ impl LlmEngine {
             );
         }
 
-        tracing::info!("Loading LLM model from {:?}", model_path);
+        let selected_backend = config.llm_model.backend();
+        tracing::info!(
+            "Loading LLM model {} with {} backend",
+            config.llm_model.display_name(),
+            selected_backend.display_name()
+        );
 
-        // Get parent directory and filename
-        let model_dir = model_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .to_string_lossy()
-            .to_string();
-        let model_file = model_path
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| config.llm_model.filename().to_string());
+        // Create the appropriate backend based on model architecture
+        let backend: Box<dyn LlmBackendTrait> = match selected_backend {
+            LlmBackend::MistralRs => {
+                let b = MistralRsBackend::new_async(config)
+                    .await
+                    .context("Failed to initialize mistral.rs backend")?;
+                Box::new(b)
+            }
+            LlmBackend::LlamaCpp => {
+                let b = LlamaCppBackend::new(config)
+                    .context("Failed to initialize llama.cpp backend")?;
+                Box::new(b)
+            }
+        };
 
-        // Build model using mistral.rs async API
-        // Note: We avoid PagedAttention for now as it can cause Metal shader conflicts
-        let model = GgufModelBuilder::new(model_dir, vec![model_file])
-            .with_logging()
-            .build()
-            .await
-            .context("Failed to load LLM model with mistral.rs")?;
-
-        tracing::info!("LLM model loaded: {}", config.llm_model.display_name());
+        tracing::info!(
+            "LLM engine ready: {} via {}",
+            config.llm_model.display_name(),
+            backend.name()
+        );
 
         Ok(Self {
-            model: Arc::new(model),
+            backend,
             config: config.clone(),
         })
     }
 
     /// Create a new LLM engine (blocking wrapper for sync contexts)
+    ///
+    /// Uses the global shared Tokio runtime to avoid memory leaks from
+    /// creating multiple runtimes.
     pub fn new(config: &Config) -> Result<Self> {
-        // Use tokio's current runtime if available, otherwise create one
-        match tokio::runtime::Handle::try_current() {
-            Ok(_handle) => {
-                // We're in an async context - use spawn_blocking to avoid nested runtime
-                let config = config.clone();
-                std::thread::scope(|s| {
-                    s.spawn(|| {
-                        let rt = tokio::runtime::Runtime::new()?;
-                        rt.block_on(Self::new_async(&config))
-                    }).join().unwrap()
-                })
-            }
-            Err(_) => {
-                // No runtime, create one
-                let rt = tokio::runtime::Runtime::new()
-                    .context("Failed to create tokio runtime")?;
-                rt.block_on(Self::new_async(config))
-            }
-        }
+        let config = config.clone();
+        runtime::block_on(Self::new_async(&config))
     }
 
     /// Format a transcript using the LLM (async)
@@ -83,28 +83,16 @@ impl LlmEngine {
 
         tracing::debug!("LLM prompt length: {} chars", prompt.len());
 
-        // Build messages with thinking disabled for fast inference (enable_thinking defaults to false)
-        let messages = TextMessages::new()
-            .enable_thinking(self.config.llm_options.enable_thinking)
-            .add_message(TextMessageRole::User, &prompt);
+        // Generate using the backend
+        let output = self.backend.generate(
+            &prompt,
+            self.config.llm_options.max_tokens,
+            self.config.llm_options.temperature,
+            self.config.llm_options.top_p,
+        )?;
 
-        // Build request with sampling parameters
-        let request = RequestBuilder::from(messages)
-            .set_sampler_max_len(self.config.llm_options.max_tokens as usize)
-            .set_sampler_temperature(self.config.llm_options.temperature as f64)
-            .set_sampler_topp(self.config.llm_options.top_p as f64);
-
-        // Run inference
-        let response = self.model.send_chat_request(request).await
-            .context("LLM inference failed")?;
-
-        // Extract response text and strip any thinking tags
-        let output = response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.as_ref())
-            .map(|s| strip_thinking_tags(s.trim()))
-            .unwrap_or_default();
+        // Strip thinking tags and apply post-processing
+        let output = strip_thinking_tags(&output);
 
         tracing::debug!("LLM output length: {} chars", output.len());
 
@@ -112,51 +100,16 @@ impl LlmEngine {
     }
 
     /// Format a transcript using the LLM (blocking wrapper)
+    ///
+    /// Uses the global shared Tokio runtime to avoid memory leaks from
+    /// creating multiple runtimes per call.
     pub fn format(&self, transcript: &str, prompt_template: &str) -> Result<String> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(_handle) => {
-                // We're in an async context - use spawn_blocking
-                let model = Arc::clone(&self.model);
-                let config = self.config.clone();
-                let transcript = transcript.to_string();
-                let prompt_template = prompt_template.to_string();
+        runtime::block_on(self.format_async(transcript, prompt_template))
+    }
 
-                std::thread::scope(|s| {
-                    s.spawn(|| {
-                        let rt = tokio::runtime::Runtime::new()?;
-                        rt.block_on(async {
-                            let prompt = format_prompt(&prompt_template, &transcript, &config);
-                            let messages = TextMessages::new()
-                                .enable_thinking(config.llm_options.enable_thinking)
-                                .add_message(TextMessageRole::User, &prompt);
-
-                            let request = RequestBuilder::from(messages)
-                                .set_sampler_max_len(config.llm_options.max_tokens as usize)
-                                .set_sampler_temperature(config.llm_options.temperature as f64)
-                                .set_sampler_topp(config.llm_options.top_p as f64);
-
-                            let response = model.send_chat_request(request).await
-                                .context("LLM inference failed")?;
-
-                            let output = response
-                                .choices
-                                .first()
-                                .and_then(|c| c.message.content.as_ref())
-                                .map(|s| strip_thinking_tags(s.trim()))
-                                .unwrap_or_default();
-
-                            Ok(output)
-                        })
-                    }).join().unwrap()
-                })
-            }
-            Err(_) => {
-                // No runtime, create one
-                let rt = tokio::runtime::Runtime::new()
-                    .context("Failed to create tokio runtime")?;
-                rt.block_on(self.format_async(transcript, prompt_template))
-            }
-        }
+    /// Get the name of the active backend
+    pub fn backend_name(&self) -> &'static str {
+        self.backend.name()
     }
 }
 
@@ -206,9 +159,6 @@ fn strip_thinking_tags(text: &str) -> String {
     // Apply shared post-processing (punctuation spacing, UI quoting, ellipsis normalization)
     post_process_output(&result)
 }
-
-// Post-processing functions moved to prompts.rs for better separation of concerns.
-// This module now uses crate::llm::prompts::post_process_output for output cleanup.
 
 #[cfg(test)]
 mod tests {
