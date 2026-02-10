@@ -160,10 +160,31 @@ fn replace_case_insensitive(text: &str, pattern: &str, replacement: &str) -> Str
 }
 
 /// Check if text starting at position looks like a URL component
-/// Only matches unambiguous signals: www. or http(s):// prefix nearby.
-/// TLD-based guessing is left to the LLM to avoid false positives
-/// like "mind. It" → "mind.it".
+/// Only matches unambiguous signals: www/http prefix or safe TLDs that
+/// won't collide with English words (e.g. .computer, .com, .org).
 fn is_url_context(chars: &[char], pos: usize) -> bool {
+    // Safe TLDs: long or uncommon enough to never appear as English words after a period
+    const SAFE_TLDS: &[&str] = &[
+        "com", "org", "net", "edu", "gov", "dev", "app", "io",
+        "computer", "website", "online", "tech", "cloud", "digital",
+    ];
+
+    // Check if the word at this position matches a safe TLD
+    let remaining: String = chars[pos..].iter().take(30).collect();
+    let word: String = remaining.chars().take_while(|c| c.is_alphabetic()).collect();
+    let word_lower = word.to_lowercase();
+    if SAFE_TLDS.contains(&word_lower.as_str()) {
+        return true;
+    }
+
+    // Check if a safe TLD appears ahead (e.g., "era" in "demo.era.computer")
+    let remaining_lower = remaining.to_lowercase();
+    for tld in SAFE_TLDS {
+        if remaining_lower.contains(&format!(".{}", tld)) {
+            return true;
+        }
+    }
+
     // Check if "www" or "http" appears earlier in the text (within ~50 chars)
     if pos >= 3 {
         let lookback: String = chars[pos.saturating_sub(50)..pos].iter().collect();
@@ -403,11 +424,14 @@ mod tests {
             cleanup_punctuation_spacing("visit www.google.com today"),
             "Visit www.google.com today"
         );
-        // Without www/http prefix, dots get normal sentence spacing
-        // (the LLM handles bare domain detection via prompt)
+        // Safe TLDs (.io, .com, .computer, etc.) are detected even without www
         assert_eq!(
             cleanup_punctuation_spacing("go to example.io"),
-            "Go to example. Io"
+            "Go to example.io"
+        );
+        assert_eq!(
+            cleanup_punctuation_spacing("visit demo.era.computer"),
+            "Visit demo.era.computer"
         );
     }
 
@@ -418,16 +442,19 @@ mod tests {
             cleanup_punctuation_spacing("Hello.World"),
             "Hello. World"
         );
-        // Without www/http prefix, bare TLDs get normal spacing
-        // (the LLM handles this ambiguity via prompt)
+        // Safe TLDs (.com) are detected as URL even without www
         assert_eq!(
             cleanup_punctuation_spacing("Hello.com"),
-            "Hello. Com"
+            "Hello.com"
         );
-        // The key fix: "mind.It" should NOT be treated as a URL
+        // Dangerous TLDs (.it, .in, .us, .me) are NOT matched — avoids false positives
         assert_eq!(
             cleanup_punctuation_spacing("Never mind.It appears"),
             "Never mind. It appears"
+        );
+        assert_eq!(
+            cleanup_punctuation_spacing("Call me.In the morning"),
+            "Call me. In the morning"
         );
     }
 
