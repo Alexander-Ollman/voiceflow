@@ -117,6 +117,47 @@ fn fix_url_spacing(text: &str) -> String {
         result = result.replace(&format!(". {}", tld.to_uppercase()), &format!(".{}", tld));
     }
 
+    // Collapse ". word" patterns where "word" is followed by a safe TLD
+    // e.g., "Demo. Era.computer" → "Demo.era.computer"
+    // Repeat until no more changes (handles multiple segments)
+    loop {
+        let prev = result.clone();
+        let chars: Vec<char> = result.chars().collect();
+        let mut new = String::with_capacity(result.len());
+        let mut i = 0;
+        while i < chars.len() {
+            new.push(chars[i]);
+            // If we just pushed a dot and next is space
+            if chars[i] == '.' && i + 1 < chars.len() && chars[i + 1] == ' ' {
+                // Look ahead: get the word after the space, then check if it's followed by .tld
+                let after_space: String = chars[i + 2..].iter().take(40).collect();
+                let next_word: String = after_space.chars().take_while(|c| c.is_alphanumeric()).collect();
+                if !next_word.is_empty() {
+                    // Check if after this word there's a dot followed by a safe TLD
+                    let after_word: String = after_space[next_word.len()..].to_lowercase();
+                    let has_safe_tld = SAFE_TLDS.iter().any(|tld| {
+                        after_word.starts_with(&format!(".{}", tld))
+                    });
+                    if has_safe_tld {
+                        // Skip the space and lowercase the word (domain segment)
+                        i += 1; // skip space
+                        // Push the word lowercased
+                        for c in next_word.chars() {
+                            new.push(c.to_ascii_lowercase());
+                        }
+                        i += 1 + next_word.len(); // skip space + word
+                        continue;
+                    }
+                }
+            }
+            i += 1;
+        }
+        result = new;
+        if result == prev {
+            break;
+        }
+    }
+
     // Fix "www. " pattern
     result = result.replace("www. ", "www.");
     result = result.replace("Www. ", "www.");
@@ -173,9 +214,10 @@ fn is_url_context(chars: &[char], dot_pos: usize) -> bool {
             return true;
         }
         // Check if a safe TLD appears ahead (e.g., "era" in "demo.era.computer")
-        let after_lower = after.to_lowercase();
+        // Normalize: strip spaces and lowercase, since ASR may produce "Era. Computer"
+        let after_normalized: String = after.to_lowercase().chars().filter(|c| *c != ' ').collect();
         for tld in SAFE_TLDS {
-            if after_lower.contains(&format!(".{}", tld)) {
+            if after_normalized.contains(&format!(".{}", tld)) {
                 return true;
             }
         }
@@ -439,5 +481,27 @@ mod tests {
         let result = post_process_output("  go to Settings.Click Submit  ");
         assert!(result.contains("'Settings'"));
         assert!(result.contains("'Submit'"));
+    }
+
+    #[test]
+    fn test_fix_url_spacing_multi_segment() {
+        // ASR produces "Demo. Era. Computer." — should collapse to "demo.era.computer."
+        assert_eq!(
+            fix_url_spacing("Demo. Era. Computer."),
+            "Demo.era.computer."
+        );
+    }
+
+    #[test]
+    fn test_fix_url_spacing_safe_tld() {
+        // ". Com" should collapse
+        assert_eq!(fix_url_spacing("google. Com"), "google.com");
+        assert_eq!(fix_url_spacing("example. Computer"), "example.computer");
+    }
+
+    #[test]
+    fn test_fix_url_spacing_no_false_positive() {
+        // ". It" should NOT collapse (not a safe TLD)
+        assert_eq!(fix_url_spacing("mind. It appears"), "mind. It appears");
     }
 }

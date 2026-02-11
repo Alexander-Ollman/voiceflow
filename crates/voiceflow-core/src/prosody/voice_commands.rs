@@ -137,7 +137,9 @@ fn build_replacement_map() -> HashMap<&'static str, &'static str> {
     map
 }
 
-/// Case-insensitive replacement
+/// Case-insensitive replacement with word boundary protection.
+/// Won't match if the character after the pattern is alphabetic,
+/// preventing e.g. " period" from matching inside " periods".
 fn replace_case_insensitive(text: &str, pattern: &str, replacement: &str) -> String {
     let lower_text = text.to_lowercase();
     let lower_pattern = pattern.to_lowercase();
@@ -146,11 +148,22 @@ fn replace_case_insensitive(text: &str, pattern: &str, replacement: &str) -> Str
     let mut last_end = 0;
 
     for (start, _) in lower_text.match_indices(&lower_pattern) {
+        // Skip if this match overlaps with a previous replacement
+        if start < last_end {
+            continue;
+        }
+        // Word boundary check: skip if the next char after the match is alphabetic
+        let end = start + pattern.len();
+        if let Some(next_char) = text[end..].chars().next() {
+            if next_char.is_alphabetic() {
+                continue;
+            }
+        }
         // Add text before this match
         result.push_str(&text[last_end..start]);
         // Add replacement
         result.push_str(replacement);
-        last_end = start + pattern.len();
+        last_end = end;
     }
 
     // Add remaining text
@@ -178,9 +191,10 @@ fn is_url_context(chars: &[char], pos: usize) -> bool {
     }
 
     // Check if a safe TLD appears ahead (e.g., "era" in "demo.era.computer")
-    let remaining_lower = remaining.to_lowercase();
+    // Normalize: strip spaces and lowercase, since ASR may produce "Era. Computer"
+    let remaining_normalized: String = remaining.to_lowercase().chars().filter(|c| *c != ' ').collect();
     for tld in SAFE_TLDS {
-        if remaining_lower.contains(&format!(".{}", tld)) {
+        if remaining_normalized.contains(&format!(".{}", tld)) {
             return true;
         }
     }
@@ -455,6 +469,28 @@ mod tests {
         assert_eq!(
             cleanup_punctuation_spacing("Call me.In the morning"),
             "Call me. In the morning"
+        );
+    }
+
+    #[test]
+    fn test_word_boundary_period_vs_periods() {
+        // "periods" should NOT be converted — word boundary protection
+        let result = replace_voice_commands("If there are multiple periods then");
+        assert!(result.contains("periods"), "Expected 'periods' to be preserved, got: {}", result);
+        // But standalone "period" at end should still convert
+        let result2 = replace_voice_commands("end of sentence period");
+        assert!(result2.contains('.'), "Expected period punctuation, got: {}", result2);
+    }
+
+    #[test]
+    fn test_url_lookahead_with_spaces() {
+        // The is_url_context lookahead should detect .computer even with spaces
+        // Note: cleanup_punctuation_spacing handles the dot-letter joining,
+        // but collapsing ". Word" (with space) into ".word" is done by fix_url_spacing in prompts.rs
+        // Here we just verify that dots followed directly by safe TLDs are preserved
+        assert_eq!(
+            cleanup_punctuation_spacing("demo.era.computer"),
+            "Demo.era.computer"
         );
     }
 
