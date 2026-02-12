@@ -301,6 +301,68 @@ fn capitalize_after_punctuation(text: &str) -> String {
     result
 }
 
+/// Returns the end marker phrases for a given delimiter pair.
+fn end_markers_for(open: &str, close: &str) -> &'static [&'static str] {
+    match (open, close) {
+        ("(", ")") => &["end parentheses", "end parenthesis", "end parens", "end brackets"],
+        ("[", "]") => &["end square brackets"],
+        ("\"", "\"") => &["end quotes", "end quote"],
+        ("{", "}") => &["end curly braces", "end braces"],
+        _ => &[],
+    }
+}
+
+/// Find the rightmost clause boundary in text, returning (byte_offset, token_byte_len).
+/// Scans for both punctuation characters and voice command words.
+fn find_last_clause_boundary(text: &str) -> Option<(usize, usize)> {
+    let punct_chars = [',', '.', '!', '?', ':', ';'];
+    let voice_words: &[&str] = &[
+        "comma", "period", "colon", "semicolon",
+        "question mark", "exclamation mark", "exclamation point", "full stop",
+    ];
+
+    let mut best: Option<(usize, usize)> = None;
+
+    // Check punctuation chars — find last occurrence
+    for &p in &punct_chars {
+        if let Some(pos) = text.rfind(p) {
+            if best.is_none() || pos > best.unwrap().0 {
+                best = Some((pos, p.len_utf8()));
+            }
+        }
+    }
+
+    // Check voice command words — find last occurrence with word boundaries
+    let lower = text.to_lowercase();
+    for &word in voice_words {
+        let mut search_from = 0;
+        let mut last_valid = None;
+        while search_from < lower.len() {
+            if let Some(rel_pos) = lower[search_from..].find(word) {
+                let abs_pos = search_from + rel_pos;
+                let end = abs_pos + word.len();
+                let start_ok =
+                    abs_pos == 0 || !lower.as_bytes()[abs_pos - 1].is_ascii_alphabetic();
+                let end_ok =
+                    end >= lower.len() || !lower.as_bytes()[end].is_ascii_alphabetic();
+                if start_ok && end_ok {
+                    last_valid = Some(abs_pos);
+                }
+                search_from = abs_pos + 1;
+            } else {
+                break;
+            }
+        }
+        if let Some(pos) = last_valid {
+            if best.is_none() || pos > best.unwrap().0 {
+                best = Some((pos, word.len()));
+            }
+        }
+    }
+
+    best
+}
+
 /// Apply wrapping voice commands: "in parentheses X" → "(X)", "in brackets X" → "(X)", etc.
 ///
 /// Wraps all text from the trigger to the end of the string (or until an explicit
@@ -360,12 +422,69 @@ fn apply_wrapping_commands(text: &str) -> String {
     let before = text[..pos].trim_end();
     let content = text[content_start..].trim();
 
-    if content.is_empty() {
-        return text.to_string();
+    // ── Feature 1: End delimiters ──────────────────────────────────────────
+    if !content.is_empty() {
+        let end_markers = end_markers_for(open, close);
+        let content_lower = content.to_lowercase();
+        // Find the longest matching end marker with word boundaries
+        let mut best_marker: Option<(usize, usize)> = None;
+        for &marker in end_markers {
+            if let Some(mpos) = content_lower.find(marker) {
+                let mend = mpos + marker.len();
+                let start_ok = mpos == 0
+                    || !content_lower.as_bytes()[mpos - 1].is_ascii_alphabetic();
+                let end_ok = mend >= content_lower.len()
+                    || !content_lower.as_bytes()[mend].is_ascii_alphabetic();
+                if start_ok && end_ok {
+                    if best_marker.is_none() || marker.len() > best_marker.unwrap().1 {
+                        best_marker = Some((mpos, marker.len()));
+                    }
+                }
+            }
+        }
+
+        if let Some((marker_pos, marker_len)) = best_marker {
+            let wrapped_content = content[..marker_pos].trim();
+            let after_marker = marker_pos + marker_len;
+            let trailing_start = after_marker
+                + content[after_marker..]
+                    .chars()
+                    .take_while(|c| c.is_whitespace() || matches!(c, ',' | ':' | ';' | '-'))
+                    .map(|c| c.len_utf8())
+                    .sum::<usize>();
+            let trailing = content[trailing_start..].trim();
+
+            return match (before.is_empty(), trailing.is_empty()) {
+                (true, true) => format!("{}{}{}", open, wrapped_content, close),
+                (true, false) => format!("{}{}{} {}", open, wrapped_content, close, trailing),
+                (false, true) => format!("{} {}{}{}", before, open, wrapped_content, close),
+                (false, false) => {
+                    format!("{} {}{}{} {}", before, open, wrapped_content, close, trailing)
+                }
+            };
+        }
+        // No end marker found — fall through to wrap-to-end (step 5)
     }
 
-    // If the content already ends with the close delimiter (from explicit "close parenthesis"),
-    // don't double it
+    // ── Feature 2: Postfix wrapping ────────────────────────────────────────
+    if content.is_empty() {
+        if before.is_empty() {
+            return text.to_string();
+        }
+        return if let Some((boundary_offset, token_len)) = find_last_clause_boundary(before) {
+            let split_at = boundary_offset + token_len;
+            let prefix = &before[..split_at];
+            let to_wrap = before[split_at..].trim();
+            if to_wrap.is_empty() {
+                return text.to_string();
+            }
+            format!("{} {}{}{}", prefix, open, to_wrap, close)
+        } else {
+            format!("{}{}{}", open, before, close)
+        };
+    }
+
+    // ── Step 5: Existing wrap-to-end with dedup ────────────────────────────
     let content = if close == ")" && content.ends_with(')') {
         content[..content.len() - 1].trim_end()
     } else if close == "]" && content.ends_with(']') {
@@ -747,5 +866,161 @@ mod tests {
     fn test_new_paragraph() {
         let result = replace_voice_commands("End of first new paragraph Start of second");
         assert!(result.contains("\n\n"));
+    }
+
+    // ========================================================================
+    // End delimiter tests — apply_wrapping_commands
+    // ========================================================================
+
+    #[test]
+    fn test_end_delimiter_basic() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses see above end parentheses and then continue"),
+            "(see above) and then continue"
+        );
+    }
+
+    #[test]
+    fn test_end_delimiter_with_before() {
+        assert_eq!(
+            apply_wrapping_commands("say in brackets hello end brackets then goodbye"),
+            "say (hello) then goodbye"
+        );
+    }
+
+    #[test]
+    fn test_end_delimiter_no_trailing() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses one two three end parentheses"),
+            "(one two three)"
+        );
+    }
+
+    #[test]
+    fn test_end_delimiter_quotes() {
+        assert_eq!(
+            apply_wrapping_commands("in quotes note end quotes rest"),
+            "\"note\" rest"
+        );
+    }
+
+    #[test]
+    fn test_end_delimiter_curly_braces() {
+        assert_eq!(
+            apply_wrapping_commands("in curly braces name end curly braces rest"),
+            "{name} rest"
+        );
+    }
+
+    #[test]
+    fn test_end_delimiter_no_open_trigger() {
+        assert_eq!(
+            apply_wrapping_commands("hello end parentheses world"),
+            "hello end parentheses world"
+        );
+    }
+
+    #[test]
+    fn test_end_delimiter_stt_comma() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses see above end parentheses, and continue"),
+            "(see above) and continue"
+        );
+    }
+
+    #[test]
+    fn test_end_delimiter_synonym() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses hello end parens world"),
+            "(hello) world"
+        );
+    }
+
+    // ========================================================================
+    // Postfix wrapping tests — apply_wrapping_commands
+    // ========================================================================
+
+    #[test]
+    fn test_postfix_basic() {
+        assert_eq!(
+            apply_wrapping_commands("see page 3 in parentheses"),
+            "(see page 3)"
+        );
+    }
+
+    #[test]
+    fn test_postfix_brackets() {
+        assert_eq!(
+            apply_wrapping_commands("see page 3 in brackets"),
+            "(see page 3)"
+        );
+    }
+
+    #[test]
+    fn test_postfix_with_voice_boundary() {
+        assert_eq!(
+            apply_wrapping_commands("hello comma see above in parentheses"),
+            "hello comma (see above)"
+        );
+    }
+
+    #[test]
+    fn test_postfix_with_punct_boundary() {
+        assert_eq!(
+            apply_wrapping_commands("hello, see above in parentheses"),
+            "hello, (see above)"
+        );
+    }
+
+    #[test]
+    fn test_postfix_no_boundary() {
+        assert_eq!(
+            apply_wrapping_commands("see above in parentheses"),
+            "(see above)"
+        );
+    }
+
+    #[test]
+    fn test_postfix_nothing_before_or_after() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses"),
+            "in parentheses"
+        );
+    }
+
+    #[test]
+    fn test_postfix_prefix_mode_unchanged() {
+        assert_eq!(
+            apply_wrapping_commands("in parentheses hello"),
+            "(hello)"
+        );
+    }
+
+    // ========================================================================
+    // Full pipeline tests — end delimiter + postfix through replace_voice_commands
+    // ========================================================================
+
+    #[test]
+    fn test_full_pipeline_end_delimiter_quotes() {
+        assert_eq!(
+            replace_voice_commands("in quotes note end quotes period"),
+            "\"Note\"."
+        );
+    }
+
+    #[test]
+    fn test_full_pipeline_postfix() {
+        assert_eq!(
+            replace_voice_commands("hello comma see above in parentheses"),
+            "Hello, (see above)"
+        );
+    }
+
+    #[test]
+    fn test_full_pipeline_end_delimiter_with_trailing() {
+        assert_eq!(
+            replace_voice_commands("in parentheses see above end parentheses period and continue"),
+            "(See above). And continue"
+        );
     }
 }
