@@ -35,6 +35,7 @@
 - **Per-app formatting** &mdash; Auto-detects apps (email, Slack, code editors, etc.) and lets you customize dictation style per application with custom prompts
 - **Correction learning** &mdash; Learns from your edits to fix recurring spelling mistakes automatically, with 30-day history and pattern management
 - **Voice snippets** &mdash; Create custom trigger phrases that expand into any text (e.g., "my signature" expands to your full sign-off)
+- **Summarize this** &mdash; Say "summarize this" to have a local LLM read and summarize the current text field, with a live status pill showing each step
 - **Menu bar app** &mdash; Minimal footprint, no dock icon, launch at login
 
 ## How It Works
@@ -158,6 +159,14 @@ The menu bar icon changes color to show status:
 | Default | Ready |
 | Red | Recording |
 | Yellow | Processing |
+
+The floating overlay pill shows real-time status during dictation and AI features:
+
+| Pill State | Appearance |
+|------------|------------|
+| Recording | Animated gradient + waveform bars |
+| Processing | Dark pill + pulsing dots |
+| AI Processing | Dark pill + sparkle icon + status text ("Summarizing...") + pulsing dots |
 
 ### Settings
 

@@ -1444,7 +1444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupOverlay() {
         // Create floating panel
         let panelWidth: CGFloat = 200
-        let panelHeight: CGFloat = 60
+        let panelHeight: CGFloat = 70
 
         // Get main screen
         guard let screen = NSScreen.main else { return }
@@ -1464,7 +1464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.level = .floating
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = false
         panel.titlebarAppearsTransparent = true
@@ -1479,10 +1479,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.overlayPanel = panel
         self.overlayHostingView = hostingView
+
+        // Reposition overlay when displays are added/removed
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self = self, let panel = self.overlayPanel, panel.isVisible else { return }
+                self.repositionOverlay()
+            }
+        }
+    }
+
+    /// Returns the screen containing the mouse cursor, falling back to the main screen.
+    private func activeScreen() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+            ?? NSScreen.main
+    }
+
+    /// Snaps the overlay panel to bottom-center of the active screen's visible area.
+    private func repositionOverlay() {
+        guard let panel = overlayPanel, let screen = activeScreen() else { return }
+        let screenFrame = screen.visibleFrame
+        let panelFrame = panel.frame
+        let x = screenFrame.midX - panelFrame.width / 2
+        let y = screenFrame.minY + 80  // 80pt above dock area
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     private func showOverlay(state: OverlayState.RecordingState) {
         overlayState.state = state
+        // Resize panel for AI processing (wider to fit text)
+        if case .aiProcessing = state {
+            overlayPanel?.setContentSize(NSSize(width: 260, height: 70))
+        } else {
+            overlayPanel?.setContentSize(NSSize(width: 200, height: 70))
+        }
+        repositionOverlay()
         overlayPanel?.orderFront(nil)
     }
 
@@ -1765,6 +1801,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           result.rawTranscript.split(separator: " ").count)
                 }
 
+                // Meta-command: "summarize this"
+                let summarizeEnabled = UserDefaults.standard.bool(forKey: "aiFeatureSummarizeEnabled")
+                let normalizedTranscript = result.rawTranscript.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                if summarizeEnabled && (normalizedTranscript == "summarize this"
+                    || normalizedTranscript == "summarise this"
+                    || normalizedTranscript == "summarize this."
+                    || normalizedTranscript == "summarise this.") {
+                    await MainActor.run {
+                        showOverlay(state: .aiProcessing("Reading text..."))
+                        summarizeCurrentField(targetApp: frontmostApp)
+                    }
+                    return
+                }
+
                 // Apply snippet expansion (e.g., "my signature" → "Best regards,\nJohn")
                 let expandedText = SnippetManager.shared.expandSnippets(in: result.formattedText)
 
@@ -1860,6 +1910,127 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Summarize This
+
+    /// Summarize the contents of the current text field and append the summary.
+    /// `targetApp` must be the app the user was dictating into, captured BEFORE the overlay was hidden.
+    private func summarizeCurrentField(targetApp: NSRunningApplication?) {
+        Task { @MainActor in
+            // Save current clipboard contents and mark the change count
+            let savedClipboard = NSPasteboard.general.string(forType: .string)
+
+            // Step 1: Activate the target app and wait for it to gain focus
+            let appName = targetApp?.localizedName ?? "unknown"
+            NSLog("[VoiceFlow Summarize] Target app: %@ (pid %d)", appName, targetApp?.processIdentifier ?? 0)
+
+            if let app = targetApp {
+                app.activate()
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms for app activation
+
+            // Step 2: Clear clipboard so we can detect when copy lands
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString("", forType: .string)
+            let emptyChangeCount = pasteboard.changeCount
+            NSLog("[VoiceFlow Summarize] Cleared clipboard, changeCount=%d", emptyChangeCount)
+
+            // Step 3: Select All (Cmd+A)
+            NSLog("[VoiceFlow Summarize] Sending Cmd+A")
+            simulateSelectAll()
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms for selection
+
+            // Step 4: Copy (Cmd+C)
+            NSLog("[VoiceFlow Summarize] Sending Cmd+C")
+            simulateCopy()
+
+            // Step 5: Wait for clipboard to change from empty (poll up to 2s)
+            var fieldText = ""
+            var copySucceeded = false
+            for i in 0..<40 {
+                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+                if pasteboard.changeCount != emptyChangeCount {
+                    fieldText = pasteboard.string(forType: .string) ?? ""
+                    NSLog("[VoiceFlow Summarize] Copy landed after %dms, got %d chars", (i + 1) * 50, fieldText.count)
+                    copySucceeded = true
+                    break
+                }
+            }
+
+            if !copySucceeded {
+                NSLog("[VoiceFlow Summarize] FAILED: clipboard never changed — Cmd+A/Cmd+C didn't reach %@", appName)
+                hideOverlay()
+                // Restore clipboard
+                pasteboard.clearContents()
+                if let saved = savedClipboard {
+                    pasteboard.setString(saved, forType: .string)
+                }
+                showNotification(title: "Summarize Failed", body: "Could not read text from \(appName). Make sure the text field is focused.")
+                return
+            }
+
+            // Restore original clipboard now that we have the text
+            pasteboard.clearContents()
+            if let saved = savedClipboard {
+                pasteboard.setString(saved, forType: .string)
+            }
+
+            // Deselect: move to end of document
+            simulateEndOfDocument()
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+            guard fieldText.count >= 20 else {
+                NSLog("[VoiceFlow Summarize] Not enough text: %d chars", fieldText.count)
+                hideOverlay()
+                showNotification(title: "Summarize", body: "Not enough text to summarize (need at least 20 characters).")
+                return
+            }
+
+            showOverlay(state: .aiProcessing("Summarizing..."))
+            showNotification(title: "Summarizing...", body: "Processing \(fieldText.count) characters")
+
+            let summarizePrompt = """
+            OVERRIDE: Ignore all formatting instructions above. Your task is to summarize the text below as a concise bullet-point list (3-7 bullets). Each bullet starts with "• ". Output ONLY the bullet points, nothing else.
+            """
+
+            guard let summary = await voiceFlow.formatText(fieldText, context: summarizePrompt) else {
+                hideOverlay()
+                showNotification(title: "Summarize Failed", body: "Could not generate summary")
+                return
+            }
+
+            // Re-activate target app for pasting
+            if let app = targetApp {
+                app.activate()
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+
+            // Move to end of document
+            simulateEndOfDocument()
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+            // Put summary on clipboard and paste
+            let summaryText = "\n\n---\nSummary:\n" + summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(summaryText, forType: .string)
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+            simulatePaste()
+            hideOverlay()
+
+            // Restore original clipboard after paste settles
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+            let restorePb = NSPasteboard.general
+            restorePb.clearContents()
+            if let saved = savedClipboard {
+                restorePb.setString(saved, forType: .string)
+            }
+
+            showNotification(title: "Summary Added", body: String(summary.prefix(100)))
+        }
+    }
+
     /// Simulate Cmd+V paste keystroke using AppleScript (more reliable)
     private func simulatePaste() {
         // Check accessibility first
@@ -1902,6 +2073,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Post the events with small delay between
         keyDown.post(tap: .cgSessionEventTap)
         usleep(10000)  // 10ms delay
+        keyUp.post(tap: .cgSessionEventTap)
+    }
+
+    /// Simulate Cmd+A (Select All) via CGEvent (works from background apps)
+    private func simulateSelectAll() {
+        simulateKeystroke(keyCode: 0, flags: .maskCommand) // 0 = 'a'
+    }
+
+    /// Simulate Cmd+C (Copy) via CGEvent (works from background apps)
+    private func simulateCopy() {
+        simulateKeystroke(keyCode: 8, flags: .maskCommand) // 8 = 'c'
+    }
+
+    /// Simulate Cmd+Down (End of Document) via CGEvent (works from background apps)
+    private func simulateEndOfDocument() {
+        simulateKeystroke(keyCode: 125, flags: .maskCommand) // 125 = down arrow
+    }
+
+    /// Post a single keystroke via CGEvent at the session level
+    private func simulateKeystroke(keyCode: CGKeyCode, flags: CGEventFlags) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            NSLog("[VoiceFlow] CGEventSource creation failed")
+            return
+        }
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
+            NSLog("[VoiceFlow] CGEvent creation failed for keyCode %d", keyCode)
+            return
+        }
+        keyDown.flags = flags
+        keyUp.flags = flags
+        keyDown.post(tap: .cgSessionEventTap)
+        usleep(10000) // 10ms between down/up
         keyUp.post(tap: .cgSessionEventTap)
     }
 
@@ -2126,6 +2330,7 @@ enum SidebarPage: String, CaseIterable, Identifiable {
     case models = "Models"
     case snippets = "Snippets"
     case style = "Style"
+    case aiFeatures = "AI Features"
     case settings = "Settings"
 
     var id: String { rawValue }
@@ -2136,6 +2341,7 @@ enum SidebarPage: String, CaseIterable, Identifiable {
         case .models: return "cpu"
         case .snippets: return "scissors"
         case .style: return "textformat"
+        case .aiFeatures: return "sparkles"
         case .settings: return "gearshape"
         }
     }
@@ -2210,6 +2416,8 @@ struct MainAppView: View {
                         .environmentObject(snippetManager)
                 case .style:
                     StyleSettingsView()
+                case .aiFeatures:
+                    AIFeaturesSettingsView()
                 case .settings:
                     GeneralSettingsView()
                         .environmentObject(voiceFlow)
@@ -2855,6 +3063,60 @@ struct StyleSettingsView: View {
             if downloaded { return true }
         }
         return false
+    }
+}
+
+// MARK: - AI Features Settings View
+
+struct AIFeaturesSettingsView: View {
+    @AppStorage("aiFeatureSummarizeEnabled") private var summarizeEnabled = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("AI Features")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                Text("Voice-activated AI commands that go beyond dictation.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: $summarizeEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Summarize This")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text("Say \"summarize this\" while in a text field to append a bullet-point summary of the field's content.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+
+                        Divider()
+
+                        HStack(spacing: 6) {
+                            Image(systemName: "info.circle")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("When enabled, saying \"summarize this\" triggers summarization instead of being typed as dictation.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } label: {
+                    Label("Summarize This", systemImage: "text.badge.star")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                }
+
+                Spacer()
+            }
+            .padding(20)
+        }
     }
 }
 
@@ -4904,6 +5166,17 @@ class OverlayState: ObservableObject {
         case idle
         case recording
         case processing
+        case aiProcessing(String)   // label text like "Summarizing..."
+
+        var isRecording: Bool {
+            if case .recording = self { return true }
+            return false
+        }
+
+        var isProcessing: Bool {
+            if case .processing = self { return true }
+            return false
+        }
     }
 
     @Published var state: RecordingState = .idle
@@ -4925,21 +5198,40 @@ struct RecordingOverlayView: View {
         Color(red: 0.0, green: 0.85, blue: 0.85),   // Cyan (loop)
     ]
 
-    var body: some View {
-        HStack(spacing: 12) {
-            // Logo
-            logoView
+    private var pillWidth: CGFloat {
+        if case .aiProcessing = state.state { return 260 }
+        return 180
+    }
 
-            // Waveform bars or processing indicator
-            if state.state == .recording {
-                WaveformView(audioLevel: state.audioLevel)
-                    .frame(width: 100, height: 45)
-            } else if state.state == .processing {
-                processingView
+    var body: some View {
+        HStack(spacing: 10) {
+            if case .aiProcessing(let label) = state.state {
+                // AI processing: sparkle icon + label + pulsing dots
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18))
+                    .foregroundColor(.white)
+                Text(label)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.white)
+                PulsingDotsView()
+                    .frame(width: 50, height: 20)
+                    .scaleEffect(0.7)
+            } else {
+                // Logo
+                logoView
+
+                // Waveform bars or processing indicator
+                if state.state.isRecording {
+                    WaveformView(audioLevel: state.audioLevel)
+                        .frame(width: 80, height: 45)
+                } else if state.state.isProcessing {
+                    processingView
+                }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(width: pillWidth, height: 66)
         .background(backgroundView)
         .onAppear {
             withAnimation(.linear(duration: 3.0).repeatForever(autoreverses: false)) {
@@ -4956,7 +5248,7 @@ struct RecordingOverlayView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 28, height: 28)
-                .opacity(state.state == .recording ? 1.0 : 0.7)
+                .opacity(state.state.isRecording ? 1.0 : 0.7)
         } else {
             Image(systemName: "mic.fill")
                 .font(.system(size: 24))
@@ -4965,19 +5257,13 @@ struct RecordingOverlayView: View {
     }
 
     private var processingView: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                .scaleEffect(0.8)
-            Text("Processing...")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
-        }
+        PulsingDotsView()
+            .frame(width: 80, height: 30)
     }
 
     private var backgroundView: some View {
         ZStack {
-            if state.state == .recording {
+            if state.state.isRecording {
                 // Animated gradient for recording
                 AnimatedGradientBackground(animate: animateGradient, colors: gradientColors)
             } else {
@@ -4986,7 +5272,31 @@ struct RecordingOverlayView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 30))
-        .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
+    }
+}
+
+// MARK: - Pulsing Dots View
+
+struct PulsingDotsView: View {
+    @State private var activeIndex = 0
+    private let dotCount = 3
+    private let dotSize: CGFloat = 8
+    private let timer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<dotCount, id: \.self) { index in
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: dotSize, height: dotSize)
+                    .opacity(activeIndex == index ? 1.0 : 0.3)
+                    .scaleEffect(activeIndex == index ? 1.2 : 0.8)
+                    .animation(.easeInOut(duration: 0.3), value: activeIndex)
+            }
+        }
+        .onReceive(timer) { _ in
+            activeIndex = (activeIndex + 1) % dotCount
+        }
     }
 }
 
