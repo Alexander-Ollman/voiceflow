@@ -184,26 +184,12 @@ struct PermissionsStepView: View {
                     isGranted: micGranted,
                     action: {
                         NSApp.activate(ignoringOtherApps: true)
-                        // Try to start an audio session — this is what actually forces
-                        // macOS to show the microphone permission dialog. The API-only
-                        // requestAccess call can silently do nothing on some setups.
-                        let engine = AVAudioEngine()
-                        do {
-                            let inputNode = engine.inputNode // triggers permission prompt
-                            let format = inputNode.outputFormat(forBus: 0)
-                            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { _, _ in }
-                            try engine.start()
-                            // Brief capture then stop — just need to trigger the dialog
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                engine.stop()
-                                engine.inputNode.removeTap(onBus: 0)
-                                micGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-                            }
-                        } catch {
-                            NSLog("[VoiceFlow] Audio engine start failed: %@", error.localizedDescription)
-                            // Fall back to opening System Settings
-                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                                NSWorkspace.shared.open(url)
+                        // Request via AVCaptureDevice first — with entitlements this
+                        // triggers the native Allow/Cancel dialog and waits for the
+                        // user's response before calling the completion handler.
+                        AVCaptureDevice.requestAccess(for: .audio) { granted in
+                            DispatchQueue.main.async {
+                                micGranted = granted
                             }
                         }
                     }

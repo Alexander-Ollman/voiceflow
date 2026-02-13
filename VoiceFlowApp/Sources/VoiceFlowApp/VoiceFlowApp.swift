@@ -1301,26 +1301,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check accessibility permission (required for auto-paste)
         checkAccessibilityPermission()
 
-        // Request microphone permission by briefly starting an audio session.
-        // AVCaptureDevice.requestAccess alone can silently do nothing on some setups.
+        // Request microphone permission (entitlements ensure the system dialog appears)
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-            NSApp.activate(ignoringOtherApps: true)
-            let engine = AVAudioEngine()
-            do {
-                let inputNode = engine.inputNode
-                let format = inputNode.outputFormat(forBus: 0)
-                inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { _, _ in }
-                try engine.start()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    engine.stop()
-                    engine.inputNode.removeTap(onBus: 0)
-                    if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-                        self?.showAlert(title: "Microphone Access Required",
-                                        message: "VoiceFlow needs microphone access to transcribe your speech. Please go to System Settings > Privacy & Security > Microphone and enable VoiceFlow.")
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                if !granted {
+                    DispatchQueue.main.async {
+                        self.showAlert(title: "Microphone Access Required",
+                                       message: "VoiceFlow needs microphone access to transcribe your speech. Please go to System Settings > Privacy & Security > Microphone and enable VoiceFlow.")
                     }
                 }
-            } catch {
-                NSLog("[VoiceFlow] Audio engine mic request failed: %@", error.localizedDescription)
             }
         }
     }
@@ -2802,28 +2791,14 @@ struct MicrophonePermissionButton: View {
     }
 
     private func requestMicAccess() {
-        // Activate the app so the system permission dialog appears on top.
         NSApp.activate(ignoringOtherApps: true)
-
-        // Actually start an audio session to force macOS to show the mic dialog.
-        // AVCaptureDevice.requestAccess alone can silently do nothing.
-        let engine = AVAudioEngine()
-        do {
-            let inputNode = engine.inputNode
-            let format = inputNode.outputFormat(forBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { _, _ in }
-            try engine.start()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                engine.stop()
-                engine.inputNode.removeTap(onBus: 0)
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            DispatchQueue.main.async {
                 authStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-                if authStatus != .authorized {
+                if !granted && authStatus != .notDetermined {
                     openMicrophonePrivacySettings()
                 }
             }
-        } catch {
-            NSLog("[VoiceFlow] Audio engine failed: %@", error.localizedDescription)
-            openMicrophonePrivacySettings()
         }
     }
 
