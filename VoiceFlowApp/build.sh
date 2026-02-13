@@ -173,7 +173,7 @@ SIGNED=false
 if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
     echo "Step 6: Signing app bundle..."
     xattr -cr "$APP_BUNDLE"
-    codesign --deep --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+    codesign --deep --force --options runtime --entitlements "$SCRIPT_DIR/VoiceFlow.entitlements" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "  Signed and verified."
     SIGNED=true
