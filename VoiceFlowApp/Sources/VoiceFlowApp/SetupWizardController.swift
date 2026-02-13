@@ -42,6 +42,11 @@ final class SetupWizardController {
         window.standardWindowButton(.zoomButton)?.isHidden = true
 
         self.window = window
+
+        // Switch to regular activation policy so the wizard window and any
+        // system permission dialogs (microphone, etc.) can appear properly.
+        // LSUIElement / .accessory apps can't present system dialogs.
+        NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -50,6 +55,10 @@ final class SetupWizardController {
         UserDefaults.standard.set(true, forKey: Self.setupCompleteKey)
         window?.close()
         window = nil
+
+        // Restore menu-bar-only mode after wizard closes
+        NSApp.setActivationPolicy(.accessory)
+
         onComplete?()
         onComplete = nil
     }

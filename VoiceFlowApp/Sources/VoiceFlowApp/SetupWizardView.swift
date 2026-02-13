@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import AVFAudio
 import ApplicationServices
 import ServiceManagement
 
@@ -182,12 +183,27 @@ struct PermissionsStepView: View {
                     description: "Required for recording your voice",
                     isGranted: micGranted,
                     action: {
-                        // Activate so the system dialog appears on top (LSUIElement apps
-                        // aren't frontmost, so the permission dialog gets lost otherwise)
                         NSApp.activate(ignoringOtherApps: true)
-                        AVCaptureDevice.requestAccess(for: .audio) { granted in
-                            DispatchQueue.main.async {
-                                micGranted = granted
+                        // Try to start an audio session — this is what actually forces
+                        // macOS to show the microphone permission dialog. The API-only
+                        // requestAccess call can silently do nothing on some setups.
+                        let engine = AVAudioEngine()
+                        do {
+                            let inputNode = engine.inputNode // triggers permission prompt
+                            let format = inputNode.outputFormat(forBus: 0)
+                            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { _, _ in }
+                            try engine.start()
+                            // Brief capture then stop — just need to trigger the dialog
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                engine.stop()
+                                engine.inputNode.removeTap(onBus: 0)
+                                micGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+                            }
+                        } catch {
+                            NSLog("[VoiceFlow] Audio engine start failed: %@", error.localizedDescription)
+                            // Fall back to opening System Settings
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                                NSWorkspace.shared.open(url)
                             }
                         }
                     }
