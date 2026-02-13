@@ -1,0 +1,54 @@
+{
+  "": {
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/master.swiftdeps"
+  },
+  "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/AudioRecorder.swift": {
+    "dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/AudioRecorder.d",
+    "object": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/AudioRecorder.swift.o",
+    "swiftmodule": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/AudioRecorder~partial.swiftmodule",
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/AudioRecorder.swiftdeps",
+    "diagnostics": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/AudioRecorder.dia"
+  },
+  "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/Qwen3ASREngine.swift": {
+    "dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/Qwen3ASREngine.d",
+    "object": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/Qwen3ASREngine.swift.o",
+    "swiftmodule": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/Qwen3ASREngine~partial.swiftmodule",
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/Qwen3ASREngine.swiftdeps",
+    "diagnostics": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/Qwen3ASREngine.dia"
+  },
+  "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/ScreenshotCapture.swift": {
+    "dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/ScreenshotCapture.d",
+    "object": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/ScreenshotCapture.swift.o",
+    "swiftmodule": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/ScreenshotCapture~partial.swiftmodule",
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/ScreenshotCapture.swiftdeps",
+    "diagnostics": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/ScreenshotCapture.dia"
+  },
+  "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/SetupWizardController.swift": {
+    "dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardController.d",
+    "object": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardController.swift.o",
+    "swiftmodule": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardController~partial.swiftmodule",
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardController.swiftdeps",
+    "diagnostics": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardController.dia"
+  },
+  "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/SetupWizardView.swift": {
+    "dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardView.d",
+    "object": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardView.swift.o",
+    "swiftmodule": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardView~partial.swiftmodule",
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardView.swiftdeps",
+    "diagnostics": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/SetupWizardView.dia"
+  },
+  "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowApp.swift": {
+    "dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowApp.d",
+    "object": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowApp.swift.o",
+    "swiftmodule": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowApp~partial.swiftmodule",
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowApp.swiftdeps",
+    "diagnostics": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowApp.dia"
+  },
+  "/Users/alexanderollman/voiceflow/VoiceFlowApp/Sources/VoiceFlowApp/VoiceFlowBridge.swift": {
+    "dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowBridge.d",
+    "object": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowBridge.swift.o",
+    "swiftmodule": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowBridge~partial.swiftmodule",
+    "swift-dependencies": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowBridge.swiftdeps",
+    "diagnostics": "/Users/alexanderollman/voiceflow/VoiceFlowApp/.build/index-build/arm64-apple-macosx/debug/VoiceFlowApp.build/VoiceFlowBridge.dia"
+  }
+}

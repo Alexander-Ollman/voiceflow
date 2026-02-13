@@ -36,7 +36,7 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			hmqyMAYC78bqLhhRV6n0tm6CLi0=
+			lO6lJ866L8lbarl4IunnyQV/0aQ=
 			</data>
 			<key>requirement</key>
 			<string>identifier "libvoiceflow_ffi" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = JVSQ3LCY64</string>

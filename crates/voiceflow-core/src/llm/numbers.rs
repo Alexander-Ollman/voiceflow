@@ -549,6 +549,64 @@ fn replace_phone_numbers(words: &[Word]) -> Vec<Replacement> {
     replacements
 }
 
+/// Detects 3-6 consecutive single-digit number words → concatenated digits.
+/// Catches zip codes (5 digits: "nine four one one seven" → "94117"),
+/// PINs (4 digits), verification codes (6 digits), area codes (3 digits).
+/// Skips sequences already handled by phone numbers (7 or 10 digits).
+fn replace_digit_sequences(words: &[Word], covered: &[(usize, usize)]) -> Vec<Replacement> {
+    let mut replacements = Vec::new();
+    let mut i = 0;
+
+    while i < words.len() {
+        // Skip if already covered by phone numbers or other patterns
+        let byte_start = words[i].start;
+        if covered
+            .iter()
+            .any(|&(cs, ce)| byte_start >= cs && byte_start < ce)
+        {
+            i += 1;
+            continue;
+        }
+
+        // Collect consecutive single digits (0-9)
+        let mut digits = Vec::new();
+        let mut j = i;
+
+        while j < words.len() {
+            let (clean, _) = strip_trailing_punct(&words[j].lower);
+            if let Some(d) = parse_ones(clean) {
+                if d <= 9 {
+                    digits.push(d);
+                    j += 1;
+                } else {
+                    break;
+                }
+            } else if clean == "oh" || clean == "o" {
+                // "oh" / "o" as zero (common in codes)
+                digits.push(0);
+                j += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Only match 3-6 consecutive digits (not 7 or 10, which are phone numbers)
+        if digits.len() >= 3 && digits.len() <= 6 {
+            let code: String = digits.iter().map(|d| d.to_string()).collect();
+            let (_, punct) = strip_trailing_punct(&words[j - 1].text);
+            replacements.push(Replacement {
+                start: words[i].start,
+                end: words[j - 1].end,
+                text: format!("{}{}", code, punct),
+            });
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    replacements
+}
+
 const MONTHS: &[&str] = &[
     "january",
     "february",
@@ -781,7 +839,16 @@ pub fn normalize_numbers(text: &str) -> String {
     all_replacements.extend(replace_ordinal_dates(&words));
     all_replacements.extend(replace_keyword_numbers(&words));
 
-    // Build covered ranges from specific patterns
+    // Build covered ranges from specific patterns (phone, currency, times, dates, keywords)
+    let covered_before_digits: Vec<(usize, usize)> = all_replacements
+        .iter()
+        .map(|r| (r.start, r.end))
+        .collect();
+
+    // Digit sequences (3-6 consecutive single digits) for zip codes, PINs, etc.
+    all_replacements.extend(replace_digit_sequences(&words, &covered_before_digits));
+
+    // Build full covered ranges including digit sequences
     let covered: Vec<(usize, usize)> = all_replacements
         .iter()
         .map(|r| (r.start, r.end))
@@ -999,6 +1066,65 @@ mod tests {
         assert_eq!(
             normalize_numbers("five five five one two three four"),
             "555-1234"
+        );
+    }
+
+    // --- Digit sequences (zip codes, PINs, etc.) ---
+
+    #[test]
+    fn test_zip_code_5_digits() {
+        assert_eq!(
+            normalize_numbers("nine four one one seven"),
+            "94117"
+        );
+    }
+
+    #[test]
+    fn test_zip_code_with_context() {
+        assert_eq!(
+            normalize_numbers("my zip code is nine four one one seven"),
+            "my zip code is 94117"
+        );
+    }
+
+    #[test]
+    fn test_pin_4_digits() {
+        assert_eq!(
+            normalize_numbers("one two three four"),
+            "1234"
+        );
+    }
+
+    #[test]
+    fn test_verification_code_6_digits() {
+        assert_eq!(
+            normalize_numbers("the code is five oh three nine two one"),
+            "the code is 503921"
+        );
+    }
+
+    #[test]
+    fn test_area_code_3_digits() {
+        assert_eq!(
+            normalize_numbers("four one five"),
+            "415"
+        );
+    }
+
+    #[test]
+    fn test_digit_sequence_with_oh() {
+        assert_eq!(
+            normalize_numbers("nine oh two one oh"),
+            "90210"
+        );
+    }
+
+    #[test]
+    fn test_two_digits_not_converted() {
+        // Only 2 consecutive digits — should NOT be converted
+        assert_eq!(
+            normalize_numbers("I have two three options"),
+            "I have two three options"
         );
     }
 

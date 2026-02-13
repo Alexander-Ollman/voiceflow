@@ -557,6 +557,110 @@ class CorrectionManager: ObservableObject {
     }
 }
 
+// MARK: - AI Commands
+
+enum AIPasteMode {
+    case atCursor
+    case replaceAll
+    case appendToEnd
+}
+
+enum AICommand {
+    case reply(intent: String)
+    case rewrite(style: String)
+    case proofread
+    case continueWriting
+
+    var pasteMode: AIPasteMode {
+        switch self {
+        case .reply: return .atCursor
+        case .rewrite, .proofread: return .replaceAll
+        case .continueWriting: return .appendToEnd
+        }
+    }
+
+    var processingLabel: String {
+        switch self {
+        case .reply: return "Composing reply..."
+        case .rewrite(let style): return "Rewriting (\(style))..."
+        case .proofread: return "Proofreading..."
+        case .continueWriting: return "Continuing..."
+        }
+    }
+
+    var resultTitle: String {
+        switch self {
+        case .reply: return "Reply"
+        case .rewrite(let style): return "Rewrite (\(style))"
+        case .proofread: return "Proofread"
+        case .continueWriting: return "Continue"
+        }
+    }
+
+    var pasteHint: String {
+        switch self {
+        case .reply: return "Enter to paste at cursor"
+        case .rewrite, .proofread: return "Enter to replace all"
+        case .continueWriting: return "Enter to append to end"
+        }
+    }
+
+    static func parse(_ transcript: String) -> AICommand? {
+        let text = transcript
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+
+        // Reply commands
+        for prefix in ["reply to this saying ", "reply to this with ", "reply saying ", "reply with "] {
+            if text.hasPrefix(prefix) {
+                let intent = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                if !intent.isEmpty {
+                    return .reply(intent: intent)
+                }
+            }
+        }
+
+        // Rewrite commands — "make this [more] <style>"
+        if text.hasPrefix("make this ") {
+            var rawStyle = String(text.dropFirst("make this ".count))
+            if rawStyle.hasPrefix("more ") {
+                rawStyle = String(rawStyle.dropFirst("more ".count))
+            }
+            let trimmedStyle = rawStyle.trimmingCharacters(in: .whitespaces)
+            if !trimmedStyle.isEmpty {
+                return .rewrite(style: trimmedStyle)
+            }
+        }
+
+        // Rewrite commands — "rewrite [this] as <style>"
+        if text.hasPrefix("rewrite ") {
+            var rest = String(text.dropFirst("rewrite ".count))
+            if rest.hasPrefix("this ") {
+                rest = String(rest.dropFirst("this ".count))
+            }
+            if rest.hasPrefix("as ") {
+                let style = String(rest.dropFirst("as ".count)).trimmingCharacters(in: .whitespaces)
+                if !style.isEmpty {
+                    return .rewrite(style: style)
+                }
+            }
+        }
+
+        // Proofread commands
+        if text == "proofread this" || text == "proofread" {
+            return .proofread
+        }
+
+        // Continue commands
+        if text == "continue this" || text == "continue writing" || text == "keep going" || text == "keep writing" {
+            return .continueWriting
+        }
+
+        return nil
+    }
+}
+
 // MARK: - Formatting Level
 
 enum FormattingLevel: String, CaseIterable {
@@ -646,7 +750,9 @@ enum SpacingMode: String, CaseIterable {
             switch result {
             case .character(let charBefore):
                 // Successfully read character - add space if previous char is not whitespace
-                if !charBefore.isWhitespace && !charBefore.isNewline {
+                // Skip space after dashes — em dash, en dash, hyphen concatenate with next word
+                let isDash = charBefore == "\u{2014}" || charBefore == "\u{2013}" || charBefore == "-"
+                if !charBefore.isWhitespace && !charBefore.isNewline && !isDash {
                     if let first = text.first, first.isLetter || first.isNumber {
                         return " " + text
                     }
@@ -656,10 +762,11 @@ enum SpacingMode: String, CaseIterable {
                 // Cursor is at start of field - no space needed
                 return text
             case .unavailable:
-                // Can't determine context - fall back to smart spacing
-                if let first = text.first, first.isLetter || first.isNumber {
-                    return " " + text
-                }
+                // Can't determine context (common in browsers, web apps).
+                // Don't add a leading space — the trailing space from the previous
+                // dictation already ensures word separation. Adding one here would
+                // cause a leading space in empty fields or double spaces after
+                // consecutive dictations.
                 return text
             }
         case .smart:
@@ -1022,6 +1129,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenshotCapture = ScreenshotCapture()
     private var pendingVisualContext: Task<String?, Never>?
 
+    // AI Result panel
+    var aiResultPanel: NSPanel?
+    var aiResultHostingView: NSHostingView<AIResultView>?
+    var aiResultState = AIResultState()
+    private var aiResultLocalMonitor: Any?
+    private var aiResultGlobalMonitor: Any?
+    private var pendingAICommand: AICommand?
+    private var pendingAITargetApp: NSRunningApplication?
+
     private var lastPastedText: String?
     private var isRecording = false
     private var recordingMenuItem: NSMenuItem?
@@ -1161,6 +1277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupHotkey()
         setupOverlay()
+        setupAIResultPanel()
 
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -1180,6 +1297,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Clean up AI result key monitors
+        removeAIResultKeyMonitors()
+
         // Clean up resources before termination to prevent memory leaks
         // This ensures the Rust side properly releases all model memory
         voiceFlow.cleanup()
@@ -1510,6 +1630,161 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
+    // MARK: - AI Result Panel
+
+    private func setupAIResultPanel() {
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 300),
+            styleMask: [.nonactivatingPanel, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .floating
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.isMovableByWindowBackground = true
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+
+        let resultView = AIResultView(state: aiResultState)
+        let hostingView = NSHostingView(rootView: resultView)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 480, height: 300)
+        panel.contentView = hostingView
+
+        self.aiResultPanel = panel
+        self.aiResultHostingView = hostingView
+    }
+
+    private func showAIResult(command: AICommand, text: String, targetApp: NSRunningApplication?) {
+        pendingAICommand = command
+        pendingAITargetApp = targetApp
+        aiResultState.show(title: command.resultTitle, text: text, hint: command.pasteHint)
+
+        // Center on active screen
+        if let screen = activeScreen() {
+            let screenFrame = screen.visibleFrame
+            let panelW: CGFloat = 480
+            let panelH: CGFloat = 300
+            let x = screenFrame.midX - panelW / 2
+            let y = screenFrame.midY - panelH / 2
+            aiResultPanel?.setFrame(NSRect(x: x, y: y, width: panelW, height: panelH), display: true)
+        }
+
+        aiResultPanel?.orderFront(nil)
+        installAIResultKeyMonitors()
+    }
+
+    private func hideAIResult() {
+        aiResultPanel?.orderOut(nil)
+        aiResultState.hide()
+        removeAIResultKeyMonitors()
+        pendingAICommand = nil
+        pendingAITargetApp = nil
+    }
+
+    private func acceptAIResult() {
+        guard let command = pendingAICommand else { return }
+        let resultText = aiResultState.resultText
+        let targetApp = pendingAITargetApp
+
+        hideAIResult()
+
+        Task { @MainActor in
+            // Save clipboard
+            let savedClipboard = NSPasteboard.general.string(forType: .string)
+
+            // Activate target app
+            if let app = targetApp {
+                app.activate()
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+
+            // Put result on clipboard
+            let pasteText: String
+            if case .appendToEnd = command.pasteMode {
+                pasteText = "\n\n" + resultText
+            } else {
+                pasteText = resultText
+            }
+
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(pasteText, forType: .string)
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+            // Paste based on mode
+            switch command.pasteMode {
+            case .atCursor:
+                simulatePaste()
+            case .replaceAll:
+                simulateSelectAll()
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                simulatePaste()
+            case .appendToEnd:
+                simulateEndOfDocument()
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                simulatePaste()
+            }
+
+            // Restore clipboard after paste settles
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms
+            let restorePb = NSPasteboard.general
+            restorePb.clearContents()
+            if let saved = savedClipboard {
+                restorePb.setString(saved, forType: .string)
+            }
+        }
+    }
+
+    private func copyAIResult() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(aiResultState.resultText, forType: .string)
+        showNotification(title: "Copied", body: "AI result copied to clipboard")
+    }
+
+    private func installAIResultKeyMonitors() {
+        removeAIResultKeyMonitors()
+
+        aiResultGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                self?.handleAIResultKeyEvent(event)
+            }
+        }
+
+        aiResultLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                self?.handleAIResultKeyEvent(event)
+            }
+            return event
+        }
+    }
+
+    private func removeAIResultKeyMonitors() {
+        if let monitor = aiResultGlobalMonitor {
+            NSEvent.removeMonitor(monitor)
+            aiResultGlobalMonitor = nil
+        }
+        if let monitor = aiResultLocalMonitor {
+            NSEvent.removeMonitor(monitor)
+            aiResultLocalMonitor = nil
+        }
+    }
+
+    private func handleAIResultKeyEvent(_ event: NSEvent) {
+        guard aiResultState.isVisible else { return }
+
+        if event.keyCode == 36 { // Return
+            acceptAIResult()
+        } else if event.keyCode == 53 { // Escape
+            hideAIResult()
+        } else if event.keyCode == 8 && event.modifierFlags.contains(.command) { // Cmd+C
+            copyAIResult()
+        }
+    }
+
     private func showOverlay(state: OverlayState.RecordingState) {
         overlayState.state = state
         // Resize panel for AI processing (wider to fit text)
@@ -1786,6 +2061,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 context += "\n[MID_SENTENCE_CONTINUATION]"
             }
 
+            // Detect likely form field entry: empty field + short dictation
+            let isEmptyField = inputFieldText == nil || (inputFieldText?.isEmpty ?? true)
+            if isEmptyField {
+                context += """
+
+                [EMPTY_FIELD]
+                The input field is empty. This may be a form field (name, email, address, zip code, etc.).
+                Do NOT add a trailing period unless the user's speech clearly forms a complete sentence.
+                For short entries (names, single words, codes, numbers), output them WITHOUT trailing punctuation.
+                """
+            }
+
             // Inject correction history from previous user edits
             let correctionHint = CorrectionManager.shared.correctionContext(for: "")
             if !correctionHint.isEmpty {
@@ -1815,15 +2102,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
 
+                // AI voice commands: reply, rewrite, proofread, continue
+                if summarizeEnabled, let aiCommand = AICommand.parse(normalizedTranscript) {
+                    await MainActor.run {
+                        handleAICommand(aiCommand, targetApp: frontmostApp, visualDescription: visualDescription)
+                    }
+                    return
+                }
+
                 // Apply snippet expansion (e.g., "my signature" → "Best regards,\nJohn")
-                let expandedText = SnippetManager.shared.expandSnippets(in: result.formattedText)
+                var expandedText = SnippetManager.shared.expandSnippets(in: result.formattedText)
+
+                // Strip trailing period from short outputs in empty fields (form field safety net).
+                // A short phrase like "John Smith." or "94117." shouldn't end with a period.
+                if isEmptyField {
+                    let trimmed = expandedText.trimmingCharacters(in: .whitespaces)
+                    let wordCount = trimmed.split(separator: " ").count
+                    let hasInternalPeriod = trimmed.dropLast().contains(".")
+                    if wordCount <= 8 && !hasInternalPeriod && trimmed.hasSuffix(".") {
+                        expandedText = String(trimmed.dropLast())
+                        NSLog("[VoiceFlow] Stripped trailing period from short empty-field entry: \"%@\"", expandedText)
+                    }
+                }
+
+                // Enforce mid-sentence continuation casing — safety net for LLM
+                if isMidSentence && !expandedText.isEmpty {
+                    let first = expandedText.first!
+                    if first.isUppercase {
+                        // Preserve standalone "I" (I, I'm, I'll, I'd, I've)
+                        let isStandaloneI = first == "I"
+                            && (expandedText.count == 1 || !expandedText.dropFirst().first!.isLetter)
+                        // Preserve acronyms (NASA, API, etc.) — 2+ leading uppercase chars
+                        let isAcronym = expandedText.count >= 2
+                            && expandedText.dropFirst().first!.isUppercase
+                        if !isStandaloneI && !isAcronym {
+                            expandedText = expandedText.prefix(1).lowercased() + expandedText.dropFirst()
+                            NSLog("[VoiceFlow] Mid-sentence: lowercased first char → \"%@\"",
+                                  String(expandedText.prefix(30)))
+                        }
+                    }
+                }
 
                 // Apply spacing mode to the expanded text
                 var spacedText = currentSpacingMode.apply(to: expandedText)
 
-                // Always ensure a trailing space so consecutive dictations are separated
+                // Add trailing space only when the next dictation can't determine its own leading space.
+                // In contextAware mode with working AX, the next dictation reads the cursor and adds
+                // a leading space itself — no trailing space needed. Without AX, add trailing as safety net.
                 if !spacedText.isEmpty && !spacedText.hasSuffix(" ") && !spacedText.hasSuffix("\n") {
-                    spacedText += " "
+                    switch currentSpacingMode {
+                    case .contextAware:
+                        if case .unavailable = CursorContext.getCharacterBeforeCursor() {
+                            spacedText += " "
+                        }
+                    case .smart, .always, .trailing:
+                        spacedText += " "
+                    }
                 }
 
                 // Log the transcription
@@ -2028,6 +2362,196 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             showNotification(title: "Summary Added", body: String(summary.prefix(100)))
+        }
+    }
+
+    // MARK: - AI Command Helpers
+
+    /// Capture text from the current field by selecting all and copying.
+    /// Returns the captured text and the saved clipboard contents, or nil on failure.
+    private func captureFieldText(targetApp: NSRunningApplication?, minLength: Int = 0) async -> (text: String, savedClipboard: String?)? {
+        let savedClipboard = NSPasteboard.general.string(forType: .string)
+        let appName = targetApp?.localizedName ?? "unknown"
+
+        // Activate target app
+        if let app = targetApp {
+            app.activate()
+        }
+        try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+
+        // Clear clipboard
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("", forType: .string)
+        let emptyChangeCount = pasteboard.changeCount
+
+        // Select All + Copy
+        simulateSelectAll()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        simulateCopy()
+
+        // Poll for clipboard change (up to 2s)
+        var fieldText = ""
+        var copySucceeded = false
+        for i in 0..<40 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            if pasteboard.changeCount != emptyChangeCount {
+                fieldText = pasteboard.string(forType: .string) ?? ""
+                NSLog("[VoiceFlow AI] Copy landed after %dms, got %d chars", (i + 1) * 50, fieldText.count)
+                copySucceeded = true
+                break
+            }
+        }
+
+        // Restore clipboard
+        pasteboard.clearContents()
+        if let saved = savedClipboard {
+            pasteboard.setString(saved, forType: .string)
+        }
+
+        // Deselect: move to end of document
+        simulateEndOfDocument()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        if !copySucceeded {
+            NSLog("[VoiceFlow AI] FAILED: clipboard never changed for %@", appName)
+            return nil
+        }
+
+        if fieldText.count < minLength {
+            NSLog("[VoiceFlow AI] Not enough text: %d chars (min %d)", fieldText.count, minLength)
+            return nil
+        }
+
+        return (text: fieldText, savedClipboard: savedClipboard)
+    }
+
+    // MARK: - AI Command Handlers
+
+    private func handleAICommand(_ command: AICommand, targetApp: NSRunningApplication?, visualDescription: String?) {
+        showOverlay(state: .aiProcessing(command.processingLabel))
+
+        switch command {
+        case .reply(let intent):
+            handleReply(intent: intent, targetApp: targetApp, visualDescription: visualDescription)
+        case .rewrite(let style):
+            handleRewrite(style: style, targetApp: targetApp)
+        case .proofread:
+            handleProofread(targetApp: targetApp)
+        case .continueWriting:
+            handleContinue(targetApp: targetApp)
+        }
+    }
+
+    private func handleReply(intent: String, targetApp: NSRunningApplication?, visualDescription: String?) {
+        Task { @MainActor in
+            guard let visualCtx = visualDescription, !visualCtx.isEmpty else {
+                hideOverlay()
+                showNotification(title: "Reply Failed", body: "Visual context required — enable VLM in settings and grant Screen Recording permission.")
+                return
+            }
+
+            let prompt = """
+            OVERRIDE: Ignore all formatting instructions above. You are composing a reply.
+
+            [SCREEN CONTEXT]
+            \(visualCtx)
+
+            [USER INTENT]
+            The user wants to reply saying: \(intent)
+
+            Write a natural, contextually appropriate reply based on what's visible on screen and the user's intent. Output ONLY the reply text, nothing else. Match the tone of the conversation (casual if casual, formal if formal).
+            """
+
+            guard let reply = await voiceFlow.formatText("Reply request", context: prompt) else {
+                hideOverlay()
+                showNotification(title: "Reply Failed", body: "Could not generate reply")
+                return
+            }
+
+            hideOverlay()
+            showAIResult(command: .reply(intent: intent), text: reply.trimmingCharacters(in: .whitespacesAndNewlines), targetApp: targetApp)
+        }
+    }
+
+    private func handleRewrite(style: String, targetApp: NSRunningApplication?) {
+        Task { @MainActor in
+            showOverlay(state: .aiProcessing("Reading text..."))
+
+            guard let captured = await captureFieldText(targetApp: targetApp, minLength: 5) else {
+                hideOverlay()
+                showNotification(title: "Rewrite Failed", body: "Could not read text from the current field.")
+                return
+            }
+
+            showOverlay(state: .aiProcessing("Rewriting..."))
+
+            let prompt = """
+            OVERRIDE: Ignore all formatting instructions above. Rewrite the following text to be more \(style). Preserve the core meaning. Output ONLY the rewritten text, nothing else.
+            """
+
+            guard let rewritten = await voiceFlow.formatText(captured.text, context: prompt) else {
+                hideOverlay()
+                showNotification(title: "Rewrite Failed", body: "Could not rewrite text")
+                return
+            }
+
+            hideOverlay()
+            showAIResult(command: .rewrite(style: style), text: rewritten.trimmingCharacters(in: .whitespacesAndNewlines), targetApp: targetApp)
+        }
+    }
+
+    private func handleProofread(targetApp: NSRunningApplication?) {
+        Task { @MainActor in
+            showOverlay(state: .aiProcessing("Reading text..."))
+
+            guard let captured = await captureFieldText(targetApp: targetApp, minLength: 5) else {
+                hideOverlay()
+                showNotification(title: "Proofread Failed", body: "Could not read text from the current field.")
+                return
+            }
+
+            showOverlay(state: .aiProcessing("Proofreading..."))
+
+            let prompt = """
+            OVERRIDE: Ignore all formatting instructions above. Proofread the following text. Fix spelling, grammar, and punctuation errors. Make minimal changes — only correct mistakes, do not rephrase or restructure. Output ONLY the corrected text, nothing else.
+            """
+
+            guard let proofread = await voiceFlow.formatText(captured.text, context: prompt) else {
+                hideOverlay()
+                showNotification(title: "Proofread Failed", body: "Could not proofread text")
+                return
+            }
+
+            hideOverlay()
+            showAIResult(command: .proofread, text: proofread.trimmingCharacters(in: .whitespacesAndNewlines), targetApp: targetApp)
+        }
+    }
+
+    private func handleContinue(targetApp: NSRunningApplication?) {
+        Task { @MainActor in
+            showOverlay(state: .aiProcessing("Reading text..."))
+
+            guard let captured = await captureFieldText(targetApp: targetApp, minLength: 5) else {
+                hideOverlay()
+                showNotification(title: "Continue Failed", body: "Could not read text from the current field.")
+                return
+            }
+
+            showOverlay(state: .aiProcessing("Continuing..."))
+
+            let prompt = """
+            OVERRIDE: Ignore all formatting instructions above. Continue writing from where the text below leaves off. Match the existing style, tone, and voice. Do NOT repeat or rewrite the original text — only output the NEW continuation. Output ONLY the continuation text, nothing else.
+            """
+
+            guard let continuation = await voiceFlow.formatText(captured.text, context: prompt) else {
+                hideOverlay()
+                showNotification(title: "Continue Failed", body: "Could not generate continuation")
+                return
+            }
+
+            hideOverlay()
+            showAIResult(command: .continueWriting, text: continuation.trimmingCharacters(in: .whitespacesAndNewlines), targetApp: targetApp)
         }
     }
 
@@ -5156,6 +5680,110 @@ struct VlmModelRowView: View {
             }
         }
         .opacity(model.isDownloaded || isDownloading ? 1.0 : 0.7)
+    }
+}
+
+// MARK: - AI Result State
+
+class AIResultState: ObservableObject {
+    @Published var isVisible = false
+    @Published var title = ""
+    @Published var resultText = ""
+    @Published var pasteHint = ""
+
+    func show(title: String, text: String, hint: String) {
+        self.title = title
+        self.resultText = text
+        self.pasteHint = hint
+        self.isVisible = true
+    }
+
+    func hide() {
+        self.isVisible = false
+        self.title = ""
+        self.resultText = ""
+        self.pasteHint = ""
+    }
+}
+
+// MARK: - AI Result View
+
+struct AIResultView: View {
+    @ObservedObject var state: AIResultState
+
+    var body: some View {
+        if state.isVisible {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header
+                HStack {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 14))
+                        .foregroundColor(.purple)
+                    Text(state.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                    Spacer()
+                    Text("✕")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.gray)
+                        .padding(4)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+
+                Divider()
+                    .background(Color.white.opacity(0.15))
+
+                // Scrollable text content
+                ScrollView {
+                    Text(state.resultText)
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.9))
+                        .lineSpacing(4)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                }
+                .frame(maxHeight: 300)
+
+                Divider()
+                    .background(Color.white.opacity(0.15))
+
+                // Bottom bar with keyboard hints
+                HStack(spacing: 16) {
+                    keyHint("↩", "Paste")
+                    keyHint("⌘C", "Copy")
+                    keyHint("esc", "Dismiss")
+                    Spacer()
+                    Text(state.pasteHint)
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+            .frame(width: 480)
+            .frame(minHeight: 160, maxHeight: 400)
+            .background(Color.black.opacity(0.85))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
+    }
+
+    private func keyHint(_ key: String, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Text(key)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(Color.white.opacity(0.15))
+                .cornerRadius(4)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.gray)
+        }
     }
 }
 

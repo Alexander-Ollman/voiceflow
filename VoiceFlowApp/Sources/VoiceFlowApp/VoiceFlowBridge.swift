@@ -107,6 +107,33 @@ final class VoiceFlowBridge: ObservableObject {
         voiceflow_force_gc()
     }
 
+    /// Format text through the Rust LLM pipeline (for non-audio use cases like summarization)
+    func formatText(_ text: String, context: String?) async -> String? {
+        guard let handle = handle else { return nil }
+
+        let result: VoiceFlowResult = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ffiResult = text.withCString { textPtr in
+                    if let ctx = context {
+                        return ctx.withCString { ctxPtr in
+                            voiceflow_format_text(handle, textPtr, ctxPtr)
+                        }
+                    } else {
+                        return voiceflow_format_text(handle, textPtr, nil)
+                    }
+                }
+                continuation.resume(returning: ffiResult)
+            }
+        }
+
+        defer { voiceflow_free_result(result) }
+
+        if result.success, let ptr = result.formatted_text {
+            return String(cString: ptr)
+        }
+        return nil
+    }
+
     private func initialize() async {
         let consolidatedMode = voiceflow_is_consolidated_mode()
         let externalStt = voiceflow_is_external_stt()

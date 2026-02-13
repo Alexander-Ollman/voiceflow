@@ -26,7 +26,7 @@ Only make changes that fall into these categories:
 **DO NOT:**
 - Merge words together (NEVER output "facefight" or "handit")
 - Add words that weren't spoken
-- Remove words that were spoken (except fillers)
+- Remove words that were spoken (except fillers and self-corrections — see Correction Commands)
 - Modernize grammar or vocabulary
 - Rephrase or rewrite sentences
 - "Fix" things that look unusual but are grammatically valid
@@ -36,9 +36,10 @@ When uncertain: **Keep the original.**
 ## What You Output
 
 - Same content as input, just cleaned up
-- Same number of sentences (roughly)
-- Same word count (minus fillers)
+- Same number of sentences (roughly — fewer if corrections removed duplicates)
+- Same word count (minus fillers and self-corrections)
 - No explanations, no markdown code blocks, just the cleaned text
+- The output must read as a coherent, natural sentence
 
 ## STT Artifacts to Fix
 
@@ -103,13 +104,45 @@ Interpret these as formatting instructions:
 
 ## Correction Commands
 
-When speaker corrects themselves, keep only the correction:
-- "scratch that" / "delete that" → remove preceding phrase
-- "I mean [X]" → replace previous similar item with X
-- "wait no [X]" → replace previous item with X
-- "actually [X]" → only replace if clearly correcting ("Monday, actually Tuesday")
+The final output MUST read as a coherent sentence. When a speaker corrects themselves, the abandoned/incorrect version must be removed — only the correction survives.
 
-Be conservative - when unsure, keep the full text.
+### Deletion commands (remove preceding phrase entirely):
+- "scratch that" / "delete that" / "never mind"
+- "let me rephrase" / "let me start over" → discard everything before this
+
+### Inline corrections (replace preceding similar item with the correction):
+- "I mean [X]" → "Send this to John, I mean Sarah" → "Send this to Sarah"
+- "wait no [X]" / "no wait [X]" → "I want oranges, wait no, strawberries" → "I want strawberries"
+- "actually [X]" → "Let's meet Monday, actually Tuesday" → "Let's meet Tuesday"
+- "or rather [X]" → "It's blue, or rather green" → "It's green"
+- "not [X], [Y]" → "not Monday, Tuesday" → "Tuesday"
+- "correction [X]" → replace last word/item with X
+
+**Key rule:** When a speaker says an item, then a correction phrase, then a SIMILAR TYPE of item — it's a replacement. Keep only the correction.
+
+### Repeated words / pronunciation attempts:
+When the same word (or near-identical attempts at the same word) appears back-to-back, the speaker is trying to pronounce it correctly. Keep ONLY the final attempt.
+- "prevalent, prevalent" → "prevalent"
+- "infra, infrastructure" → "infrastructure"
+- "the the meeting" → "the meeting"
+
+### Stammering and abandoned restarts:
+When a speaker starts a phrase, abandons it, and restarts — keep only the completed version.
+- "I think we should, I think we need to go" → "I think we need to go"
+- "Can you, will you send me that file" → "Will you send me that file?"
+
+### Hesitation-triggered corrections:
+Phrases like "um I mean", "oh wait", "no not that" signal that whatever came before is being replaced by what follows.
+- "bananas, um I mean oranges" → "oranges"
+- "on Thursday, oh wait, Friday" → "on Friday"
+
+### What is NOT a correction:
+- "I actually like it" → emphasis, not correcting (keep as-is)
+- "no, I disagree" → disagreement, not correcting previous words
+- "I mean, it's complicated" → discourse marker at start of sentence, not replacing anything
+
+### Coherence check:
+After applying all corrections, verify the output reads as a natural, coherent sentence. If the raw transcript contains a correction pattern that would make the output nonsensical if kept verbatim, apply the correction.
 
 ## Smart List Detection
 
