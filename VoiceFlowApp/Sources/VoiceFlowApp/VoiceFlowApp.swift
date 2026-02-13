@@ -1244,8 +1244,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if fm.fileExists(atPath: destPath) {
                 try fm.removeItem(atPath: destPath)
             }
-            // Move (not copy) so the original is removed from Downloads
-            try fm.moveItem(atPath: appPath, toPath: destPath)
+            // Copy to /Applications (source may be on a read-only volume)
+            try fm.copyItem(atPath: appPath, toPath: destPath)
+
+            // Best-effort cleanup of the original (fails silently on read-only volumes)
+            try? fm.removeItem(atPath: appPath)
 
             // Strip quarantine xattr so macOS doesn't re-prompt
             let stripProcess = Process()
