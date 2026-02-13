@@ -18,6 +18,13 @@ Cargo.lock
 *.dylib
 *.so
 *.a
+VoiceFlowApp/.build/
+VoiceFlowApp/build/
+VoiceFlowApp/dist/
+VoiceFlow.dmg
+
+# Python virtual environment
+.venv/
 
 # Local config
 config/local.toml
