@@ -1285,12 +1285,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check accessibility permission (required for auto-paste)
         checkAccessibilityPermission()
 
-        // Request microphone permission
+        // Request microphone permission — activate first so the system dialog
+        // appears on top (LSUIElement apps aren't frontmost by default).
+        NSApp.activate(ignoringOtherApps: true)
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             if !granted {
                 DispatchQueue.main.async {
                     self.showAlert(title: "Microphone Access Required",
-                                   message: "VoiceFlow needs microphone access to transcribe your speech.")
+                                   message: "VoiceFlow needs microphone access to transcribe your speech. Please go to System Settings > Privacy & Security > Microphone and enable VoiceFlow.")
                 }
             }
         }
@@ -1521,8 +1523,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openMicrophoneSettings() {
-        // Show Apple's native microphone permission prompt
-        AVCaptureDevice.requestAccess(for: .audio) { _ in }
+        // Activate so the system dialog appears on top for LSUIElement apps
+        NSApp.activate(ignoringOtherApps: true)
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            if !granted {
+                // If denied or dialog didn't appear, open System Settings
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
     }
 
     @objc private func selectFormattingLevel(_ sender: NSMenuItem) {
@@ -2757,6 +2767,31 @@ struct AccessibilityPermissionButton: View {
 struct MicrophonePermissionButton: View {
     @State private var authStatus: AVAuthorizationStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
+    private func openMicrophonePrivacySettings() {
+        // macOS 13+ (Ventura): new System Settings URL
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func requestMicAccess() {
+        // Activate the app so the system permission dialog appears on top.
+        // LSUIElement apps (menu bar only) aren't the frontmost app, so the
+        // dialog can get lost or never show without this.
+        NSApp.activate(ignoringOtherApps: true)
+
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            DispatchQueue.main.async {
+                authStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+                // If still not determined after the request (dialog was dismissed
+                // or never appeared), fall back to opening System Settings.
+                if !granted && authStatus == .notDetermined {
+                    openMicrophonePrivacySettings()
+                }
+            }
+        }
+    }
+
     var body: some View {
         Group {
             switch authStatus {
@@ -2765,21 +2800,15 @@ struct MicrophonePermissionButton: View {
                     .foregroundColor(.green)
             case .notDetermined:
                 Button("Grant") {
-                    AVCaptureDevice.requestAccess(for: .audio) { granted in
-                        DispatchQueue.main.async {
-                            authStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-                        }
-                    }
+                    requestMicAccess()
                 }
             case .denied, .restricted:
                 Button("Open Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    openMicrophonePrivacySettings()
                 }
             @unknown default:
                 Button("Grant") {
-                    AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                    requestMicAccess()
                 }
             }
         }
