@@ -1235,9 +1235,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard response == .alertFirstButtonReturn else { return }
 
-        let destPath = (applicationsDir as NSString).appendingPathComponent(
-            (appPath as NSString).lastPathComponent
-        )
+        let appName = (appPath as NSString).lastPathComponent
+        let destPath = (applicationsDir as NSString).appendingPathComponent(appName)
 
         do {
             let fm = FileManager.default
@@ -1245,16 +1244,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if fm.fileExists(atPath: destPath) {
                 try fm.removeItem(atPath: destPath)
             }
-            try fm.copyItem(atPath: appPath, toPath: destPath)
+            // Move (not copy) so the original is removed from Downloads
+            try fm.moveItem(atPath: appPath, toPath: destPath)
 
-            // Relaunch from new location
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = ["-n", destPath]
-            try process.run()
+            // Strip quarantine xattr so macOS doesn't re-prompt
+            let stripProcess = Process()
+            stripProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            stripProcess.arguments = ["-dr", "com.apple.quarantine", destPath]
+            try? stripProcess.run()
+            stripProcess.waitUntilExit()
+
+            // Relaunch from /Applications after a short delay to let this instance exit
+            let script = """
+            sleep 0.5; open "\(destPath)"
+            """
+            let relaunch = Process()
+            relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+            relaunch.arguments = ["-c", script]
+            try relaunch.run()
 
             NSApp.terminate(nil)
         } catch {
+            // Reset the "asked" flag so the user can try again next launch
+            UserDefaults.standard.removeObject(forKey: "relocateLastAskedPath")
+
             let errAlert = NSAlert()
             errAlert.messageText = "Could Not Move App"
             errAlert.informativeText = "Failed to move VoiceFlow to Applications: \(error.localizedDescription)\n\nYou can move it manually by dragging VoiceFlow.app into your Applications folder."

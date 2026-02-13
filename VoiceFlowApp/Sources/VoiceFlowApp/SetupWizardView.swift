@@ -182,6 +182,9 @@ struct PermissionsStepView: View {
                     description: "Required for recording your voice",
                     isGranted: micGranted,
                     action: {
+                        // Activate so the system dialog appears on top (LSUIElement apps
+                        // aren't frontmost, so the permission dialog gets lost otherwise)
+                        NSApp.activate(ignoringOtherApps: true)
                         AVCaptureDevice.requestAccess(for: .audio) { granted in
                             DispatchQueue.main.async {
                                 micGranted = granted
