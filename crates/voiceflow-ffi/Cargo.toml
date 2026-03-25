@@ -11,7 +11,7 @@ description = "C FFI bindings for VoiceFlow - for Swift/macOS app integration"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-voiceflow-core.workspace = true
+voiceflow-core = { workspace = true, default-features = false }
 tokio.workspace = true
 once_cell = "1.19"
 

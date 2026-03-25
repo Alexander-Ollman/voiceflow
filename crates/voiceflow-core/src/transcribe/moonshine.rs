@@ -1,7 +1,7 @@
 //! Moonshine speech-to-text engine using ONNX Runtime
 
 use crate::config::Config;
-use crate::transcribe::whisper::TranscriptionResult;
+use crate::transcribe::TranscriptionResult;
 use anyhow::{Context, Result};
 use ort::{
     session::{builder::GraphOptimizationLevel, Session},

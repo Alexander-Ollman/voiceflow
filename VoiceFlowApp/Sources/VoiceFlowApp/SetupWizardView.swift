@@ -360,11 +360,11 @@ struct ModelDownloadStepView: View {
                 name: "Lightweight",
                 icon: "hare",
                 description: "Fastest performance, smallest download",
-                downloadSize: "~1.3 GB",
+                downloadSize: "~0.9 GB",
                 bestFor: "Best for 8 GB Macs or quick setup",
                 sttId: "moonshine-tiny",
                 sttType: .moonshine(modelId: "tiny"),
-                llmId: "qwen3-1.7b",
+                llmId: "qwen3.5-0.8b",
                 requiresPython: false,
                 minRAMGB: 8
             ),
@@ -373,11 +373,11 @@ struct ModelDownloadStepView: View {
                 name: "Recommended",
                 icon: "star",
                 description: "Great balance of speed and accuracy",
-                downloadSize: "~2.3 GB",
+                downloadSize: "~3.2 GB",
                 bestFor: "Best for most Macs with 16 GB+ RAM",
                 sttId: "qwen3-asr-0.6b",
                 sttType: .consolidated(modelId: "qwen3-asr-0.6b"),
-                llmId: "qwen3-1.7b",
+                llmId: "qwen3.5-2b",
                 requiresPython: true,
                 minRAMGB: 16
             ),
@@ -386,11 +386,11 @@ struct ModelDownloadStepView: View {
                 name: "Higher Quality",
                 icon: "dial.high",
                 description: "Most accurate transcription and formatting",
-                downloadSize: "~3.7 GB",
+                downloadSize: "~4.6 GB",
                 bestFor: "Best for 24 GB+ Macs",
                 sttId: "qwen3-asr-0.6b",
                 sttType: .consolidated(modelId: "qwen3-asr-0.6b"),
-                llmId: "qwen3-4b",
+                llmId: "qwen3.5-4b",
                 requiresPython: true,
                 minRAMGB: 24
             ),
@@ -441,10 +441,9 @@ struct ModelDownloadStepView: View {
 
     private var llmOptions: [(id: String, label: String, size: String)] {
         [
-            ("qwen3-1.7b", "Qwen3 1.7B", "~1.1 GB"),
-            ("qwen3-4b", "Qwen3 4B", "~2.5 GB"),
-            ("smollm3-3b", "SmolLM3 3B", "~1.9 GB"),
-            ("gemma2-2b", "Gemma 2 2B", "~1.7 GB"),
+            ("qwen3.5-0.8b", "Qwen3.5 0.8B", "~0.7 GB"),
+            ("qwen3.5-2b", "Qwen3.5 2B", "~1.9 GB"),
+            ("qwen3.5-4b", "Qwen3.5 4B", "~3.4 GB"),
         ]
     }
 

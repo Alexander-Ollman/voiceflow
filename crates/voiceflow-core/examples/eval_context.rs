@@ -797,29 +797,25 @@ fn parse_model_arg() -> Option<String> {
 /// Get the list of models to test
 fn get_models_to_test(filter: Option<&str>) -> Vec<LlmModel> {
     let all_models = vec![
-        LlmModel::Qwen3_1_7B,
-        LlmModel::Qwen3_4B,
-        LlmModel::SmolLM3_3B,
-        LlmModel::Phi4Mini,
-        LlmModel::Gemma3nE2B,
+        LlmModel::Qwen3_5_0_8B,
+        LlmModel::Qwen3_5_2B,
+        LlmModel::Qwen3_5_4B,
     ];
 
     if let Some(name) = filter {
         match name.to_lowercase().as_str() {
-            "qwen3-1.7b" | "qwen3_1_7b" | "qwen3-1.7" => vec![LlmModel::Qwen3_1_7B],
-            "qwen3-4b" | "qwen3_4b" => vec![LlmModel::Qwen3_4B],
-            "smollm3" | "smollm3-3b" => vec![LlmModel::SmolLM3_3B],
-            "phi4" | "phi4-mini" | "phi-4" => vec![LlmModel::Phi4Mini],
-            "gemma3n" | "gemma-3n" | "gemma3n-e2b" => vec![LlmModel::Gemma3nE2B],
+            "qwen3.5_0_8b" | "qwen3.5_0.8b" | "qwen3.5-0.8b" => vec![LlmModel::Qwen3_5_0_8B],
+            "qwen3.5_2b" | "qwen3.5-2b" => vec![LlmModel::Qwen3_5_2B],
+            "qwen3.5_4b" | "qwen3.5-4b" => vec![LlmModel::Qwen3_5_4B],
             "all" => all_models,
             _ => {
-                eprintln!("Unknown model: {}. Valid: qwen3-1.7b, qwen3-4b, smollm3, phi4, gemma3n, all", name);
+                eprintln!("Unknown model: {}. Valid: qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b, all", name);
                 std::process::exit(1);
             }
         }
     } else {
         // Default: just the current model
-        vec![LlmModel::Qwen3_1_7B]
+        vec![LlmModel::Qwen3_5_0_8B]
     }
 }
 

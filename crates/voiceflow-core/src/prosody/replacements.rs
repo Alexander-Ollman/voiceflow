@@ -133,6 +133,24 @@ impl ReplacementDictionary {
     pub fn is_empty(&self) -> bool {
         self.replacements.is_empty()
     }
+
+    /// Add a user-learned correction at runtime.
+    /// Deduplicates by original (case-insensitive) and re-sorts longest-first.
+    pub fn add_user_correction(&mut self, original: String, corrected: String) {
+        // Remove any existing entry for this original (case-insensitive dedup)
+        self.replacements.retain(|(k, _)| k.to_lowercase() != original.to_lowercase());
+        self.replacements.push((original, corrected));
+        // Re-sort longest-first to maintain matching invariant
+        self.replacements.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    }
+
+    /// Remove a user-learned correction at runtime (case-insensitive match on original).
+    /// Returns true if a correction was found and removed.
+    pub fn remove_user_correction(&mut self, original: &str) -> bool {
+        let before = self.replacements.len();
+        self.replacements.retain(|(k, _)| k.to_lowercase() != original.to_lowercase());
+        self.replacements.len() < before
+    }
 }
 
 /// Case-insensitive replace all occurrences, respecting word boundaries
@@ -201,6 +219,34 @@ mod tests {
 
         let result = dict.apply("whisper. cpp is great");
         assert_eq!(result, "whisper.cpp is great");
+    }
+
+    #[test]
+    fn test_add_user_correction() {
+        let mut dict = ReplacementDictionary::new();
+        dict.add_user_correction("Quinn".to_string(), "Qwen".to_string());
+        assert_eq!(dict.len(), 1);
+
+        let result = dict.apply("Quinn is great");
+        assert_eq!(result, "Qwen is great");
+
+        // Adding same original again replaces the old entry
+        dict.add_user_correction("Quinn".to_string(), "QWEN".to_string());
+        assert_eq!(dict.len(), 1);
+        assert_eq!(dict.apply("Quinn test"), "QWEN test");
+
+        // Case-insensitive dedup
+        dict.add_user_correction("quinn".to_string(), "Qwen2".to_string());
+        assert_eq!(dict.len(), 1);
+    }
+
+    #[test]
+    fn test_add_user_correction_sorted() {
+        let mut dict = ReplacementDictionary::new();
+        dict.add_user_correction("AI".to_string(), "A.I.".to_string());
+        dict.add_user_correction("open AI model".to_string(), "OpenAI model".to_string());
+        // Longer pattern should match first
+        assert_eq!(dict.apply("open AI model"), "OpenAI model");
     }
 
     #[test]

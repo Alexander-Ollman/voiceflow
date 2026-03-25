@@ -841,14 +841,9 @@ fn parse_stt_model(name: &str) -> Option<(SttEngine, Option<WhisperModel>, Optio
 /// Parse LLM model from string
 fn parse_llm_model(name: &str) -> Option<LlmModel> {
     match name.to_lowercase().replace("-", "_").as_str() {
-        "qwen3_1_7b" | "qwen3_1.7b" | "qwen_1.7b" => Some(LlmModel::Qwen3_1_7B),
-        "qwen3_4b" | "qwen3" | "qwen" => Some(LlmModel::Qwen3_4B),
-        "smollm3_3b" | "smollm3" | "smollm" => Some(LlmModel::SmolLM3_3B),
-        "gemma2_2b" | "gemma2" => Some(LlmModel::Gemma2_2B),
-        "gemma3n_e2b" | "gemma3n_2b" | "gemma3n" => Some(LlmModel::Gemma3nE2B),
-        "gemma3n_e4b" | "gemma3n_4b" => Some(LlmModel::Gemma3nE4B),
-        "phi4_mini" | "phi4" => Some(LlmModel::Phi4Mini),
-        "phi2" => Some(LlmModel::Phi2),
+        "qwen3.5_0_8b" | "qwen3.5_0.8b" | "qwen3.5_0.8b" => Some(LlmModel::Qwen3_5_0_8B),
+        "qwen3.5_2b" | "qwen3.5_2b" => Some(LlmModel::Qwen3_5_2B),
+        "qwen3.5_4b" | "qwen3.5_4b" => Some(LlmModel::Qwen3_5_4B),
         _ => None,
     }
 }
@@ -887,7 +882,7 @@ pub async fn run(
         if let Some(llm) = parse_llm_model(llm_name) {
             config.llm_model = llm;
         } else {
-            anyhow::bail!("Unknown LLM model: {}. Valid options: qwen3-1.7b, qwen3-4b, smollm3, gemma3n, phi4", llm_name);
+            anyhow::bail!("Unknown LLM model: {}. Valid options: qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b", llm_name);
         }
     }
 

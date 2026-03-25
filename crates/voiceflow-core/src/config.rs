@@ -211,142 +211,40 @@ impl ConsolidatedModel {
     }
 }
 
-/// Vision-Language Model options — multimodal models for image + text understanding
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum VlmModel {
-    /// Jina VLM — jinaai's vision-language model (~9.9 GB)
-    #[default]
-    JinaVlm,
-    /// Qwen3-VL 2B Instruct — Qwen's compact vision-language model (~4.3 GB)
-    Qwen3VL2B,
-}
-
-impl VlmModel {
-    pub fn display_name(&self) -> &str {
-        match self {
-            Self::JinaVlm => "Jina VLM",
-            Self::Qwen3VL2B => "Qwen3-VL 2B Instruct",
-        }
-    }
-
-    pub fn dir_name(&self) -> &str {
-        match self {
-            Self::JinaVlm => "jina-vlm",
-            Self::Qwen3VL2B => "qwen3-vl-2b-instruct",
-        }
-    }
-
-    pub fn hf_repo(&self) -> &str {
-        match self {
-            Self::JinaVlm => "jinaai/jina-vlm",
-            Self::Qwen3VL2B => "Qwen/Qwen3-VL-2B-Instruct",
-        }
-    }
-
-    pub fn size_gb(&self) -> f32 {
-        match self {
-            Self::JinaVlm => 9.9,
-            Self::Qwen3VL2B => 4.3,
-        }
-    }
-
-    /// Required files for downloading and verifying the model
-    pub fn required_files(&self) -> Vec<&'static str> {
-        match self {
-            Self::JinaVlm => vec![
-                "config.json",
-                "generation_config.json",
-                "preprocessor_config.json",
-                "processor_config.json",
-                "tokenizer.json",
-                "tokenizer_config.json",
-                "vocab.json",
-                "merges.txt",
-                "special_tokens_map.json",
-                "added_tokens.json",
-                "chat_template.jinja",
-                "model.safetensors.index.json",
-                "model-00001-of-00003.safetensors",
-                "model-00002-of-00003.safetensors",
-                "model-00003-of-00003.safetensors",
-                // Custom model code (needed for trust_remote_code)
-                "modeling_jvlm.py",
-                "blocks_jvlm.py",
-                "configuration_jvlm.py",
-                "image_processing_jvlm.py",
-                "processing_jvlm.py",
-            ],
-            Self::Qwen3VL2B => vec![
-                "config.json",
-                "generation_config.json",
-                "preprocessor_config.json",
-                "video_preprocessor_config.json",
-                "tokenizer.json",
-                "tokenizer_config.json",
-                "vocab.json",
-                "merges.txt",
-                "chat_template.json",
-                "model.safetensors",
-            ],
-        }
-    }
-
-    pub fn all_models() -> Vec<VlmModel> {
-        vec![Self::JinaVlm, Self::Qwen3VL2B]
-    }
-}
-
 /// LLM inference backend selection
-/// Different backends support different model architectures
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum LlmBackend {
-    /// mistral.rs - Good for Qwen, Gemma2, Phi-2
-    /// Some newer architectures (SmolLM3, Gemma3n, Phi-4) not yet supported
-    #[default]
-    MistralRs,
     /// llama.cpp via llama-cpp-2 crate - Supports all GGUF architectures
-    /// Recommended for SmolLM3, Gemma3n, Phi-4, and other newer models
+    #[default]
     LlamaCpp,
 }
 
 impl LlmBackend {
     pub fn display_name(&self) -> &str {
         match self {
-            Self::MistralRs => "mistral.rs",
             Self::LlamaCpp => "llama.cpp",
         }
     }
 }
 
-/// Supported LLM models (non-Meta, permissive licenses)
+/// Supported LLM models — Qwen3.5 natively multimodal (text + vision via mmproj)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LlmModel {
-    /// Qwen3 1.7B - Fast, multilingual (Apache 2.0)
-    Qwen3_1_7B,
-    /// Qwen3 4B - Higher quality, multilingual (Apache 2.0)
-    Qwen3_4B,
-    /// SmolLM3 3B - Hugging Face efficient model (Apache 2.0)
-    SmolLM3_3B,
-    /// Gemma 2 2B - Google's compact model
-    Gemma2_2B,
-    /// Gemma 3n E2B - Google's multimodal model, 2B effective params (Gemma license)
-    Gemma3nE2B,
-    /// Gemma 3n E4B - Google's multimodal model, 4B effective params (Gemma license)
-    Gemma3nE4B,
-    /// Phi-4 Mini - Microsoft's latest small model (MIT)
-    Phi4Mini,
-    /// Phi-2 - Microsoft's 2.7B model (test)
-    Phi2,
+    /// Qwen3.5 0.8B - Smallest, fastest (Apache 2.0)
+    Qwen3_5_0_8B,
+    /// Qwen3.5 2B - Balanced quality/speed (Apache 2.0)
+    Qwen3_5_2B,
+    /// Qwen3.5 4B - Highest quality (Apache 2.0)
+    Qwen3_5_4B,
     /// Custom model path
     Custom(String),
 }
 
 impl Default for LlmModel {
     fn default() -> Self {
-        Self::Qwen3_1_7B
+        Self::Qwen3_5_4B
     }
 }
 
@@ -354,15 +252,9 @@ impl LlmModel {
     /// Get the model filename for downloading (exact HuggingFace filenames)
     pub fn filename(&self) -> &str {
         match self {
-            // Keep original filename for backwards compatibility with existing downloads
-            Self::Qwen3_1_7B => "qwen3-1.7b-q4_k_m.gguf",
-            Self::Qwen3_4B => "Qwen3-4B-Q4_K_M.gguf",
-            Self::SmolLM3_3B => "SmolLM3-Q4_K_M.gguf",
-            Self::Gemma2_2B => "gemma-2-2b-it-Q4_K_M.gguf",
-            Self::Gemma3nE2B => "gemma-3n-E2B-it-Q4_K_M.gguf",
-            Self::Gemma3nE4B => "gemma-3n-E4B-it-Q4_K_M.gguf",
-            Self::Phi4Mini => "Phi-4-mini-instruct-Q4_K_M.gguf",
-            Self::Phi2 => "phi-2-q4.gguf",
+            Self::Qwen3_5_0_8B => "Qwen3.5-0.8B-Q4_K_M.gguf",
+            Self::Qwen3_5_2B => "Qwen3.5-2B-Q4_K_M.gguf",
+            Self::Qwen3_5_4B => "Qwen3.5-4B-Q4_K_M.gguf",
             Self::Custom(path) => path,
         }
     }
@@ -370,14 +262,9 @@ impl LlmModel {
     /// Get the Hugging Face repo for this model
     pub fn hf_repo(&self) -> Option<&str> {
         match self {
-            Self::Qwen3_1_7B => Some("Qwen/Qwen3-1.7B-GGUF"),
-            Self::Qwen3_4B => Some("Qwen/Qwen3-4B-GGUF"),
-            Self::SmolLM3_3B => Some("ggml-org/SmolLM3-3B-GGUF"),
-            Self::Gemma2_2B => Some("bartowski/gemma-2-2b-it-GGUF"),
-            Self::Gemma3nE2B => Some("unsloth/gemma-3n-E2B-it-GGUF"),
-            Self::Gemma3nE4B => Some("unsloth/gemma-3n-E4B-it-GGUF"),
-            Self::Phi4Mini => Some("lmstudio-community/Phi-4-mini-instruct-GGUF"),
-            Self::Phi2 => Some("TheBloke/phi-2-GGUF"),
+            Self::Qwen3_5_0_8B => Some("unsloth/Qwen3.5-0.8B-GGUF"),
+            Self::Qwen3_5_2B => Some("unsloth/Qwen3.5-2B-GGUF"),
+            Self::Qwen3_5_4B => Some("unsloth/Qwen3.5-4B-GGUF"),
             Self::Custom(_) => None,
         }
     }
@@ -385,81 +272,83 @@ impl LlmModel {
     /// Get display name
     pub fn display_name(&self) -> &str {
         match self {
-            Self::Qwen3_1_7B => "Qwen3 1.7B",
-            Self::Qwen3_4B => "Qwen3 4B",
-            Self::SmolLM3_3B => "SmolLM3 3B",
-            Self::Gemma2_2B => "Gemma 2 2B",
-            Self::Gemma3nE2B => "Gemma 3n E2B (Multimodal)",
-            Self::Gemma3nE4B => "Gemma 3n E4B (Multimodal)",
-            Self::Phi4Mini => "Phi-4 Mini 3.8B",
-            Self::Phi2 => "Phi-2",
+            Self::Qwen3_5_0_8B => "Qwen3.5 0.8B",
+            Self::Qwen3_5_2B => "Qwen3.5 2B",
+            Self::Qwen3_5_4B => "Qwen3.5 4B",
             Self::Custom(path) => path,
         }
     }
 
-    /// Get estimated model size in GB (Q4_K_M quantization, from HuggingFace)
+    /// Get estimated model size in GB (Q4_K_M quantization)
     pub fn size_gb(&self) -> f32 {
         match self {
-            Self::Qwen3_1_7B => 1.28,
-            Self::Qwen3_4B => 2.5,
-            Self::SmolLM3_3B => 1.92,
-            Self::Gemma2_2B => 1.71,
-            Self::Gemma3nE2B => 1.8,  // E2B = 2B effective params
-            Self::Gemma3nE4B => 3.2,  // E4B = 4B effective params
-            Self::Phi4Mini => 2.4,
-            Self::Phi2 => 1.6,
+            Self::Qwen3_5_0_8B => 0.53,
+            Self::Qwen3_5_2B => 1.28,
+            Self::Qwen3_5_4B => 2.74,
             Self::Custom(_) => 0.0,
         }
     }
 
     /// Whether this model supports multimodal input (images/screenshots)
+    /// All Qwen3.5 models are natively multimodal via mmproj
     pub fn is_multimodal(&self) -> bool {
-        matches!(self, Self::Gemma3nE2B | Self::Gemma3nE4B)
+        matches!(self, Self::Qwen3_5_0_8B | Self::Qwen3_5_2B | Self::Qwen3_5_4B)
+    }
+
+    /// Get the mmproj filename for multimodal support (model-specific)
+    pub fn mmproj_filename(&self) -> Option<&str> {
+        match self {
+            Self::Qwen3_5_0_8B => Some("mmproj-Qwen3.5-0.8B-F16.gguf"),
+            Self::Qwen3_5_2B => Some("mmproj-Qwen3.5-2B-F16.gguf"),
+            Self::Qwen3_5_4B => Some("mmproj-Qwen3.5-4B-F16.gguf"),
+            Self::Custom(_) => None,
+        }
+    }
+
+    /// Get the original HuggingFace mmproj filename (for downloads)
+    pub fn mmproj_hf_filename(&self) -> Option<&str> {
+        match self {
+            Self::Qwen3_5_0_8B | Self::Qwen3_5_2B | Self::Qwen3_5_4B => Some("mmproj-F16.gguf"),
+            Self::Custom(_) => None,
+        }
+    }
+
+    /// Get the mmproj file size in GB for download display
+    pub fn mmproj_size_gb(&self) -> f32 {
+        match self {
+            Self::Qwen3_5_0_8B => 0.2,
+            Self::Qwen3_5_2B => 0.65,
+            Self::Qwen3_5_4B => 0.65,
+            Self::Custom(_) => 0.0,
+        }
+    }
+
+    /// Get total download size (model + mmproj) in GB
+    pub fn total_size_gb(&self) -> f32 {
+        self.size_gb() + self.mmproj_size_gb()
     }
 
     /// Get the recommended inference backend for this model
-    /// Models with architectures not supported by mistral.rs use llama.cpp
+    /// All Qwen3.5 models use llama.cpp (Hybrid DeltaNet architecture)
     pub fn backend(&self) -> LlmBackend {
-        match self {
-            // Supported by mistral.rs
-            Self::Qwen3_1_7B => LlmBackend::MistralRs,
-            Self::Qwen3_4B => LlmBackend::MistralRs,
-            Self::Gemma2_2B => LlmBackend::MistralRs,
-            Self::Phi2 => LlmBackend::MistralRs,
-
-            // Require llama.cpp (architecture not supported by mistral.rs)
-            Self::SmolLM3_3B => LlmBackend::LlamaCpp,   // 'smollm3' architecture
-            Self::Gemma3nE2B => LlmBackend::LlamaCpp,   // 'gemma3n' architecture
-            Self::Gemma3nE4B => LlmBackend::LlamaCpp,   // 'gemma3n' architecture
-            Self::Phi4Mini => LlmBackend::LlamaCpp,     // 'phi4' architecture
-
-            // Custom models default to llama.cpp (more architecture coverage)
-            Self::Custom(_) => LlmBackend::LlamaCpp,
-        }
+        LlmBackend::LlamaCpp
     }
 
     /// Get all available models (excluding Custom)
     pub fn all_models() -> Vec<LlmModel> {
         vec![
-            Self::Qwen3_1_7B,
-            Self::Qwen3_4B,
-            Self::SmolLM3_3B,
-            Self::Gemma2_2B,
-            Self::Gemma3nE2B,
-            Self::Gemma3nE4B,
-            Self::Phi4Mini,
+            Self::Qwen3_5_0_8B,
+            Self::Qwen3_5_2B,
+            Self::Qwen3_5_4B,
         ]
     }
 
     /// Get benchmark-recommended models for dictation formatting
-    /// Now includes all models thanks to switchable backends (mistral.rs + llama.cpp)
     pub fn benchmark_models() -> Vec<LlmModel> {
         vec![
-            Self::Qwen3_1_7B,   // Fast baseline (mistral.rs)
-            Self::Qwen3_4B,     // Higher quality (mistral.rs)
-            Self::SmolLM3_3B,   // HuggingFace efficient model (llama.cpp)
-            Self::Gemma3nE2B,   // Google's multimodal (llama.cpp)
-            Self::Phi4Mini,     // Microsoft's latest (llama.cpp)
+            Self::Qwen3_5_0_8B,
+            Self::Qwen3_5_2B,
+            Self::Qwen3_5_4B,
         ]
     }
 }
@@ -574,7 +463,7 @@ pub struct LlmOptions {
     pub temperature: f32,
     /// Top-p nucleus sampling
     pub top_p: f32,
-    /// Number of GPU layers to offload (-1 = all)
+    /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
     pub n_gpu_layers: i32,
     /// Disable thinking/reasoning mode for faster inference
     pub enable_thinking: bool,
@@ -632,9 +521,6 @@ pub struct Config {
     pub moonshine_model: MoonshineModel,
     /// LLM model selection
     pub llm_model: LlmModel,
-    /// VLM model selection (None = no VLM, use LLM only)
-    #[serde(default)]
-    pub vlm_model: Option<VlmModel>,
     /// LLM generation options
     pub llm_options: LlmOptions,
     /// Audio capture options
@@ -656,7 +542,6 @@ impl Default for Config {
             whisper_model: WhisperModel::default(),
             moonshine_model: MoonshineModel::default(),
             llm_model: LlmModel::default(),
-            vlm_model: None,
             llm_options: LlmOptions::default(),
             audio: AudioOptions::default(),
             default_context: "default".to_string(),
@@ -955,16 +840,12 @@ impl Config {
         }
     }
 
-    /// Check if a specific VLM model's files are downloaded
-    pub fn vlm_model_downloaded_for(&self, model: &VlmModel) -> bool {
-        if let Ok(models_dir) = Self::models_dir() {
-            let model_dir = models_dir.join(model.dir_name());
-            model
-                .required_files()
-                .iter()
-                .all(|f| model_dir.join(f).exists())
+    /// Get full path to mmproj file for multimodal support
+    pub fn mmproj_model_path(&self) -> Result<Option<PathBuf>> {
+        if let Some(mmproj_file) = self.llm_model.mmproj_filename() {
+            Ok(Some(Self::models_dir()?.join(mmproj_file)))
         } else {
-            false
+            Ok(None)
         }
     }
 

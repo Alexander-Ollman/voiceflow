@@ -26,11 +26,8 @@ ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Moonshine (bundles library
 ndarray = "0.16"  # For tensor operations with ONNX
 serde_json = "1.0"  # For tokenizer loading
 
-# LLM Inference - Multiple backends for architecture support
-# mistral.rs: Good for Qwen, Gemma2, Phi-2 (some newer architectures unsupported)
-# llama-cpp-2: Supports all architectures via upstream llama.cpp (SmolLM3, Gemma3n, Phi-4, etc.)
-mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", branch = "master" }
-llama-cpp-2 = { version = "0.1" }  # Metal disabled for testing - add "metal" feature for GPU acceleration
+# LLM Inference - llama.cpp backend with multimodal support
+llama-cpp-2 = { version = "=0.1.139", features = ["mtmd"] }
 
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }
@@ -52,3 +49,8 @@ arboard = "3.4"
 
 # Internal crates
 voiceflow-core = { path = "crates/voiceflow-core" }
+
+# Patch llama-cpp-sys-2 to use llama.cpp b8390 (fixes Qwen3.5 graph_reserve crash)
+[patch.crates-io]
+llama-cpp-sys-2 = { path = "../llama-cpp-rs/llama-cpp-sys-2" }
+llama-cpp-2 = { path = "../llama-cpp-rs/llama-cpp-2" }

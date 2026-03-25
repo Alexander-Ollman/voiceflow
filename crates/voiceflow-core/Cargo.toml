@@ -14,14 +14,13 @@ hound.workspace = true
 rubato.workspace = true
 pitch-detection.workspace = true
 
-# Speech-to-Text
-whisper-rs.workspace = true
+# Speech-to-Text (whisper-rs is optional to avoid GGML symbol conflicts with llama-cpp-2)
+whisper-rs = { workspace = true, optional = true }
 ort.workspace = true
 ndarray.workspace = true
 serde_json.workspace = true
 
-# LLM - Multiple backends for architecture support
-mistralrs.workspace = true
+# LLM - llama.cpp backend with multimodal support
 llama-cpp-2.workspace = true
 
 # Async
@@ -38,7 +37,6 @@ directories.workspace = true
 
 [features]
 default = ["metal"]
-metal = ["whisper-rs/metal", "mistralrs/metal"]
-cuda = ["whisper-rs/cuda", "mistralrs/cuda"]
-accelerate = ["mistralrs/accelerate"]
-mkl = ["mistralrs/mkl"]
+whisper = ["dep:whisper-rs"]
+metal = ["whisper-rs?/metal"]
+cuda = ["whisper-rs?/cuda"]

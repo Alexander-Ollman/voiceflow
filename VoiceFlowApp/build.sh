@@ -40,7 +40,7 @@ fi
 echo "Step 1: Building Rust FFI library..."
 cd "$PROJECT_ROOT"
 source ~/.cargo/env 2>/dev/null || true
-MISTRALRS_METAL_PRECOMPILE=0 cargo build --release -p voiceflow-ffi --features metal
+cargo build --release -p voiceflow-ffi
 
 # Step 2: Create build directory
 echo "Step 2: Creating build directory..."
@@ -53,9 +53,12 @@ swift package resolve
 
 # Step 4: Build Swift app
 echo "Step 4: Building Swift app..."
+MOONSHINE_LIB_DIR="$SCRIPT_DIR/.build/artifacts/moonshine-swift/Moonshine/Moonshine.xcframework/macos-arm64_x86_64"
 swift build -c release \
     -Xlinker -L"$PROJECT_ROOT/target/release" \
     -Xlinker -lvoiceflow_ffi \
+    -Xlinker -L"$MOONSHINE_LIB_DIR" \
+    -Xlinker -lmoonshine \
     -Xcc -I"$SCRIPT_DIR/Sources/VoiceFlowFFI"
 
 # Step 5: Create app bundle
@@ -173,7 +176,11 @@ SIGNED=false
 if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
     echo "Step 6: Signing app bundle..."
     xattr -cr "$APP_BUNDLE"
-    codesign --deep --force --options runtime --entitlements "$SCRIPT_DIR/VoiceFlow.entitlements" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+    # Sign frameworks individually first (required for proper timestamps)
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/libonnxruntime.dylib"
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/libvoiceflow_ffi.dylib"
+    # Sign the main app bundle
+    codesign --force --options runtime --timestamp --entitlements "$SCRIPT_DIR/VoiceFlow.entitlements" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "  Signed and verified."
     SIGNED=true

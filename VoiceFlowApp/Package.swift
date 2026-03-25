@@ -9,10 +9,16 @@ let package = Package(
     products: [
         .executable(name: "VoiceFlowApp", targets: ["VoiceFlowApp"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/moonshine-ai/moonshine-swift.git", from: "0.0.48")
+    ],
     targets: [
         .executableTarget(
             name: "VoiceFlowApp",
-            dependencies: ["VoiceFlowFFI"],
+            dependencies: [
+                "VoiceFlowFFI",
+                .product(name: "Moonshine", package: "moonshine-swift")
+            ],
             path: "Sources/VoiceFlowApp",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
@@ -20,7 +26,8 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedFramework("ServiceManagement"),
-                .linkedFramework("ScreenCaptureKit")
+                .linkedFramework("ScreenCaptureKit"),
+                .linkedLibrary("c++")
             ]
         ),
         .systemLibrary(

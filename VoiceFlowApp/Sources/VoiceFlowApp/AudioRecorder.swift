@@ -12,6 +12,10 @@ final class AudioRecorder: ObservableObject {
     private var audioBuffer: [Float] = []
     private let targetSampleRate: Double = 16000
 
+    /// Optional callback fired for each resampled audio chunk (16kHz mono).
+    /// Used by streaming transcription to feed chunks in real-time.
+    var onAudioChunk: (([Float]) -> Void)?
+
     /// Start recording from microphone
     func startRecording() throws {
         let engine = AVAudioEngine()
@@ -82,6 +86,9 @@ final class AudioRecorder: ObservableObject {
         }
 
         audioBuffer.append(contentsOf: resampledSamples)
+
+        // Forward chunk to streaming callback if set
+        onAudioChunk?(resampledSamples)
     }
 
     /// Simple linear interpolation resampling

@@ -57,9 +57,6 @@ final class VoiceFlowBridge: ObservableObject {
         guard !isCleanedUp else { return }
         isCleanedUp = true
 
-        // Unload VLM before stopping daemon
-        asrEngine?.unloadVlm()
-
         // Stop the Python ASR daemon if running
         asrEngine?.stopDaemon()
         asrEngine = nil
@@ -90,6 +87,12 @@ final class VoiceFlowBridge: ObservableObject {
     func resetLLM() {
         guard let handle = handle else { return }
         voiceflow_reset_llm(handle)
+    }
+
+    /// Unload the STT engine from memory (when streaming replaces it)
+    func unloadStt() {
+        guard let handle = handle else { return }
+        voiceflow_unload_stt(handle)
     }
 
     /// Get current memory usage from the Rust side
@@ -134,6 +137,56 @@ final class VoiceFlowBridge: ObservableObject {
         return nil
     }
 
+    /// Format text through the Rust LLM pipeline with real-time token streaming.
+    /// Each token is delivered to `onToken` on the main actor as it's generated.
+    /// Returns the fully post-processed final text (same as `formatText()`).
+    func formatTextStreaming(
+        _ text: String,
+        context: String?,
+        onToken: @escaping @MainActor (String) -> Void
+    ) async -> String? {
+        guard let handle = handle else { return nil }
+
+        let result: VoiceFlowResult = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                // TokenReceiver bridges the C callback to Swift's main actor
+                let receiver = TokenReceiver(onToken: onToken)
+                let retainedReceiver = Unmanaged.passRetained(receiver)
+                let userdata = retainedReceiver.toOpaque()
+
+                let cCallback: TokenCallbackFn = { tokenPtr, ud in
+                    guard let tokenPtr = tokenPtr, let ud = ud else { return true }
+                    let token = String(cString: tokenPtr)
+                    let receiver = Unmanaged<TokenReceiver>.fromOpaque(ud).takeUnretainedValue()
+                    receiver.receive(token)
+                    return true
+                }
+
+                let ffiResult = text.withCString { textPtr in
+                    if let ctx = context {
+                        return ctx.withCString { ctxPtr in
+                            voiceflow_format_text_streaming(handle, textPtr, ctxPtr, cCallback, userdata)
+                        }
+                    } else {
+                        return voiceflow_format_text_streaming(handle, textPtr, nil, cCallback, userdata)
+                    }
+                }
+
+                // Balance the retain
+                retainedReceiver.release()
+
+                continuation.resume(returning: ffiResult)
+            }
+        }
+
+        defer { voiceflow_free_result(result) }
+
+        if result.success, let ptr = result.formatted_text {
+            return String(cString: ptr)
+        }
+        return nil
+    }
+
     private func initialize() async {
         let consolidatedMode = voiceflow_is_consolidated_mode()
         let externalStt = voiceflow_is_external_stt()
@@ -150,59 +203,38 @@ final class VoiceFlowBridge: ObservableObject {
                 self.lastError = "Failed to initialize VoiceFlow pipeline"
             }
 
-            // Check if we need a VLM model
-            let hasVlm: Bool = {
-                if let ptr = voiceflow_current_vlm_model() {
-                    voiceflow_free_string(ptr)
-                    return true
+            // Load persisted user corrections into the Rust pipeline
+            if newHandle != nil {
+                for pattern in CorrectionManager.shared.patterns {
+                    self.addReplacement(original: pattern.original, corrected: pattern.corrected)
                 }
-                return false
-            }()
+            }
 
-            // Start Qwen3-ASR daemon if needed (consolidated mode, external STT, or VLM)
-            let needsDaemon = consolidatedMode || externalStt || hasVlm
+            // Start Qwen3-ASR daemon if needed (consolidated mode or external STT)
+            let needsDaemon = consolidatedMode || externalStt
             if needsDaemon {
                 self.asrEngine = Qwen3ASREngine()
 
-                // Load models in background
+                // Load ASR model in background
                 if let engine = self.asrEngine {
                     Task {
-                        // Load ASR model if in consolidated/external STT mode
-                        if consolidatedMode || externalStt {
-                            if let modelIdPtr = voiceflow_current_consolidated_model() {
-                                let modelId = String(cString: modelIdPtr)
-                                voiceflow_free_string(modelIdPtr)
+                        if let modelIdPtr = voiceflow_current_consolidated_model() {
+                            let modelId = String(cString: modelIdPtr)
+                            voiceflow_free_string(modelIdPtr)
 
-                                if let modelDirPtr = modelId.withCString({ cStr in
-                                    voiceflow_consolidated_model_dir(cStr)
-                                }) {
-                                    let modelDir = String(cString: modelDirPtr)
-                                    voiceflow_free_string(modelDirPtr)
-
-                                    NSLog("[VoiceFlowBridge] Loading Qwen3-ASR model from: \(modelDir)")
-                                    await engine.loadModel(from: modelDir)
-                                } else {
-                                    NSLog("[VoiceFlowBridge] Failed to get model dir for \(modelId)")
-                                }
-                            } else {
-                                NSLog("[VoiceFlowBridge] No consolidated model configured")
-                            }
-                        }
-
-                        // Load VLM if one is configured (independent of ASR)
-                        if let vlmIdPtr = voiceflow_current_vlm_model() {
-                            let vlmId = String(cString: vlmIdPtr)
-                            voiceflow_free_string(vlmIdPtr)
-
-                            if let vlmDirPtr = vlmId.withCString({ cStr in
-                                voiceflow_vlm_model_dir(cStr)
+                            if let modelDirPtr = modelId.withCString({ cStr in
+                                voiceflow_consolidated_model_dir(cStr)
                             }) {
-                                let vlmDir = String(cString: vlmDirPtr)
-                                voiceflow_free_string(vlmDirPtr)
+                                let modelDir = String(cString: modelDirPtr)
+                                voiceflow_free_string(modelDirPtr)
 
-                                NSLog("[VoiceFlowBridge] Loading VLM model (\(vlmId)) from: \(vlmDir)")
-                                _ = await engine.loadVlmModel(from: vlmDir, modelType: vlmId)
+                                NSLog("[VoiceFlowBridge] Loading Qwen3-ASR model from: \(modelDir)")
+                                await engine.loadModel(from: modelDir)
+                            } else {
+                                NSLog("[VoiceFlowBridge] Failed to get model dir for \(modelId)")
                             }
+                        } else {
+                            NSLog("[VoiceFlowBridge] No consolidated model configured")
                         }
                     }
                 }
@@ -364,11 +396,111 @@ final class VoiceFlowBridge: ObservableObject {
         }
     }
 
+    /// Process pre-transcribed text with an image through multimodal LLM formatting.
+    /// Used for visual context dictation (Control+Option+Space hotkey).
+    func processTextWithImage(_ text: String, context: String?, imageData: Data) async -> ProcessResult? {
+        guard let handle = handle else { return nil }
+
+        await MainActor.run {
+            self.isProcessing = true
+            self.lastError = nil
+        }
+
+        defer {
+            Task { @MainActor in
+                self.isProcessing = false
+            }
+        }
+
+        let result: VoiceFlowResult = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ffiResult = imageData.withUnsafeBytes { imageBuffer in
+                    let imagePtr = imageBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+                    let imageLen = UInt(imageBuffer.count)
+                    return text.withCString { textPtr in
+                        if let ctx = context {
+                            return ctx.withCString { ctxPtr in
+                                voiceflow_process_text_with_image(handle, textPtr, ctxPtr, imagePtr, imageLen)
+                            }
+                        } else {
+                            return voiceflow_process_text_with_image(handle, textPtr, nil, imagePtr, imageLen)
+                        }
+                    }
+                }
+                continuation.resume(returning: ffiResult)
+            }
+        }
+
+        defer { voiceflow_free_result(result) }
+
+        if result.success {
+            let processResult = ProcessResult(
+                formattedText: result.formatted_text.map { String(cString: $0) } ?? "",
+                rawTranscript: result.raw_transcript.map { String(cString: $0) } ?? text,
+                transcriptionMs: result.transcription_ms,
+                llmMs: result.llm_ms,
+                totalMs: result.total_ms
+            )
+
+            await MainActor.run {
+                self.lastResult = processResult
+            }
+            return processResult
+        } else {
+            let errorMsg = result.error_message.map { String(cString: $0) } ?? "Multimodal processing failed"
+            await MainActor.run {
+                self.lastError = errorMsg
+            }
+            return nil
+        }
+    }
+
+    /// Add a user-learned correction to the Rust replacement dictionary.
+    /// Applied deterministically during pipeline processing.
+    func addReplacement(original: String, corrected: String) {
+        guard let handle = handle else { return }
+        original.withCString { origPtr in
+            corrected.withCString { corrPtr in
+                _ = voiceflow_add_replacement(handle, origPtr, corrPtr)
+            }
+        }
+    }
+
+    /// Remove a user-learned correction from the Rust replacement dictionary.
+    /// Takes effect immediately for subsequent pipeline runs.
+    func removeReplacement(original: String) {
+        guard let handle = handle else { return }
+        original.withCString { origPtr in
+            _ = voiceflow_remove_replacement(handle, origPtr)
+        }
+    }
+
     /// Get library version
     nonisolated static var version: String {
         guard let versionPtr = voiceflow_version() else {
             return "unknown"
         }
         return String(cString: versionPtr)
+    }
+}
+
+/// Bridges C token callbacks (on background thread) to Swift's MainActor.
+/// Retained via Unmanaged during the FFI call lifetime.
+private final class TokenReceiver: @unchecked Sendable {
+    private let onToken: @MainActor (String) -> Void
+
+    init(onToken: @escaping @MainActor (String) -> Void) {
+        self.onToken = onToken
+    }
+
+    func receive(_ token: String) {
+        let callback = self.onToken
+        DispatchQueue.main.async {
+            // We're on main thread now, safe to call @MainActor closure
+            // Use assumeIsolated to satisfy the compiler
+            MainActor.assumeIsolated {
+                callback(token)
+            }
+        }
     }
 }

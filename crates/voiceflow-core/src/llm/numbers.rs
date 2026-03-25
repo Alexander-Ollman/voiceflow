@@ -898,6 +898,60 @@ pub fn fix_abbreviations(text: &str) -> String {
             }
         }
 
+        // "i OS" / "I OS" → "iOS"
+        if (clean == "i") && i + 1 < words.len() {
+            let (next_clean, next_punct) = strip_trailing_punct(&words[i + 1].lower);
+            if next_clean == "os" {
+                replacements.push(Replacement {
+                    start: words[i].start,
+                    end: words[i + 1].end,
+                    text: format!("iOS{}", next_punct),
+                });
+            }
+        }
+
+        // "zero" → "0"
+        if clean == "zero" {
+            replacements.push(Replacement {
+                start: words[i].start,
+                end: words[i].end,
+                text: format!("0{}", _punct),
+            });
+        }
+
+        // Unit abbreviations: only when preceded by a digit
+        let unit_map: &[(&str, &str)] = &[
+            ("megabytes", "MB"),
+            ("megabyte", "MB"),
+            ("gigabytes", "GB"),
+            ("gigabyte", "GB"),
+            ("terabytes", "TB"),
+            ("terabyte", "TB"),
+            ("kilobytes", "KB"),
+            ("kilobyte", "KB"),
+            ("kilometers", "km"),
+            ("kilometer", "km"),
+            ("centimeters", "cm"),
+            ("centimeter", "cm"),
+            ("millimeters", "mm"),
+            ("millimeter", "mm"),
+        ];
+
+        for &(unit_word, abbreviation) in unit_map {
+            if clean == unit_word && i > 0 {
+                // Check if the previous word ends with a digit
+                let prev = &words[i - 1].text;
+                if prev.chars().last().map_or(false, |c| c.is_ascii_digit()) {
+                    replacements.push(Replacement {
+                        start: words[i].start,
+                        end: words[i].end,
+                        text: format!("{}{}", abbreviation, _punct),
+                    });
+                    break; // Only one unit match per word
+                }
+            }
+        }
+
         // "follow up" → "follow-up" when used as compound modifier/noun
         if clean == "follow" && i + 1 < words.len() {
             let (next_clean, next_punct) = strip_trailing_punct(&words[i + 1].lower);
@@ -1233,6 +1287,39 @@ mod tests {
             fix_abbreviations("schedule a follow up."),
             "schedule a follow-up."
         );
+    }
+
+    // --- Unit abbreviations ---
+
+    #[test]
+    fn test_unit_megabytes() {
+        assert_eq!(fix_abbreviations("500 megabytes"), "500 MB");
+    }
+
+    #[test]
+    fn test_unit_gigabytes() {
+        assert_eq!(fix_abbreviations("16 gigabytes"), "16 GB");
+    }
+
+    #[test]
+    fn test_unit_terabytes() {
+        assert_eq!(fix_abbreviations("2 terabytes"), "2 TB");
+    }
+
+    #[test]
+    fn test_unit_kilometers() {
+        assert_eq!(fix_abbreviations("10 kilometers"), "10 km");
+    }
+
+    #[test]
+    fn test_unit_centimeters() {
+        assert_eq!(fix_abbreviations("30 centimeters"), "30 cm");
+    }
+
+    #[test]
+    fn test_unit_no_preceding_number() {
+        // Without a preceding number, don't abbreviate
+        assert_eq!(fix_abbreviations("many megabytes"), "many megabytes");
     }
 
     // --- Format with commas ---

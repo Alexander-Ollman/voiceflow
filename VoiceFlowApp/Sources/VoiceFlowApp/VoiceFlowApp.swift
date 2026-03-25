@@ -422,7 +422,6 @@ class CorrectionManager: ObservableObject {
 
     private let storageKey = "voiceflow.correctionPatterns"
     private let maxPatterns = 100
-    private let maxAgeDays = 30
 
     init() {
         loadPatterns()
@@ -433,8 +432,7 @@ class CorrectionManager: ObservableObject {
     func loadPatterns() {
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([CorrectionPattern].self, from: data) {
-            let cutoff = Calendar.current.date(byAdding: .day, value: -maxAgeDays, to: Date()) ?? Date.distantPast
-            patterns = decoded.filter { $0.timestamp >= cutoff }
+            patterns = decoded
         }
     }
 
@@ -444,66 +442,77 @@ class CorrectionManager: ObservableObject {
         }
     }
 
-    // MARK: - Detection
+    // MARK: - Manual Add
 
-    /// Detect word-level corrections between original pasted text and current text
-    func detectCorrections(original: String, current: String, targetApp: String) {
-        let origWords = original.split(separator: " ").map(String.init)
-        let currWords = current.split(separator: " ").map(String.init)
-
-        // Simple word-level comparison: walk both arrays looking for differences
-        let minCount = min(origWords.count, currWords.count)
-        var newPatterns: [CorrectionPattern] = []
-
-        for i in 0..<minCount {
-            let origWord = origWords[i]
-            let currWord = currWords[i]
-
-            // Skip if identical
-            guard origWord != currWord else { continue }
-
-            // Only learn if it's a case change or small edit distance (≤2)
-            let isCaseChange = origWord.lowercased() == currWord.lowercased()
-            let distance = levenshtein(origWord.lowercased(), currWord.lowercased())
-
-            if isCaseChange || distance <= 2 {
-                // Check for duplicate
-                let isDuplicate = patterns.contains {
-                    $0.original.lowercased() == origWord.lowercased() &&
-                    $0.corrected == currWord
-                }
-
-                if !isDuplicate {
-                    let pattern = CorrectionPattern(
-                        id: UUID(),
-                        original: origWord,
-                        corrected: currWord,
-                        timestamp: Date(),
-                        targetApp: targetApp
-                    )
-                    newPatterns.append(pattern)
-                }
-            }
+    /// Add a correction manually from the Settings UI
+    func addManualCorrection(original: String, corrected: String) {
+        // Deduplicate
+        patterns.removeAll { $0.original.lowercased() == original.lowercased() }
+        let pattern = CorrectionPattern(
+            id: UUID(),
+            original: original,
+            corrected: corrected,
+            timestamp: Date(),
+            targetApp: "manual"
+        )
+        patterns.append(pattern)
+        if patterns.count > maxPatterns {
+            patterns = Array(patterns.suffix(maxPatterns))
         }
+        savePatterns()
+        syncToRustPipeline(pattern)
+    }
 
-        if !newPatterns.isEmpty {
-            patterns.append(contentsOf: newPatterns)
-            // Enforce max limit (keep newest)
-            if patterns.count > maxPatterns {
-                patterns = Array(patterns.suffix(maxPatterns))
-            }
-            savePatterns()
+    // MARK: - Rust Pipeline Sync
+
+    /// Notify the app to inject this correction into the live Rust pipeline
+    func syncToRustPipeline(_ pattern: CorrectionPattern) {
+        NotificationCenter.default.post(
+            name: .correctionLearned,
+            object: nil,
+            userInfo: ["original": pattern.original, "corrected": pattern.corrected]
+        )
+    }
+
+    // MARK: - Display Corrections
+
+    /// Apply stored corrections to text for real-time display preview
+    func applyStoredCorrections(_ text: String) -> String {
+        guard !patterns.isEmpty else { return text }
+        var result = text
+        // Apply each correction (case-insensitive word replacement)
+        for pattern in patterns {
+            result = result.replacingOccurrencesOfWordBoundary(
+                of: pattern.original, with: pattern.corrected
+            )
         }
+        return result
     }
 
     // MARK: - Delete & Clear
 
     func deletePattern(id: UUID) {
+        // Find the pattern before removing so we can notify the Rust pipeline
+        if let pattern = patterns.first(where: { $0.id == id }) {
+            NotificationCenter.default.post(
+                name: .correctionRemoved,
+                object: nil,
+                userInfo: ["original": pattern.original]
+            )
+        }
         patterns.removeAll { $0.id == id }
         savePatterns()
     }
 
     func clearAll() {
+        // Notify Rust pipeline to remove each correction
+        for pattern in patterns {
+            NotificationCenter.default.post(
+                name: .correctionRemoved,
+                object: nil,
+                userInfo: ["original": pattern.original]
+            )
+        }
         patterns.removeAll()
         savePatterns()
     }
@@ -526,34 +535,45 @@ class CorrectionManager: ObservableObject {
         """
     }
 
-    // MARK: - Levenshtein Distance
+}
 
-    private func levenshtein(_ a: String, _ b: String) -> Int {
-        let aChars = Array(a)
-        let bChars = Array(b)
-        let aLen = aChars.count
-        let bLen = bChars.count
+// MARK: - Correction Notification
 
-        if aLen == 0 { return bLen }
-        if bLen == 0 { return aLen }
+extension Notification.Name {
+    static let correctionLearned = Notification.Name("voiceflow.correctionLearned")
+    static let correctionRemoved = Notification.Name("voiceflow.correctionRemoved")
+}
 
-        var prev = Array(0...bLen)
-        var curr = [Int](repeating: 0, count: bLen + 1)
+// MARK: - String Word-Boundary Replace
 
-        for i in 1...aLen {
-            curr[0] = i
-            for j in 1...bLen {
-                let cost = aChars[i - 1] == bChars[j - 1] ? 0 : 1
-                curr[j] = min(
-                    prev[j] + 1,      // deletion
-                    curr[j - 1] + 1,  // insertion
-                    prev[j - 1] + cost // substitution
-                )
+private extension String {
+    /// Case-insensitive word-boundary replacement (mirrors Rust's `case_insensitive_replace_all`)
+    func replacingOccurrencesOfWordBoundary(of target: String, with replacement: String) -> String {
+        let lower = self.lowercased()
+        let lowerTarget = target.lowercased()
+        guard !lowerTarget.isEmpty else { return self }
+
+        var result = ""
+        var searchStart = lower.startIndex
+
+        while let range = lower.range(of: lowerTarget, range: searchStart..<lower.endIndex) {
+            // Check word boundaries
+            let atWordStart = range.lowerBound == lower.startIndex
+                || !self[self.index(before: range.lowerBound)].isLetter
+            let atWordEnd = range.upperBound == lower.endIndex
+                || !self[range.upperBound].isLetter
+
+            if atWordStart && atWordEnd {
+                result += self[searchStart..<range.lowerBound]
+                result += replacement
+                searchStart = range.upperBound
+            } else {
+                result += String(self[searchStart...range.lowerBound])
+                searchStart = self.index(after: range.lowerBound)
             }
-            prev = curr
         }
-
-        return prev[bLen]
+        result += self[searchStart...]
+        return result
     }
 }
 
@@ -1127,7 +1147,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var wizardController: SetupWizardController?
     private var audioLevelCancellable: AnyCancellable?
     private var screenshotCapture = ScreenshotCapture()
-    private var pendingVisualContext: Task<String?, Never>?
+    private var isVisualContextRecording = false
+
+    // Moonshine streaming engine (Beta)
+    var moonshineEngine = MoonshineStreamingEngine()
+    private var streamingTextCancellable: AnyCancellable?
+    private var isStreamingActive = false
 
     // AI Result panel
     var aiResultPanel: NSPanel?
@@ -1169,10 +1194,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // User preference for visual context
-    var visualContextEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "visualContextEnabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "visualContextEnabled") }
+    // User preference for streaming transcription (Beta)
+    var streamingEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "streamingEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "streamingEnabled") }
+    }
+
+    var streamingModelSize: MoonshineStreamingEngine.StreamingModelSize {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "streamingModelSize") ?? "small"
+            return MoonshineStreamingEngine.StreamingModelSize(rawValue: raw) ?? .small
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "streamingModelSize")
+        }
     }
 
     // User preferences for punctuation options
@@ -1312,11 +1347,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+        // Listen for learned corrections and inject into Rust pipeline
+        NotificationCenter.default.addObserver(
+            forName: .correctionLearned,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self,
+                  let info = notification.userInfo,
+                  let original = info["original"] as? String,
+                  let corrected = info["corrected"] as? String else { return }
+            MainActor.assumeIsolated {
+                self.voiceFlow.addReplacement(original: original, corrected: corrected)
+            }
+        }
+
+        // Listen for removed corrections and remove from Rust pipeline
+        NotificationCenter.default.addObserver(
+            forName: .correctionRemoved,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self,
+                  let info = notification.userInfo,
+                  let original = info["original"] as? String else { return }
+            MainActor.assumeIsolated {
+                self.voiceFlow.removeReplacement(original: original)
+            }
+        }
+
+        // Auto-load Moonshine streaming model if enabled and downloaded
+        if streamingEnabled {
+            let size = streamingModelSize
+            if MoonshineStreamingEngine.isModelDownloaded(size) {
+                do {
+                    try moonshineEngine.loadModel(size: size)
+                    NSLog("[VoiceFlow] Streaming model loaded at launch: %@", size.rawValue)
+                    // Unload the built-in STT engine — streaming replaces it
+                    voiceFlow.unloadStt()
+                    NSLog("[VoiceFlow] STT engine unloaded (streaming replaces it)")
+                } catch {
+                    NSLog("[VoiceFlow] Failed to load streaming model at launch: %@", error.localizedDescription)
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // Clean up AI result key monitors
         removeAIResultKeyMonitors()
+
+        // Clean up streaming engine
+        moonshineEngine.unloadModel()
 
         // Clean up resources before termination to prevent memory leaks
         // This ensures the Rust side properly releases all model memory
@@ -1588,17 +1671,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Overlay Setup
 
     private func setupOverlay() {
-        // Create floating panel
-        let panelWidth: CGFloat = 200
-        let panelHeight: CGFloat = 70
-
-        // Get main screen
-        guard let screen = NSScreen.main else { return }
+        // Card envelope: 420 wide, up to 40% of screen height + padding for status bar
+        let screen = NSScreen.main
+        let screenHeight = screen?.visibleFrame.height ?? 800
+        let panelWidth: CGFloat = 420
+        let panelHeight: CGFloat = screenHeight * 0.4 + 80
 
         // Position at bottom center of screen, above the dock
-        let screenFrame = screen.visibleFrame
+        let screenFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let panelX = screenFrame.midX - panelWidth / 2
-        let panelY = screenFrame.minY + 80  // 80pt above dock area
+        let panelY = screenFrame.minY + 80  // bottom edge 80pt above dock area
 
         let panel = NSPanel(
             contentRect: NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight),
@@ -1813,10 +1895,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showOverlay(state: OverlayState.RecordingState) {
         overlayState.state = state
-        // Resize panel for AI processing (wider to fit text)
-        if case .aiProcessing = state {
+        // Resize panel based on state
+        switch state {
+        case .streaming, .formatting:
+            // Card mode: large transparent envelope — SwiftUI handles visible size
+            let maxH = (activeScreen()?.visibleFrame.height ?? 800) * 0.4 + 80
+            overlayPanel?.setContentSize(NSSize(width: 420, height: maxH))
+        case .aiProcessing:
             overlayPanel?.setContentSize(NSSize(width: 260, height: 70))
-        } else {
+        default:
             overlayPanel?.setContentSize(NSSize(width: 200, height: 70))
         }
         repositionOverlay()
@@ -1831,12 +1918,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hotkey Setup
 
     private func setupHotkey() {
-        // Option + Space: hold to record, release to stop and paste
+        // Option + Space: hold to record, release to stop and paste (text-only)
         hotkeyManager.register(
+            id: 1,
             keyCode: UInt32(kVK_Space),
             modifiers: UInt32(optionKey),
             onPress: { [weak self] in
                 DispatchQueue.main.async {
+                    self?.isVisualContextRecording = false
+                    self?.startRecording()
+                }
+            },
+            onRelease: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.stopRecordingAndPaste()
+                }
+            }
+        )
+
+        // Control + Option + Space: hold to record with visual context (screenshot + multimodal)
+        hotkeyManager.register(
+            id: 2,
+            keyCode: UInt32(kVK_Space),
+            modifiers: UInt32(controlKey | optionKey),
+            onPress: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.isVisualContextRecording = true
                     self?.startRecording()
                 }
             },
@@ -1858,42 +1965,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Determine if a transcript is complex enough to benefit from visual context (VLM).
-    /// Short or trivial transcripts don't need screen context — saves VLM + LLM prompt overhead.
-    private func needsVisualContext(transcript: String) -> Bool {
-        let words = transcript.split(separator: " ")
-
-        // Rule 1: Very short transcripts (< 5 words) rarely need visual context
-        guard words.count >= 5 else { return false }
-
-        // Rule 2: If transcript contains only common/stop words, skip
-        // (e.g., "yes I think so too" doesn't need screen context)
-        let commonWords: Set<String> = [
-            "yes", "no", "ok", "okay", "sure", "thanks", "thank", "you",
-            "please", "hello", "hi", "hey", "bye", "goodbye", "right",
-            "i", "me", "my", "we", "the", "a", "an", "is", "are", "was",
-            "it", "that", "this", "so", "and", "but", "or", "not", "just",
-            "do", "did", "have", "has", "had", "will", "would", "can",
-            "could", "should", "think", "know", "like", "go", "get",
-            "see", "look", "make", "want", "need", "let", "say", "said",
-            "well", "also", "too", "very", "really", "actually", "maybe",
-            "here", "there", "now", "then", "when", "what", "how", "why",
-            "who", "where", "which", "all", "some", "any", "much", "many",
-            "good", "great", "fine", "new", "old", "big", "little", "more",
-            "one", "two", "three", "four", "five", "first", "last", "next",
-            "up", "down", "in", "on", "at", "to", "for", "of", "with",
-            "from", "by", "about", "into", "over", "after", "before",
-            "been", "being", "going", "come", "back", "out", "still",
-            "if", "them", "they", "their", "he", "she", "his", "her",
-            "its", "our", "your", "be", "am", "were", "done", "got",
-        ]
-        let hasUncommonWord = words.contains { word in
-            !commonWords.contains(word.lowercased().trimmingCharacters(in: .punctuationCharacters))
-        }
-
-        return hasUncommonWord
-    }
-
     private func startRecording() {
         guard !isRecording else { return }
 
@@ -1902,8 +1973,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isRecording = true
             recordingMenuItem?.title = "Recording... (release ⌥ Space)"
 
-            // Show overlay
-            showOverlay(state: .recording)
+            // If streaming is enabled and model is loaded, start streaming session
+            if streamingEnabled && moonshineEngine.isLoaded {
+                do {
+                    try moonshineEngine.beginSession()
+                    isStreamingActive = true
+
+                    // Wire audio chunks to streaming engine
+                    // Audio chunks arrive from the audio tap thread — dispatch to main actor
+                    let engine = moonshineEngine
+                    audioRecorder.onAudioChunk = { chunk in
+                        Task { @MainActor in
+                            engine.feedAudioChunk(chunk)
+                        }
+                    }
+
+                    // Subscribe to partial text updates for overlay
+                    streamingTextCancellable = moonshineEngine.$partialText
+                        .receive(on: DispatchQueue.main)
+                        .sink { [weak self] text in
+                            guard let self = self, self.isStreamingActive else { return }
+                            // Apply stored corrections to streaming display for real-time preview
+                            let displayText = CorrectionManager.shared.applyStoredCorrections(text)
+                            self.overlayState.state = .streaming(displayText)
+                        }
+
+                    showOverlay(state: .streaming(""))
+                } catch {
+                    NSLog("[VoiceFlow] Streaming session failed to start, falling back to normal: %@", error.localizedDescription)
+                    isStreamingActive = false
+                    audioRecorder.onAudioChunk = nil
+                    showOverlay(state: .recording)
+                }
+            } else {
+                isStreamingActive = false
+                showOverlay(state: .recording)
+            }
+
+            // Show overlay (already shown above based on streaming state)
+            // showOverlay(state: .recording)  -- handled above
 
             // Subscribe to audio level changes
             audioLevelCancellable = audioRecorder.$audioLevel
@@ -1912,20 +2020,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.overlayState.audioLevel = level
                 }
 
-            // Start visual context capture in parallel with recording
-            let hasVlm: Bool = {
-                if let ptr = voiceflow_current_vlm_model() {
-                    voiceflow_free_string(ptr)
-                    return true
-                }
-                return false
-            }()
-            if visualContextEnabled && hasVlm {
+            // Visual context: capture screenshot when using Control+Option+Space hotkey
+            if isVisualContextRecording {
                 if !ScreenshotCapture.hasPermission() {
-                    // Show one-time alert directing user to grant Screen Recording
                     let alert = NSAlert()
                     alert.messageText = "Screen Recording Permission Required"
-                    alert.informativeText = "Visual Context is enabled but VoiceFlow doesn't have Screen Recording permission. Please go to System Settings > Privacy & Security > Screen Recording and enable VoiceFlow, or disable Visual Context in Settings."
+                    alert.informativeText = "Visual context dictation requires Screen Recording permission. Please go to System Settings > Privacy & Security > Screen Recording and enable VoiceFlow."
                     alert.alertStyle = .informational
                     alert.addButton(withTitle: "Open System Settings")
                     alert.addButton(withTitle: "Continue Without")
@@ -1935,18 +2035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             NSWorkspace.shared.open(url)
                         }
                     }
-                } else {
-                    let capture = screenshotCapture
-                    let engine = voiceFlow.asrEngine
-                    pendingVisualContext = Task {
-                        do {
-                            let imageData = try await capture.captureActiveWindow()
-                            return await engine?.analyzeImage(imageData: imageData)
-                        } catch {
-                            NSLog("[VoiceFlow] Visual context capture failed: \(error)")
-                            return nil
-                        }
-                    }
+                    isVisualContextRecording = false
                 }
             }
         } catch {
@@ -1957,18 +2046,204 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopRecordingAndPaste() {
         guard isRecording else { return }
 
-        // Cancel audio level subscription
+        // Cancel audio level and streaming subscriptions
         audioLevelCancellable?.cancel()
         audioLevelCancellable = nil
+        streamingTextCancellable?.cancel()
+        streamingTextCancellable = nil
+        audioRecorder.onAudioChunk = nil
+
+        let wasStreaming = isStreamingActive
+        isStreamingActive = false
 
         let audio = audioRecorder.stopRecording()
         isRecording = false
         recordingMenuItem?.title = "Hold ⌥ Space to Record"
 
+        // Streaming path: get raw transcript from engine, then format via LLM
+        if wasStreaming {
+            let rawTranscript = moonshineEngine.endSession()
+
+            guard !rawTranscript.isEmpty else {
+                hideOverlay()
+                showNotification(title: "No Speech", body: "No speech was detected")
+                return
+            }
+
+            showOverlay(state: .formatting(""))
+
+            let frontmostApp = NSWorkspace.shared.frontmostApplication
+            let _ = frontmostApp.flatMap { AppProfileManager.shared.ensureProfile(for: $0) }
+            let appPrompt = frontmostApp?.bundleIdentifier.flatMap {
+                AppProfileManager.shared.promptForApp(bundleId: $0)
+            } ?? ""
+            let frontApp = frontmostApp?.localizedName ?? "Unknown"
+            let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
+            let baseContext = formattingLevel.systemPrompt + appPrompt
+            let currentSpacingMode = spacingMode
+
+            // Determine mid-sentence state (same logic as non-streaming path)
+            let terminalBundleIds: Set<String> = [
+                "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty",
+                "dev.warp.Warp-Stable", "io.alacritty", "com.github.wez.wezterm", "net.kovidgoyal.kitty",
+            ]
+            let isTerminal = terminalBundleIds.contains(frontmostApp?.bundleIdentifier ?? "")
+            let isMidSentence: Bool
+            if isTerminal {
+                let lastOutput = self.lastPastedText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                isMidSentence = lastOutput.last != nil && !".?!".contains(String(lastOutput.last!))
+            } else if let inputText = inputFieldText, !inputText.isEmpty {
+                let lastChar = inputText.trimmingCharacters(in: .whitespacesAndNewlines).last
+                isMidSentence = lastChar != nil && !".?!".contains(String(lastChar!))
+            } else {
+                isMidSentence = false
+            }
+
+            Task {
+                var context = baseContext
+                if let inputText = inputFieldText, !inputText.isEmpty {
+                    context += """
+
+                    [INPUT CONTEXT]
+                    Text already in the input field (before the cursor):
+                    \(inputText)
+                    You are CONTINUING from this text. Rules:
+                    - Do NOT repeat or rewrite any of the existing text.
+                    - If the existing text ends mid-sentence (no final . ? ! or newline), your output must seamlessly continue the sentence. Do NOT capitalize your first word (unless it is "I" or a proper noun). Do NOT add a period at the end unless the thought is truly complete.
+                    - If the existing text ends with sentence-ending punctuation (. ? !) or a newline, start a new sentence with a capital letter.
+                    - Your output should read as a natural continuation — as if the existing text and your output were written together.
+                    """
+                }
+
+                if isMidSentence {
+                    context += "\n[MID_SENTENCE_CONTINUATION]"
+                }
+
+                let isEmptyField = inputFieldText == nil || (inputFieldText?.isEmpty ?? true)
+                if isEmptyField {
+                    context += """
+
+                    [EMPTY_FIELD]
+                    The input field is empty. This may be a form field (name, email, address, zip code, etc.).
+                    Do NOT add a trailing period unless the user's speech clearly forms a complete sentence.
+                    For short entries (names, single words, codes, numbers), output them WITHOUT trailing punctuation.
+                    """
+                }
+
+                let correctionHint = CorrectionManager.shared.correctionContext(for: "")
+                if !correctionHint.isEmpty {
+                    context += correctionHint
+                }
+
+                // Format raw streaming transcript through LLM with token streaming
+                NSLog("[VoiceFlow] Streaming: formatting raw transcript (%d chars) via LLM (streaming)", rawTranscript.count)
+                let accumulated = TokenAccumulator()
+                if let formattedText = await voiceFlow.formatTextStreaming(
+                    rawTranscript, context: context,
+                    onToken: { [weak self] token in
+                        accumulated.text += token
+                        self?.overlayState.state = .formatting(accumulated.text)
+                    }
+                ) {
+                    // Apply snippet expansion
+                    var expandedText = SnippetManager.shared.expandSnippets(in: formattedText)
+
+                    // Strip trailing period from short outputs in empty fields
+                    if isEmptyField {
+                        let trimmed = expandedText.trimmingCharacters(in: .whitespaces)
+                        let wordCount = trimmed.split(separator: " ").count
+                        let hasInternalPeriod = trimmed.dropLast().contains(".")
+                        if wordCount <= 8 && !hasInternalPeriod && trimmed.hasSuffix(".") {
+                            expandedText = String(trimmed.dropLast())
+                        }
+                    }
+
+                    // Enforce mid-sentence continuation casing
+                    if isMidSentence && !expandedText.isEmpty {
+                        let first = expandedText.first!
+                        if first.isUppercase {
+                            let isStandaloneI = first == "I"
+                                && (expandedText.count == 1 || !expandedText.dropFirst().first!.isLetter)
+                            let isAcronym = expandedText.count >= 2
+                                && expandedText.dropFirst().first!.isUppercase
+                            if !isStandaloneI && !isAcronym {
+                                expandedText = expandedText.prefix(1).lowercased() + expandedText.dropFirst()
+                            }
+                        }
+                    }
+
+                    // Apply spacing mode using pre-captured cursor context.
+                    // CursorContext.getCharacterBeforeCursor() would return .unavailable
+                    // here because the overlay has focus, not the original text field.
+                    // Use inputFieldText (captured before the Task) to derive spacing.
+                    var spacedText: String
+                    if currentSpacingMode == .contextAware {
+                        if let inputText = inputFieldText, !inputText.isEmpty {
+                            let lastChar = inputText.last!
+                            let isDash = lastChar == "\u{2014}" || lastChar == "\u{2013}" || lastChar == "-"
+                            if !lastChar.isWhitespace && !lastChar.isNewline && !isDash,
+                               let first = expandedText.first, first.isLetter || first.isNumber {
+                                spacedText = " " + expandedText
+                            } else {
+                                spacedText = expandedText
+                            }
+                        } else {
+                            spacedText = expandedText
+                        }
+                    } else {
+                        spacedText = currentSpacingMode.apply(to: expandedText)
+                    }
+                    if !spacedText.isEmpty && !spacedText.hasSuffix(" ") && !spacedText.hasSuffix("\n") {
+                        switch currentSpacingMode {
+                        case .contextAware:
+                            if inputFieldText == nil {
+                                spacedText += " "
+                            }
+                        case .smart, .always, .trailing:
+                            spacedText += " "
+                        }
+                    }
+
+                    // Log transcription
+                    let logEntry = TranscriptionEntry(
+                        rawTranscript: rawTranscript,
+                        formattedText: spacedText.trimmingCharacters(in: .whitespaces),
+                        modelId: "moonshine-streaming",
+                        sttEngine: "moonshine-streaming",
+                        transcriptionMs: 0,  // streaming — no separate STT phase
+                        llmMs: 0,
+                        totalMs: 0,
+                        targetApp: frontApp
+                    )
+                    TranscriptionLog.shared.append(logEntry)
+
+                    // Copy to clipboard and paste
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.setString(spacedText, forType: .string)
+
+                    await MainActor.run { hideOverlay() }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    await MainActor.run {
+                        simulatePaste()
+                    }
+
+                    showNotification(
+                        title: "Pasted (streaming)",
+                        body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
+                    )
+                    self.lastPastedText = spacedText
+                } else {
+                    await MainActor.run { hideOverlay() }
+                    showNotification(title: "Formatting Failed", body: voiceFlow.lastError ?? "Unknown error")
+                }
+            }
+            return
+        }
+
+        // Non-streaming path (existing flow)
         guard !audio.isEmpty else {
             hideOverlay()
-            pendingVisualContext?.cancel()
-            pendingVisualContext = nil
             showNotification(title: "No Audio", body: "No audio was captured")
             return
         }
@@ -1987,50 +2262,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Read existing text from the focused input field (must be on main thread before async)
         let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
 
-        let visualContextTask = pendingVisualContext
-        pendingVisualContext = nil
         let baseContext = formattingLevel.systemPrompt + appPrompt
         let currentSpacingMode = spacingMode
-
-        // Gate visual context based on recording duration (audio is 16kHz mono)
-        let recordingDurationSecs = Double(audio.count) / 16000.0
-        let skipVisualContext = recordingDurationSecs < 1.5
-        if skipVisualContext {
-            NSLog("[VoiceFlow] Short recording (%.1fs) — skipping visual context", recordingDurationSecs)
-            visualContextTask?.cancel()
-        }
+        let wantsVisualContext = isVisualContextRecording
+        let capture = screenshotCapture
 
         Task {
-            // Await pending visual context (with 5s timeout) — only if recording was long enough
-            let visualDescription: String? = await {
-                guard !skipVisualContext, let task = visualContextTask else { return nil }
-                return await withTaskGroup(of: String?.self) { group in
-                    group.addTask { await task.value }
-                    group.addTask {
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        return nil
-                    }
-                    let result = await group.next() ?? nil
-                    group.cancelAll()
-                    return result
+            // Capture screenshot if visual context recording (Control+Option+Space)
+            var screenshotData: Data? = nil
+            if wantsVisualContext && ScreenshotCapture.hasPermission() {
+                do {
+                    screenshotData = try await capture.captureActiveWindow()
+                    NSLog("[VoiceFlow] Visual context: captured screenshot (%d bytes)", screenshotData?.count ?? 0)
+                } catch {
+                    NSLog("[VoiceFlow] Visual context capture failed: %@", error.localizedDescription)
                 }
-            }()
-
-            // Combine formatting level prompt + app context + visual context + input field context
-            var context = baseContext
-            if let visualDescription = visualDescription, !visualDescription.isEmpty {
-                context += """
-
-                [VISUAL CONTEXT — HIGH PRIORITY]
-                The following was extracted from the user's active screen:
-                \(visualDescription)
-                CRITICAL: When the speaker says a word that sounds like a term visible on screen, \
-                ALWAYS use the on-screen spelling. Screen text is ground truth — it overrides phonetic guesses. \
-                Examples: if screen shows "era-code" and speaker says something like "era core", output "Era Code". \
-                If screen shows "OAuth" and speaker says "oh auth", output "OAuth". \
-                Use NAMES and TERMS for proper noun spelling. Use CONTEXT and NEARBY_TEXT to match tone and style.
-                """
             }
+
+            // Combine formatting level prompt + app context + input field context
+            var context = baseContext
             // Terminal apps have unreliable AX text buffers (includes shell output,
             // prompts, status bars). Only trust mid-sentence detection for standard text fields.
             let terminalBundleIds: Set<String> = [
@@ -2105,15 +2355,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 context += correctionHint
             }
 
-            if let result = await voiceFlow.process(audio: audio, context: context) {
-                // Log visual context decision for tuning heuristics
-                let wouldNeedVLM = self.needsVisualContext(transcript: result.rawTranscript)
-                if !skipVisualContext && !wouldNeedVLM {
-                    NSLog("[VoiceFlow] VLM ran but transcript didn't need it: \"%@\" (%d words)",
-                          result.rawTranscript,
-                          result.rawTranscript.split(separator: " ").count)
-                }
+            // Process audio: STT + LLM formatting (and re-format with image if visual context)
+            var processResult = await voiceFlow.process(audio: audio, context: context)
 
+            // If visual context recording with screenshot, re-format through multimodal LLM
+            if let screenshot = screenshotData, let baseResult = processResult {
+                NSLog("[VoiceFlow] Visual context: re-formatting with screenshot (%d bytes)", screenshot.count)
+                if let imageResult = await voiceFlow.processTextWithImage(
+                    baseResult.rawTranscript, context: context, imageData: screenshot
+                ) {
+                    processResult = imageResult
+                } else {
+                    NSLog("[VoiceFlow] Multimodal formatting failed, using text-only result")
+                }
+            }
+
+            if let result = processResult {
                 // Meta-command: "summarize this"
                 let summarizeEnabled = UserDefaults.standard.bool(forKey: "aiFeatureSummarizeEnabled")
                 let normalizedTranscript = result.rawTranscript.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2131,7 +2388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // AI voice commands: reply, rewrite, proofread, continue
                 if summarizeEnabled, let aiCommand = AICommand.parse(normalizedTranscript) {
                     await MainActor.run {
-                        handleAICommand(aiCommand, targetApp: frontmostApp, visualDescription: visualDescription)
+                        handleAICommand(aiCommand, targetApp: frontmostApp, visualDescription: nil)
                     }
                     return
                 }
@@ -2169,16 +2426,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
 
-                // Apply spacing mode to the expanded text
-                var spacedText = currentSpacingMode.apply(to: expandedText)
-
-                // Add trailing space only when the next dictation can't determine its own leading space.
-                // In contextAware mode with working AX, the next dictation reads the cursor and adds
-                // a leading space itself — no trailing space needed. Without AX, add trailing as safety net.
+                // Apply spacing mode using pre-captured cursor context.
+                // CursorContext.getCharacterBeforeCursor() would return .unavailable
+                // here because the overlay has focus, not the original text field.
+                // Use inputFieldText (captured before the Task) to derive spacing.
+                var spacedText: String
+                if currentSpacingMode == .contextAware {
+                    if let inputText = inputFieldText, !inputText.isEmpty {
+                        let lastChar = inputText.last!
+                        let isDash = lastChar == "\u{2014}" || lastChar == "\u{2013}" || lastChar == "-"
+                        if !lastChar.isWhitespace && !lastChar.isNewline && !isDash,
+                           let first = expandedText.first, first.isLetter || first.isNumber {
+                            spacedText = " " + expandedText
+                        } else {
+                            spacedText = expandedText
+                        }
+                    } else {
+                        spacedText = expandedText
+                    }
+                } else {
+                    spacedText = currentSpacingMode.apply(to: expandedText)
+                }
                 if !spacedText.isEmpty && !spacedText.hasSuffix(" ") && !spacedText.hasSuffix("\n") {
                     switch currentSpacingMode {
                     case .contextAware:
-                        if case .unavailable = CursorContext.getCharacterBeforeCursor() {
+                        if inputFieldText == nil {
                             spacedText += " "
                         }
                     case .smart, .always, .trailing:
@@ -2188,11 +2460,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 // Log the transcription
                 let currentModel: String = {
-                    if let vlmPtr = voiceflow_current_vlm_model() {
-                        let s = String(cString: vlmPtr)
-                        voiceflow_free_string(vlmPtr)
-                        return s
-                    }
                     if let llmPtr = voiceflow_current_model() {
                         let s = String(cString: llmPtr)
                         voiceflow_free_string(llmPtr)
@@ -2245,22 +2512,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 // Track last pasted text for terminal continuation detection
                 self.lastPastedText = spacedText
-
-                // Post-paste correction detection: read back text after delay to detect user edits
-                let pastedText = spacedText.trimmingCharacters(in: .whitespaces)
-                let pastedLength = pastedText.count
-                let correctionApp = frontApp
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3s delay
-                    if let currentText = CursorContext.getTextBeforeCursor(maxLength: pastedLength + 50) {
-                        let region = String(currentText.suffix(pastedLength + 10))
-                        if region != pastedText && !region.isEmpty && region.count >= pastedText.count / 2 {
-                            CorrectionManager.shared.detectCorrections(
-                                original: pastedText, current: region, targetApp: correctionApp
-                            )
-                        }
-                    }
-                }
             } else {
                 await MainActor.run {
                     hideOverlay()
@@ -2695,60 +2946,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Global Hotkey Manager
 
 final class GlobalHotkeyManager {
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
+    private static var eventHandlerInstalled = false
 
-    private static var onPressHandler: (() -> Void)?
-    private static var onReleaseHandler: (() -> Void)?
+    private static var pressHandlers: [UInt32: () -> Void] = [:]
+    private static var releaseHandlers: [UInt32: () -> Void] = [:]
 
-    func register(keyCode: UInt32, modifiers: UInt32, onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
-        GlobalHotkeyManager.onPressHandler = onPress
-        GlobalHotkeyManager.onReleaseHandler = onRelease
+    func register(id: UInt32, keyCode: UInt32, modifiers: UInt32, onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
+        GlobalHotkeyManager.pressHandlers[id] = onPress
+        GlobalHotkeyManager.releaseHandlers[id] = onRelease
+
+        // Install the shared event handler once
+        if !GlobalHotkeyManager.eventHandlerInstalled {
+            var eventTypes = [
+                EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
+            ]
+
+            InstallEventHandler(
+                GetApplicationEventTarget(),
+                { (_, event, _) -> OSStatus in
+                    // Extract the hotkey ID from the event
+                    var hotkeyID = EventHotKeyID()
+                    GetEventParameter(
+                        event,
+                        EventParamName(kEventParamDirectObject),
+                        EventParamType(typeEventHotKeyID),
+                        nil,
+                        MemoryLayout<EventHotKeyID>.size,
+                        nil,
+                        &hotkeyID
+                    )
+
+                    let kind = GetEventKind(event)
+                    if kind == UInt32(kEventHotKeyPressed) {
+                        GlobalHotkeyManager.pressHandlers[hotkeyID.id]?()
+                    } else if kind == UInt32(kEventHotKeyReleased) {
+                        GlobalHotkeyManager.releaseHandlers[hotkeyID.id]?()
+                    }
+                    return noErr
+                },
+                2,
+                &eventTypes,
+                nil,
+                nil
+            )
+            GlobalHotkeyManager.eventHandlerInstalled = true
+        }
 
         var hotKeyID = EventHotKeyID()
         hotKeyID.signature = OSType(0x564643) // "VFC"
-        hotKeyID.id = 1
+        hotKeyID.id = id
 
-        // Register for both press and release events
-        var eventTypes = [
-            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
-            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
-        ]
-
-        // Install event handler
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { (_, event, _) -> OSStatus in
-                var eventKind: UInt32 = 0
-                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeUInt32), nil, MemoryLayout<UInt32>.size, nil, &eventKind)
-
-                let kind = GetEventKind(event)
-                if kind == UInt32(kEventHotKeyPressed) {
-                    GlobalHotkeyManager.onPressHandler?()
-                } else if kind == UInt32(kEventHotKeyReleased) {
-                    GlobalHotkeyManager.onReleaseHandler?()
-                }
-                return noErr
-            },
-            2,
-            &eventTypes,
-            nil,
-            nil
-        )
-
-        // Register hotkey
+        var ref: EventHotKeyRef?
         RegisterEventHotKey(
             keyCode,
             modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
-            &hotKeyRef
+            &ref
         )
+
+        if let ref = ref {
+            hotKeyRefs[id] = ref
+        }
     }
 
     deinit {
-        if let hotKeyRef = hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
+        for (_, ref) in hotKeyRefs {
+            UnregisterEventHotKey(ref)
         }
     }
 }
@@ -3164,6 +3431,7 @@ struct StatCardView: View {
 
 struct TranscriptionRowView: View {
     let entry: TranscriptionEntry
+    @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -3182,6 +3450,20 @@ struct TranscriptionRowView: View {
                         .foregroundColor(.green)
                         .clipShape(Capsule())
                 }
+                Button(action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entry.formattedText, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        copied = false
+                    }
+                }) {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11))
+                        .foregroundColor(copied ? .green : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Copy to clipboard")
                 Text(timeString(entry.timestamp))
                     .font(.caption2)
                     .foregroundColor(.secondary)
@@ -3217,11 +3499,12 @@ struct TranscriptionRowView: View {
 // MARK: - Style Settings View
 
 struct StyleSettingsView: View {
-    @AppStorage("visualContextEnabled") private var visualContextEnabled = false
     @AppStorage("appProfilesEnabled") private var appProfilesEnabled = true
     @ObservedObject private var profileManager = AppProfileManager.shared
     @ObservedObject private var correctionManager = CorrectionManager.shared
     @State private var editingProfile: AppProfile? = nil
+    @State private var newCorrectionOriginal = ""
+    @State private var newCorrectionCorrected = ""
 
     @State private var formattingLevel: FormattingLevel = {
         let raw = UserDefaults.standard.string(forKey: "formattingLevel") ?? FormattingLevel.moderate.rawValue
@@ -3374,49 +3657,22 @@ struct StyleSettingsView: View {
                 // Visual Context
                 GroupBox {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle(isOn: $visualContextEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Screen Capture")
-                                    .font(.system(size: 13, weight: .medium))
-                                Text("Extract names and terms from your active window to improve spelling.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
+                        HStack(spacing: 6) {
+                            Image(systemName: "keyboard")
+                                .font(.caption)
+                                .foregroundColor(.blue)
+                            Text("Hold **Control + Option + Space** to dictate with screen context.")
+                                .font(.system(size: 13))
                         }
-                        .toggleStyle(.switch)
-                        .disabled(!hasVlmModel)
-                        .onChange(of: visualContextEnabled) { newValue in
-                            if newValue && !ScreenshotCapture.hasPermission() {
+                        Text("Captures a screenshot and uses the Qwen3.5 multimodal model to incorporate on-screen terms, names, and context into your dictation. Requires Screen Recording permission.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        if !ScreenshotCapture.hasPermission() {
+                            Button("Grant Screen Recording Permission") {
                                 ScreenshotCapture.requestPermission()
                             }
-                        }
-
-                        if !hasVlmModel {
-                            HStack(spacing: 6) {
-                                Image(systemName: "info.circle")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                                Text("Download a VLM model in the Models tab to enable.")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.orange.opacity(0.08))
-                            .cornerRadius(6)
-                        } else if visualContextEnabled && !ScreenshotCapture.hasPermission() {
-                            HStack(spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                                Text("Screen Recording permission required.")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                            .padding(8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.orange.opacity(0.08))
-                            .cornerRadius(6)
+                            .font(.caption)
                         }
                     }
                     .padding(.vertical, 4)
@@ -3517,15 +3773,37 @@ struct StyleSettingsView: View {
                 // Correction History
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Learns from your edits to fix recurring mistakes automatically.")
+                        Text("Add word corrections to automatically fix common transcription errors.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+
+                        // Manual quick-add form
+                        HStack(spacing: 8) {
+                            TextField("Wrong word", text: $newCorrectionOriginal)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 12, design: .monospaced))
+                            Image(systemName: "arrow.right")
+                                .foregroundColor(.secondary)
+                            TextField("Right word", text: $newCorrectionCorrected)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 12, design: .monospaced))
+                            Button("Add") {
+                                guard !newCorrectionOriginal.isEmpty && !newCorrectionCorrected.isEmpty else { return }
+                                correctionManager.addManualCorrection(
+                                    original: newCorrectionOriginal,
+                                    corrected: newCorrectionCorrected
+                                )
+                                newCorrectionOriginal = ""
+                                newCorrectionCorrected = ""
+                            }
+                            .disabled(newCorrectionOriginal.isEmpty || newCorrectionCorrected.isEmpty)
+                        }
 
                         if !correctionManager.patterns.isEmpty {
                             Divider()
 
                             HStack {
-                                Text("\(correctionManager.patterns.count) correction\(correctionManager.patterns.count == 1 ? "" : "s") learned")
+                                Text("\(correctionManager.patterns.count) correction\(correctionManager.patterns.count == 1 ? "" : "s")")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                 Spacer()
@@ -3580,7 +3858,7 @@ struct StyleSettingsView: View {
                                 Image(systemName: "sparkles")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                Text("No corrections learned yet. Edit text after dictating and VoiceFlow will learn your preferences.")
+                                Text("No corrections yet. Add one above to fix common transcription errors.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -3616,17 +3894,6 @@ struct StyleSettingsView: View {
         }
     }
 
-    private var hasVlmModel: Bool {
-        // Check if any VLM model is downloaded (not just selected)
-        let count = voiceflow_vlm_model_count()
-        for i in 0..<count {
-            let info = voiceflow_vlm_model_info(UInt(i))
-            let downloaded = info.is_downloaded
-            voiceflow_free_vlm_model_info(info)
-            if downloaded { return true }
-        }
-        return false
-    }
 }
 
 // MARK: - AI Features Settings View
@@ -4303,15 +4570,6 @@ struct ConsolidatedModelItem: Identifiable {
     var isDownloaded: Bool
 }
 
-/// VLM (Vision-Language Model) info (mirrors Rust VlmModel)
-struct VlmModelItem: Identifiable {
-    let id: String
-    let displayName: String
-    let dirName: String
-    let sizeGB: Float
-    var isDownloaded: Bool
-}
-
 class ModelManager: ObservableObject {
     @Published var models: [LLMModel] = []
     @Published var currentModelId: String = ""
@@ -4334,12 +4592,6 @@ class ModelManager: ObservableObject {
     @Published var consolidatedModels: [ConsolidatedModelItem] = []
     @Published var downloadingConsolidatedModelId: String?
     @Published var consolidatedDownloadProgress: Double = 0
-
-    // VLM (Vision-Language Model) settings
-    @Published var currentVlmModelId: String? = nil
-    @Published var vlmModels: [VlmModelItem] = []
-    @Published var downloadingVlmModelId: String?
-    @Published var vlmDownloadProgress: Double = 0
 
     private var downloadTask: URLSessionDownloadTask?
     private var moonshineDownloadTasks: [URLSessionDownloadTask] = []
@@ -4389,11 +4641,10 @@ class ModelManager: ObservableObject {
     }
 
     // Available models - filenames must match Rust config exactly
-    private static let availableModels: [(id: String, name: String, filename: String, size: Float, repo: String)] = [
-        ("qwen3-1.7b", "Qwen3 1.7B", "qwen3-1.7b-q4_k_m.gguf", 1.1, "Qwen/Qwen3-1.7B-GGUF"),
-        ("qwen3-4b", "Qwen3 4B", "Qwen3-4B-Q4_K_M.gguf", 2.5, "Qwen/Qwen3-4B-GGUF"),
-        ("smollm3-3b", "SmolLM3 3B", "SmolLM3-Q4_K_M.gguf", 1.92, "ggml-org/SmolLM3-3B-GGUF"),
-        ("gemma2-2b", "Gemma 2 2B", "gemma-2-2b-it-Q4_K_M.gguf", 1.71, "bartowski/gemma-2-2b-it-GGUF"),
+    private static let availableModels: [(id: String, name: String, filename: String, size: Float, repo: String, mmprojFilename: String?, mmprojHfFilename: String?, mmprojSize: Float)] = [
+        ("qwen3.5-0.8b", "Qwen3.5 0.8B", "Qwen3.5-0.8B-Q4_K_M.gguf", 0.53, "unsloth/Qwen3.5-0.8B-GGUF", "mmproj-Qwen3.5-0.8B-F16.gguf", "mmproj-F16.gguf", 0.2),
+        ("qwen3.5-2b", "Qwen3.5 2B", "Qwen3.5-2B-Q4_K_M.gguf", 1.28, "unsloth/Qwen3.5-2B-GGUF", "mmproj-Qwen3.5-2B-F16.gguf", "mmproj-F16.gguf", 0.65),
+        ("qwen3.5-4b", "Qwen3.5 4B", "Qwen3.5-4B-Q4_K_M.gguf", 2.74, "unsloth/Qwen3.5-4B-GGUF", "mmproj-Qwen3.5-4B-F16.gguf", "mmproj-F16.gguf", 0.65),
     ]
 
     init() {
@@ -4401,7 +4652,6 @@ class ModelManager: ObservableObject {
         loadCurrentModel()
         loadSttSettings()
         loadConsolidatedSettings()
-        loadVlmSettings()
     }
 
     // MARK: - Pipeline Mode and Consolidated Model Management
@@ -4559,179 +4809,6 @@ class ModelManager: ObservableObject {
                     DispatchQueue.main.async {
                         self?.downloadError = "Failed to save \(filename): \(error.localizedDescription)"
                         self?.downloadingConsolidatedModelId = nil
-                    }
-                }
-            }
-            task.resume()
-        }
-
-        // Start downloading first file
-        downloadNextFile(0)
-    }
-
-    // MARK: - VLM (Vision-Language Model) Management
-
-    func loadVlmSettings() {
-        // Load current VLM model selection
-        if let vlmPtr = voiceflow_current_vlm_model() {
-            currentVlmModelId = String(cString: vlmPtr)
-            voiceflow_free_string(vlmPtr)
-        } else {
-            currentVlmModelId = nil
-        }
-
-        let count = voiceflow_vlm_model_count()
-        var items: [VlmModelItem] = []
-        for i in 0..<count {
-            let info = voiceflow_vlm_model_info(i)
-            if let idPtr = info.id, let namePtr = info.display_name, let dirPtr = info.dir_name {
-                let item = VlmModelItem(
-                    id: String(cString: idPtr),
-                    displayName: String(cString: namePtr),
-                    dirName: String(cString: dirPtr),
-                    sizeGB: info.size_gb,
-                    isDownloaded: info.is_downloaded
-                )
-                items.append(item)
-            }
-            voiceflow_free_vlm_model_info(info)
-        }
-        vlmModels = items
-    }
-
-    func selectVlmModel(_ modelId: String) {
-        guard modelId != currentVlmModelId else { return }
-        guard let model = vlmModels.first(where: { $0.id == modelId }), model.isDownloaded else { return }
-
-        let success = modelId.withCString { cString in
-            voiceflow_set_vlm_model(cString)
-        }
-
-        if success {
-            currentVlmModelId = modelId
-            needsRestart = true
-        } else {
-            downloadError = "Failed to set VLM model"
-        }
-    }
-
-    func deselectVlmModel() {
-        guard currentVlmModelId != nil else { return }
-
-        let success = voiceflow_set_vlm_model(nil)
-
-        if success {
-            currentVlmModelId = nil
-            needsRestart = true
-        } else {
-            downloadError = "Failed to clear VLM model"
-        }
-    }
-
-    func downloadVlmModel(_ modelId: String) {
-        guard downloadingVlmModelId == nil else { return }
-        guard let model = vlmModels.first(where: { $0.id == modelId }) else {
-            downloadError = "VLM model not found"
-            return
-        }
-
-        // Get HF repo from FFI
-        guard let repoPtr = modelId.withCString({ voiceflow_vlm_model_hf_repo($0) }) else {
-            downloadError = "No HuggingFace repo for VLM model \(modelId)"
-            return
-        }
-        let hfRepo = String(cString: repoPtr)
-        voiceflow_free_string(repoPtr)
-
-        // Get required files from FFI
-        let fileCount = modelId.withCString { voiceflow_vlm_model_file_count($0) }
-        var files: [String] = []
-        for i in 0..<fileCount {
-            if let namePtr = modelId.withCString({ voiceflow_vlm_model_file_name($0, i) }) {
-                files.append(String(cString: namePtr))
-                voiceflow_free_string(namePtr)
-            }
-        }
-
-        guard !files.isEmpty else {
-            downloadError = "No file list for VLM model \(modelId)"
-            return
-        }
-
-        let destDir = modelsDir.appendingPathComponent(model.dirName)
-
-        // Create model directory
-        do {
-            try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true, attributes: nil)
-        } catch {
-            downloadError = "Failed to create model directory: \(error.localizedDescription)"
-            return
-        }
-
-        downloadingVlmModelId = modelId
-        vlmDownloadProgress = 0
-        downloadError = nil
-
-        var completedFiles = 0
-        let totalFiles = files.count
-
-        func downloadNextFile(_ index: Int) {
-            guard index < files.count else {
-                // All done
-                DispatchQueue.main.async { [weak self] in
-                    self?.downloadingVlmModelId = nil
-                    self?.vlmDownloadProgress = 1.0
-                    self?.loadVlmSettings() // Refresh model status
-                }
-                return
-            }
-
-            let filename = files[index]
-            let urlString = "https://huggingface.co/\(hfRepo)/resolve/main/\(filename)"
-            guard let url = URL(string: urlString) else {
-                DispatchQueue.main.async { [weak self] in
-                    self?.downloadError = "Invalid URL for \(filename)"
-                    self?.downloadingVlmModelId = nil
-                }
-                return
-            }
-
-            let destFile = destDir.appendingPathComponent(filename)
-
-            let task = URLSession.shared.downloadTask(with: url) { [weak self] tempURL, response, error in
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self?.downloadError = "Download failed: \(error.localizedDescription)"
-                        self?.downloadingVlmModelId = nil
-                    }
-                    return
-                }
-
-                guard let tempURL = tempURL else {
-                    DispatchQueue.main.async {
-                        self?.downloadError = "Download failed: no file"
-                        self?.downloadingVlmModelId = nil
-                    }
-                    return
-                }
-
-                do {
-                    if FileManager.default.fileExists(atPath: destFile.path) {
-                        try FileManager.default.removeItem(at: destFile)
-                    }
-                    try FileManager.default.moveItem(at: tempURL, to: destFile)
-
-                    completedFiles += 1
-                    DispatchQueue.main.async {
-                        self?.vlmDownloadProgress = Double(completedFiles) / Double(totalFiles)
-                    }
-
-                    // Download next file
-                    downloadNextFile(index + 1)
-                } catch {
-                    DispatchQueue.main.async {
-                        self?.downloadError = "Failed to save \(filename): \(error.localizedDescription)"
-                        self?.downloadingVlmModelId = nil
                     }
                 }
             }
@@ -4920,11 +4997,13 @@ class ModelManager: ObservableObject {
                 }
             }
             let downloadUrl = "https://huggingface.co/\(info.repo)/resolve/main/\(info.filename)"
+            // Show combined size (model + mmproj) for Qwen3.5 multimodal models
+            let totalSize = info.size + info.mmprojSize
             return LLMModel(
                 id: info.id,
                 displayName: info.name,
                 filename: info.filename,
-                sizeGB: info.size,
+                sizeGB: totalSize,
                 downloadUrl: downloadUrl,
                 isDownloaded: isDownloaded
             )
@@ -4932,27 +5011,28 @@ class ModelManager: ObservableObject {
     }
 
     func loadCurrentModel() {
-        // Try to read current model from config file
-        guard let configData = try? String(contentsOf: configPath, encoding: .utf8) else {
-            currentModelId = "qwen3-1.7b" // Default
-            return
-        }
-
-        // Simple TOML parsing for llm_model
-        // Rust uses kebab-case: qwen3-4-b, qwen3-1-7-b, smol-lm3-3-b, gemma2-2-b
-        if configData.contains("qwen3-4-b") {
-            currentModelId = "qwen3-4b"
-        } else if configData.contains("smol-lm3-3-b") {
-            currentModelId = "smollm3-3b"
-        } else if configData.contains("gemma2-2-b") {
-            currentModelId = "gemma2-2b"
+        // Use FFI to get the current model ID
+        if let ptr = voiceflow_current_model() {
+            let modelStr = String(cString: ptr)
+            voiceflow_free_string(ptr)
+            // Map Rust kebab-case IDs to our display IDs
+            switch modelStr {
+            case "qwen3.5-0.8b", "qwen3-5-0-8-b":
+                currentModelId = "qwen3.5-0.8b"
+            case "qwen3.5-2b", "qwen3-5-2-b":
+                currentModelId = "qwen3.5-2b"
+            case "qwen3.5-4b", "qwen3-5-4-b":
+                currentModelId = "qwen3.5-4b"
+            default:
+                currentModelId = "qwen3.5-0.8b"
+            }
         } else {
-            currentModelId = "qwen3-1.7b"
+            currentModelId = "qwen3.5-0.8b" // Default
         }
     }
 
     func selectModel(_ modelId: String) {
-        guard modelId != currentModelId || currentVlmModelId != nil else { return }
+        guard modelId != currentModelId else { return }
         guard let model = models.first(where: { $0.id == modelId }), model.isDownloaded else { return }
 
         // Use FFI function to properly save config (handles TOML format correctly)
@@ -4962,11 +5042,6 @@ class ModelManager: ObservableObject {
 
         if success {
             currentModelId = modelId
-            // Clear VLM selection — only one can be active
-            if currentVlmModelId != nil {
-                voiceflow_set_vlm_model(nil)
-                currentVlmModelId = nil
-            }
             needsRestart = true
         } else {
             downloadError = "Failed to save config"
@@ -4995,6 +5070,12 @@ class ModelManager: ObservableObject {
 
         let destinationURL = modelsDir.appendingPathComponent(model.filename)
 
+        // Find mmproj info for this model
+        let modelInfo = Self.availableModels.first(where: { $0.id == modelId })
+        let mmprojLocalFilename = modelInfo?.mmprojFilename
+        let mmprojHfFilename = modelInfo?.mmprojHfFilename
+        let mmprojRepo = modelInfo?.repo
+
         isDownloading = true
         downloadingModelId = modelId
         downloadProgress = 0
@@ -5002,19 +5083,22 @@ class ModelManager: ObservableObject {
 
         let session = URLSession(configuration: .default, delegate: DownloadDelegate(progress: { [weak self] progress in
             DispatchQueue.main.async {
-                self?.downloadProgress = progress
+                // Scale progress: main model is ~70%, mmproj is ~30%
+                let hasMMProj = mmprojLocalFilename != nil
+                self?.downloadProgress = hasMMProj ? progress * 0.7 : progress
             }
         }, completion: { [weak self] tempURL, error in
             DispatchQueue.main.async {
-                self?.isDownloading = false
-                self?.downloadingModelId = nil
-
                 if let error = error {
+                    self?.isDownloading = false
+                    self?.downloadingModelId = nil
                     self?.downloadError = error.localizedDescription
                     return
                 }
 
                 guard let tempURL = tempURL else {
+                    self?.isDownloading = false
+                    self?.downloadingModelId = nil
                     self?.downloadError = "Download failed"
                     return
                 }
@@ -5025,13 +5109,72 @@ class ModelManager: ObservableObject {
                         try FileManager.default.removeItem(at: destinationURL)
                     }
                     try FileManager.default.moveItem(at: tempURL, to: destinationURL)
+                } catch {
+                    self?.isDownloading = false
+                    self?.downloadingModelId = nil
+                    self?.downloadError = "Failed to save model: \(error.localizedDescription)"
+                    return
+                }
 
-                    // Update model status
+                // Download mmproj file if this model has one
+                if let localFile = mmprojLocalFilename, let hfFile = mmprojHfFilename, let repo = mmprojRepo {
+                    self?.downloadMmproj(repo: repo, hfFilename: hfFile, localFilename: localFile, modelId: modelId)
+                } else {
+                    self?.isDownloading = false
+                    self?.downloadingModelId = nil
+                    if let index = self?.models.firstIndex(where: { $0.id == modelId }) {
+                        self?.models[index].isDownloaded = true
+                    }
+                }
+            }
+        }), delegateQueue: nil)
+
+        downloadTask = session.downloadTask(with: url)
+        downloadTask?.resume()
+    }
+
+    /// Download the mmproj file for multimodal support
+    private func downloadMmproj(repo: String, hfFilename: String, localFilename: String, modelId: String) {
+        let urlString = "https://huggingface.co/\(repo)/resolve/main/\(hfFilename)"
+        guard let url = URL(string: urlString) else {
+            isDownloading = false
+            downloadingModelId = nil
+            downloadError = "Invalid mmproj URL"
+            return
+        }
+
+        let destURL = modelsDir.appendingPathComponent(localFilename)
+
+        let session = URLSession(configuration: .default, delegate: DownloadDelegate(progress: { [weak self] progress in
+            DispatchQueue.main.async {
+                self?.downloadProgress = 0.7 + progress * 0.3
+            }
+        }, completion: { [weak self] tempURL, error in
+            DispatchQueue.main.async {
+                self?.isDownloading = false
+                self?.downloadingModelId = nil
+
+                if let error = error {
+                    self?.downloadError = "mmproj download failed: \(error.localizedDescription)"
+                    return
+                }
+
+                guard let tempURL = tempURL else {
+                    self?.downloadError = "mmproj download failed"
+                    return
+                }
+
+                do {
+                    if FileManager.default.fileExists(atPath: destURL.path) {
+                        try FileManager.default.removeItem(at: destURL)
+                    }
+                    try FileManager.default.moveItem(at: tempURL, to: destURL)
+
                     if let index = self?.models.firstIndex(where: { $0.id == modelId }) {
                         self?.models[index].isDownloaded = true
                     }
                 } catch {
-                    self?.downloadError = "Failed to save model: \(error.localizedDescription)"
+                    self?.downloadError = "Failed to save mmproj: \(error.localizedDescription)"
                 }
             }
         }), delegateQueue: nil)
@@ -5088,6 +5231,15 @@ class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
 
 struct ModelSettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
+    @EnvironmentObject var voiceFlow: VoiceFlowBridge
+    @AppStorage("streamingEnabled") private var streamingEnabled = false
+    @AppStorage("streamingModelSize") private var streamingModelSizeRaw = "small"
+    @StateObject private var streamingEngine = MoonshineStreamingEngine()
+    @State private var streamingDownloadError: String?
+
+    private var selectedStreamingModelSize: MoonshineStreamingEngine.StreamingModelSize {
+        MoonshineStreamingEngine.StreamingModelSize(rawValue: streamingModelSizeRaw) ?? .small
+    }
 
     var body: some View {
         ScrollView {
@@ -5237,8 +5389,120 @@ struct ModelSettingsView: View {
                         .font(.headline)
                 }
 
-                // STT Engine Section (only shown in traditional mode)
+                // Real-Time Streaming Section (only in STT+LLM mode)
                 if modelManager.currentPipelineMode == .sttPlusLlm {
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Toggle(isOn: $streamingEnabled) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Enable Streaming Transcription")
+                                        .font(.system(size: 13, weight: .medium))
+                                    Text("Live transcription while you speak. LLM formatting runs on release.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .toggleStyle(.switch)
+                            .onChange(of: streamingEnabled) { enabled in
+                                if enabled {
+                                    voiceFlow.unloadStt()
+                                }
+                            }
+
+                            if streamingEnabled {
+                                Divider()
+
+                                Text("Model Size")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+
+                                ForEach(MoonshineStreamingEngine.StreamingModelSize.allCases) { size in
+                                    HStack(spacing: 12) {
+                                        ZStack {
+                                            Circle()
+                                                .stroke(size.rawValue == streamingModelSizeRaw ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
+                                                .frame(width: 20, height: 20)
+                                            if size.rawValue == streamingModelSizeRaw {
+                                                Circle()
+                                                    .fill(Color.accentColor)
+                                                    .frame(width: 12, height: 12)
+                                            }
+                                        }
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(size.displayName)
+                                                .fontWeight(.medium)
+                                            Text(size.description)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        if MoonshineStreamingEngine.isModelDownloaded(size) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundColor(.green)
+                                        } else if streamingEngine.isDownloading && size == selectedStreamingModelSize {
+                                            ProgressView(value: streamingEngine.downloadProgress)
+                                                .frame(width: 60)
+                                        } else {
+                                            Button("Download") {
+                                                downloadStreamingModel(size)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.small)
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        streamingModelSizeRaw = size.rawValue
+                                    }
+
+                                    if size != MoonshineStreamingEngine.StreamingModelSize.allCases.last {
+                                        Divider()
+                                    }
+                                }
+
+                                if let error = streamingDownloadError {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundColor(.orange)
+                                        Text(error)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+
+                                Divider()
+
+                                HStack(spacing: 6) {
+                                    Image(systemName: "info.circle")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text("Streaming uses Moonshine models for real-time transcription. Models are downloaded once (~80-550 MB).")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Label("Real-Time Streaming", systemImage: "waveform")
+                                .font(.headline)
+                            Text("BETA")
+                                .font(.system(size: 8, weight: .bold))
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.orange.opacity(0.2))
+                                .foregroundColor(.orange)
+                                .cornerRadius(3)
+                        }
+                    }
+                }
+
+                // STT Engine Section (only shown in traditional mode when streaming is off)
+                if modelManager.currentPipelineMode == .sttPlusLlm && !streamingEnabled {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         // Engine selection
@@ -5314,14 +5578,16 @@ struct ModelSettingsView: View {
                     Label("Speech-to-Text Engine", systemImage: "waveform")
                         .font(.headline)
                 }
+                }
 
-                // LLM Models Section
+                // LLM Models Section (only shown in STT+LLM mode)
+                if modelManager.currentPipelineMode == .sttPlusLlm {
                 GroupBox {
                     VStack(spacing: 12) {
                         ForEach(modelManager.models) { model in
                             ModelRowView(
                                 model: model,
-                                isSelected: model.id == modelManager.currentModelId && modelManager.currentVlmModelId == nil,
+                                isSelected: model.id == modelManager.currentModelId,
                                 isDownloading: modelManager.downloadingModelId == model.id,
                                 downloadProgress: modelManager.downloadProgress,
                                 onSelect: {
@@ -5344,42 +5610,6 @@ struct ModelSettingsView: View {
                     Label("LLM Models", systemImage: "cpu")
                         .font(.headline)
                 }
-                } // end if sttPlusLlm
-
-                // VLM Models Section
-                GroupBox {
-                    VStack(spacing: 12) {
-                        ForEach(modelManager.vlmModels) { model in
-                            VlmModelRowView(
-                                model: model,
-                                isSelected: model.id == modelManager.currentVlmModelId,
-                                isDownloading: modelManager.downloadingVlmModelId == model.id,
-                                downloadProgress: modelManager.vlmDownloadProgress,
-                                onSelect: {
-                                    modelManager.selectVlmModel(model.id)
-                                },
-                                onDownload: {
-                                    modelManager.downloadVlmModel(model.id)
-                                }
-                            )
-
-                            if model.id != modelManager.vlmModels.last?.id {
-                                Divider()
-                            }
-                        }
-
-                        HStack(spacing: 4) {
-                            Image(systemName: "info.circle")
-                                .foregroundColor(.blue)
-                            Text("VLM models are downloaded from HuggingFace (PyTorch safetensors format).")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Vision-Language Models", systemImage: "eye")
-                        .font(.headline)
                 }
 
                 // Error display
@@ -5418,7 +5648,6 @@ struct ModelSettingsView: View {
         }
         .onAppear {
             modelManager.loadModels()
-            modelManager.loadVlmSettings()
         }
     }
 
@@ -5434,6 +5663,17 @@ struct ModelSettingsView: View {
         try? task.run()
         // applicationWillTerminate will handle cleanup
         NSApp.terminate(nil)
+    }
+
+    private func downloadStreamingModel(_ size: MoonshineStreamingEngine.StreamingModelSize) {
+        streamingDownloadError = nil
+        Task {
+            do {
+                try await streamingEngine.downloadModel(size: size)
+            } catch {
+                streamingDownloadError = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -5643,85 +5883,6 @@ struct MoonshineModelRowView: View {
     }
 }
 
-// MARK: - VLM Model Row View
-
-struct VlmModelRowView: View {
-    let model: VlmModelItem
-    let isSelected: Bool
-    let isDownloading: Bool
-    let downloadProgress: Double
-    let onSelect: () -> Void
-    let onDownload: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // Selection indicator (radio button)
-            ZStack {
-                Circle()
-                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
-                    .frame(width: 20, height: 20)
-
-                if isSelected {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 12, height: 12)
-                }
-            }
-
-            // Model info
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(model.displayName)
-                        .fontWeight(.medium)
-                    if isSelected {
-                        Text("Active")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.2))
-                            .cornerRadius(4)
-                    }
-                }
-
-                Text(String(format: "%.1f GB", model.sizeGB))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            // Download/Status indicator
-            if model.isDownloaded {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-            } else if isDownloading {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                    Text("\(Int(downloadProgress * 100))%")
-                        .font(.caption)
-                        .monospacedDigit()
-                }
-            } else {
-                Button(action: onDownload) {
-                    Label("Download", systemImage: "arrow.down.circle")
-                        .font(.caption)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if model.isDownloaded && !isSelected {
-                onSelect()
-            }
-        }
-        .opacity(model.isDownloaded || isDownloading ? 1.0 : 0.7)
-    }
-}
-
 // MARK: - AI Result State
 
 class AIResultState: ObservableObject {
@@ -5826,22 +5987,40 @@ struct AIResultView: View {
     }
 }
 
+// MARK: - Token Accumulator
+
+/// Mutable class wrapper for accumulating streamed LLM tokens.
+/// Used as a reference type so the @MainActor onToken closure and the caller share state.
+@MainActor
+private final class TokenAccumulator {
+    var text: String = ""
+}
+
 // MARK: - Overlay State
 
 class OverlayState: ObservableObject {
     enum RecordingState {
         case idle
         case recording
+        case streaming(String)      // partial transcript text from real-time STT
         case processing
+        case formatting(String)     // LLM tokens appearing word-by-word
         case aiProcessing(String)   // label text like "Summarizing..."
 
         var isRecording: Bool {
             if case .recording = self { return true }
+            if case .streaming = self { return true }
             return false
         }
 
         var isProcessing: Bool {
             if case .processing = self { return true }
+            if case .formatting = self { return true }
+            return false
+        }
+
+        var isStreaming: Bool {
+            if case .streaming = self { return true }
             return false
         }
     }
@@ -5865,15 +6044,140 @@ struct RecordingOverlayView: View {
         Color(red: 0.0, green: 0.85, blue: 0.85),   // Cyan (loop)
     ]
 
-    private var pillWidth: CGFloat {
-        if case .aiProcessing = state.state { return 260 }
-        return 180
+    private let cardWidth: CGFloat = 420
+    private let pillHeight: CGFloat = 66
+    private let statusBarHeight: CGFloat = 50
+    private let maxTextAreaHeight: CGFloat = 300
+
+    // MARK: - Mode Detection
+
+    private var isCardMode: Bool {
+        switch state.state {
+        case .streaming(let t) where !t.isEmpty: return true
+        case .formatting: return true  // Always card mode — keeps card visible during STT→formatting transition
+        default: return false
+        }
     }
 
+    private var currentText: String {
+        switch state.state {
+        case .streaming(let t): return t
+        case .formatting(let t): return t
+        default: return ""
+        }
+    }
+
+    private var isFormattingPhase: Bool {
+        if case .formatting = state.state { return true }
+        return false
+    }
+
+    private var pillWidth: CGFloat {
+        if case .aiProcessing = state.state { return 260 }
+        return 200
+    }
+
+    // MARK: - Body
+
     var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            if isCardMode {
+                cardView
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
+            } else {
+                pillView
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isCardMode)
+        .onAppear {
+            withAnimation(.linear(duration: 3.0).repeatForever(autoreverses: false)) {
+                animateGradient = true
+            }
+        }
+    }
+
+    // MARK: - Card View
+
+    private var cardView: some View {
+        VStack(spacing: 0) {
+            if !currentText.isEmpty {
+                textArea
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.15))
+                    .frame(height: 1)
+            }
+
+            statusBar
+        }
+        .frame(width: cardWidth)
+        .background(cardBackground)
+    }
+
+    private var textArea: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                Text(currentText)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .id("textBottom")
+            }
+            .onChange(of: currentText) { _ in
+                withAnimation(.easeOut(duration: 0.1)) {
+                    proxy.scrollTo("textBottom", anchor: .bottom)
+                }
+            }
+        }
+        .frame(maxHeight: maxTextAreaHeight)
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 10) {
+            if isFormattingPhase {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 16))
+                    .foregroundColor(.white)
+                Text("Formatting...")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+                Spacer()
+                PulsingDotsView()
+                    .frame(width: 40, height: 16)
+                    .scaleEffect(0.6)
+            } else {
+                logoView
+                WaveformView(audioLevel: state.audioLevel)
+                    .frame(width: 60, height: 30)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: statusBarHeight)
+    }
+
+    private var cardBackground: some View {
+        ZStack {
+            if !isFormattingPhase {
+                AnimatedGradientBackground(animate: animateGradient, colors: gradientColors)
+            } else {
+                Color.black.opacity(0.85)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    // MARK: - Pill View
+
+    private var pillView: some View {
         HStack(spacing: 10) {
             if case .aiProcessing(let label) = state.state {
-                // AI processing: sparkle icon + label + pulsing dots
                 Image(systemName: "sparkles")
                     .font(.system(size: 18))
                     .foregroundColor(.white)
@@ -5883,11 +6187,13 @@ struct RecordingOverlayView: View {
                 PulsingDotsView()
                     .frame(width: 50, height: 20)
                     .scaleEffect(0.7)
-            } else {
-                // Logo
+            } else if case .streaming = state.state {
+                // Streaming with empty text — show waveform in pill
                 logoView
-
-                // Waveform bars or processing indicator
+                WaveformView(audioLevel: state.audioLevel)
+                    .frame(width: 80, height: 45)
+            } else {
+                logoView
                 if state.state.isRecording {
                     WaveformView(audioLevel: state.audioLevel)
                         .frame(width: 80, height: 45)
@@ -5898,14 +6204,12 @@ struct RecordingOverlayView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .frame(width: pillWidth, height: 66)
-        .background(backgroundView)
-        .onAppear {
-            withAnimation(.linear(duration: 3.0).repeatForever(autoreverses: false)) {
-                animateGradient = true
-            }
-        }
+        .frame(width: pillWidth, height: pillHeight)
+        .background(pillBackground)
+        .animation(.easeInOut(duration: 0.2), value: pillWidth)
     }
+
+    // MARK: - Shared Sub-views
 
     @ViewBuilder
     private var logoView: some View {
@@ -5928,13 +6232,11 @@ struct RecordingOverlayView: View {
             .frame(width: 80, height: 30)
     }
 
-    private var backgroundView: some View {
+    private var pillBackground: some View {
         ZStack {
             if state.state.isRecording {
-                // Animated gradient for recording
                 AnimatedGradientBackground(animate: animateGradient, colors: gradientColors)
             } else {
-                // Dark background for processing/idle
                 Color.black.opacity(0.85)
             }
         }

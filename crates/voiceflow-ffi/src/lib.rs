@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use voiceflow_core::{Config, Pipeline, PipelineMode, ConsolidatedModel, VlmModel, runtime as core_runtime};
+use voiceflow_core::{Config, Pipeline, PipelineMode, ConsolidatedModel, runtime as core_runtime};
 
 // =============================================================================
 // Global Singleton Tokio Runtime
@@ -377,14 +377,9 @@ pub unsafe extern "C" fn voiceflow_model_info(index: usize) -> ModelInfo {
         .unwrap_or(false);
 
     let id_str = match model {
-        LlmModel::Qwen3_1_7B => "qwen3-1.7b",
-        LlmModel::Qwen3_4B => "qwen3-4b",
-        LlmModel::SmolLM3_3B => "smollm3-3b",
-        LlmModel::Gemma2_2B => "gemma2-2b",
-        LlmModel::Gemma3nE2B => "gemma3n-e2b",
-        LlmModel::Gemma3nE4B => "gemma3n-e4b",
-        LlmModel::Phi4Mini => "phi4-mini",
-        LlmModel::Phi2 => "phi-2",
+        LlmModel::Qwen3_5_0_8B => "qwen3.5-0.8b",
+        LlmModel::Qwen3_5_2B => "qwen3.5-2b",
+        LlmModel::Qwen3_5_4B => "qwen3.5-4b",
         LlmModel::Custom(_) => "custom",
     };
 
@@ -392,7 +387,7 @@ pub unsafe extern "C" fn voiceflow_model_info(index: usize) -> ModelInfo {
         id: CString::new(id_str).map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
         display_name: CString::new(model.display_name()).map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
         filename: CString::new(model.filename()).map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
-        size_gb: model.size_gb(),
+        size_gb: model.total_size_gb(),
         is_downloaded,
     }
 }
@@ -432,14 +427,9 @@ pub extern "C" fn voiceflow_current_model() -> *mut c_char {
 
     let config = Config::load(None).unwrap_or_default();
     let id_str = match config.llm_model {
-        LlmModel::Qwen3_1_7B => "qwen3-1.7b",
-        LlmModel::Qwen3_4B => "qwen3-4b",
-        LlmModel::SmolLM3_3B => "smollm3-3b",
-        LlmModel::Gemma2_2B => "gemma2-2b",
-        LlmModel::Gemma3nE2B => "gemma3n-e2b",
-        LlmModel::Gemma3nE4B => "gemma3n-e4b",
-        LlmModel::Phi4Mini => "phi4-mini",
-        LlmModel::Phi2 => "phi-2",
+        LlmModel::Qwen3_5_0_8B => "qwen3.5-0.8b",
+        LlmModel::Qwen3_5_2B => "qwen3.5-2b",
+        LlmModel::Qwen3_5_4B => "qwen3.5-4b",
         LlmModel::Custom(_) => "custom",
     };
 
@@ -464,11 +454,9 @@ pub unsafe extern "C" fn voiceflow_set_model(model_id: *const c_char) -> bool {
     };
 
     let model = match id_str {
-        "qwen3-1.7b" => LlmModel::Qwen3_1_7B,
-        "qwen3-4b" => LlmModel::Qwen3_4B,
-        "smollm3-3b" => LlmModel::SmolLM3_3B,
-        "gemma2-2b" => LlmModel::Gemma2_2B,
-        "phi-2" => LlmModel::Phi2,
+        "qwen3.5-0.8b" => LlmModel::Qwen3_5_0_8B,
+        "qwen3.5-2b" => LlmModel::Qwen3_5_2B,
+        "qwen3.5-4b" => LlmModel::Qwen3_5_4B,
         _ => return false,
     };
 
@@ -495,11 +483,9 @@ pub unsafe extern "C" fn voiceflow_model_download_url(model_id: *const c_char) -
     };
 
     let model = match id_str {
-        "qwen3-1.7b" => LlmModel::Qwen3_1_7B,
-        "qwen3-4b" => LlmModel::Qwen3_4B,
-        "smollm3-3b" => LlmModel::SmolLM3_3B,
-        "gemma2-2b" => LlmModel::Gemma2_2B,
-        "phi-2" => LlmModel::Phi2,
+        "qwen3.5-0.8b" => LlmModel::Qwen3_5_0_8B,
+        "qwen3.5-2b" => LlmModel::Qwen3_5_2B,
+        "qwen3.5-4b" => LlmModel::Qwen3_5_4B,
         _ => return ptr::null_mut(),
     };
 
@@ -921,249 +907,244 @@ pub unsafe extern "C" fn voiceflow_consolidated_model_dir(model_id: *const c_cha
 }
 
 // =============================================================================
-// VLM (Vision-Language Model) Management
+// Multimodal (mmproj) Support
 // =============================================================================
 
-/// VLM model info struct for FFI
-#[repr(C)]
-pub struct VlmModelInfo {
-    pub id: *mut c_char,
-    pub display_name: *mut c_char,
-    pub dir_name: *mut c_char,
-    pub size_gb: c_float,
-    pub is_downloaded: bool,
-}
-
-/// Get the number of available VLM models
+/// Get the mmproj filename for the current model, or null if not multimodal
 #[no_mangle]
-pub extern "C" fn voiceflow_vlm_model_count() -> usize {
-    VlmModel::all_models().len()
-}
-
-/// Get VLM model info by index
-///
-/// # Safety
-/// index must be < voiceflow_vlm_model_count()
-#[no_mangle]
-pub unsafe extern "C" fn voiceflow_vlm_model_info(index: usize) -> VlmModelInfo {
-    let models = VlmModel::all_models();
-    if index >= models.len() {
-        return VlmModelInfo {
-            id: ptr::null_mut(),
-            display_name: ptr::null_mut(),
-            dir_name: ptr::null_mut(),
-            size_gb: 0.0,
-            is_downloaded: false,
-        };
-    }
-
-    let model = &models[index];
+pub extern "C" fn voiceflow_model_mmproj_filename() -> *mut c_char {
     let config = Config::load(None).unwrap_or_default();
-    let is_downloaded = config.vlm_model_downloaded_for(model);
-
-    let id_str = match model {
-        VlmModel::JinaVlm => "jina-vlm",
-        VlmModel::Qwen3VL2B => "qwen3-vl-2b",
-    };
-
-    VlmModelInfo {
-        id: CString::new(id_str).map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
-        display_name: CString::new(model.display_name()).map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
-        dir_name: CString::new(model.dir_name()).map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
-        size_gb: model.size_gb(),
-        is_downloaded,
-    }
-}
-
-/// Free VLM model info strings
-///
-/// # Safety
-/// Only call once per VlmModelInfo
-#[no_mangle]
-pub unsafe extern "C" fn voiceflow_free_vlm_model_info(info: VlmModelInfo) {
-    if !info.id.is_null() {
-        let _ = CString::from_raw(info.id);
-    }
-    if !info.display_name.is_null() {
-        let _ = CString::from_raw(info.display_name);
-    }
-    if !info.dir_name.is_null() {
-        let _ = CString::from_raw(info.dir_name);
-    }
-}
-
-/// Check if a VLM model is downloaded
-///
-/// # Safety
-/// model_id must be a valid null-terminated string
-#[no_mangle]
-pub unsafe extern "C" fn voiceflow_vlm_model_downloaded(model_id: *const c_char) -> bool {
-    if model_id.is_null() {
-        return false;
-    }
-
-    let id_str = match CStr::from_ptr(model_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-
-    let model = match id_str {
-        "jina-vlm" => VlmModel::JinaVlm,
-        "qwen3-vl-2b" => VlmModel::Qwen3VL2B,
-        _ => return false,
-    };
-
-    let config = Config::load(None).unwrap_or_default();
-    config.vlm_model_downloaded_for(&model)
-}
-
-/// Get the HuggingFace repo for a VLM model
-///
-/// # Safety
-/// model_id must be a valid null-terminated string
-#[no_mangle]
-pub unsafe extern "C" fn voiceflow_vlm_model_hf_repo(model_id: *const c_char) -> *mut c_char {
-    if model_id.is_null() {
-        return ptr::null_mut();
-    }
-
-    let id_str = match CStr::from_ptr(model_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-
-    let model = match id_str {
-        "jina-vlm" => VlmModel::JinaVlm,
-        "qwen3-vl-2b" => VlmModel::Qwen3VL2B,
-        _ => return ptr::null_mut(),
-    };
-
-    CString::new(model.hf_repo()).map(|s| s.into_raw()).unwrap_or(ptr::null_mut())
-}
-
-/// Get the number of required files for a VLM model
-///
-/// # Safety
-/// model_id must be a valid null-terminated string
-#[no_mangle]
-pub unsafe extern "C" fn voiceflow_vlm_model_file_count(model_id: *const c_char) -> usize {
-    if model_id.is_null() {
-        return 0;
-    }
-
-    let id_str = match CStr::from_ptr(model_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return 0,
-    };
-
-    let model = match id_str {
-        "jina-vlm" => VlmModel::JinaVlm,
-        "qwen3-vl-2b" => VlmModel::Qwen3VL2B,
-        _ => return 0,
-    };
-
-    model.required_files().len()
-}
-
-/// Get a required file name for a VLM model by index
-///
-/// # Safety
-/// model_id must be a valid null-terminated string, index must be < file_count
-#[no_mangle]
-pub unsafe extern "C" fn voiceflow_vlm_model_file_name(model_id: *const c_char, index: usize) -> *mut c_char {
-    if model_id.is_null() {
-        return ptr::null_mut();
-    }
-
-    let id_str = match CStr::from_ptr(model_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-
-    let model = match id_str {
-        "jina-vlm" => VlmModel::JinaVlm,
-        "qwen3-vl-2b" => VlmModel::Qwen3VL2B,
-        _ => return ptr::null_mut(),
-    };
-
-    let files = model.required_files();
-    if index >= files.len() {
-        return ptr::null_mut();
-    }
-
-    CString::new(files[index]).map(|s| s.into_raw()).unwrap_or(ptr::null_mut())
-}
-
-/// Get the directory path for a VLM model
-///
-/// # Safety
-/// model_id must be a valid null-terminated string
-#[no_mangle]
-pub unsafe extern "C" fn voiceflow_vlm_model_dir(model_id: *const c_char) -> *mut c_char {
-    if model_id.is_null() {
-        return ptr::null_mut();
-    }
-
-    let id_str = match CStr::from_ptr(model_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-
-    let model = match id_str {
-        "jina-vlm" => VlmModel::JinaVlm,
-        "qwen3-vl-2b" => VlmModel::Qwen3VL2B,
-        _ => return ptr::null_mut(),
-    };
-
-    match Config::models_dir() {
-        Ok(dir) => {
-            let model_dir = dir.join(model.dir_name());
-            CString::new(model_dir.to_string_lossy().to_string())
-                .map(|s| s.into_raw())
-                .unwrap_or(ptr::null_mut())
-        }
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Get the current VLM model ID from config, or null if none selected
-#[no_mangle]
-pub extern "C" fn voiceflow_current_vlm_model() -> *mut c_char {
-    let config = Config::load(None).unwrap_or_default();
-    match config.vlm_model {
-        Some(VlmModel::JinaVlm) => CString::new("jina-vlm").map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
-        Some(VlmModel::Qwen3VL2B) => CString::new("qwen3-vl-2b").map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
+    match config.llm_model.mmproj_filename() {
+        Some(filename) => CString::new(filename).map(|s| s.into_raw()).unwrap_or(ptr::null_mut()),
         None => ptr::null_mut(),
     }
 }
 
-/// Set the current VLM model in config (requires restart to take effect)
-/// Pass null to clear the VLM selection (revert to LLM-only mode)
+/// Get the mmproj download URL for the current model, or null if not multimodal
+#[no_mangle]
+pub extern "C" fn voiceflow_model_mmproj_download_url() -> *mut c_char {
+    let config = Config::load(None).unwrap_or_default();
+    if let (Some(repo), Some(hf_filename)) = (config.llm_model.hf_repo(), config.llm_model.mmproj_hf_filename()) {
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, hf_filename);
+        CString::new(url).map(|s| s.into_raw()).unwrap_or(ptr::null_mut())
+    } else {
+        ptr::null_mut()
+    }
+}
+
+/// Check if the mmproj file is downloaded for the current model
+#[no_mangle]
+pub extern "C" fn voiceflow_model_mmproj_downloaded() -> bool {
+    let config = Config::load(None).unwrap_or_default();
+    if let Ok(Some(path)) = config.mmproj_model_path() {
+        path.exists()
+    } else {
+        false
+    }
+}
+
+/// Get the mmproj size in GB for the current model
+#[no_mangle]
+pub extern "C" fn voiceflow_model_mmproj_size_gb() -> c_float {
+    let config = Config::load(None).unwrap_or_default();
+    config.llm_model.mmproj_size_gb()
+}
+
+// =============================================================================
+// Process Text with Image (Multimodal)
+// =============================================================================
+
+/// Process pre-transcribed text with an image through post-processing + multimodal LLM formatting.
+/// Used for visual context dictation (Control+Option+Space hotkey).
 ///
 /// # Safety
-/// model_id must be a valid null-terminated string or null to clear
+/// - handle must be a valid pointer from voiceflow_init
+/// - text must be a valid null-terminated string
+/// - context can be null
+/// - image_data must point to image_len bytes of JPEG data (or null for text-only)
 #[no_mangle]
-pub unsafe extern "C" fn voiceflow_set_vlm_model(model_id: *const c_char) -> bool {
-    let mut config = Config::load(None).unwrap_or_default();
+pub unsafe extern "C" fn voiceflow_process_text_with_image(
+    handle: *mut VoiceFlowHandle,
+    text: *const c_char,
+    context: *const c_char,
+    image_data: *const u8,
+    image_len: usize,
+) -> VoiceFlowResult {
+    log_debug("voiceflow_process_text_with_image called");
 
-    if model_id.is_null() {
-        config.vlm_model = None;
-        return config.save(None).is_ok();
+    if handle.is_null() || text.is_null() {
+        log_debug("ERROR - Invalid handle or text");
+        return error_result("Invalid handle or text");
     }
 
-    let id_str = match CStr::from_ptr(model_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
+    let handle_ptr = handle;
+    let text_ptr = text;
+    let context_ptr = context;
+    let img_ptr = image_data;
+    let img_len = image_len;
 
-    let model = match id_str {
-        "jina-vlm" => VlmModel::JinaVlm,
-        "qwen3-vl-2b" => VlmModel::Qwen3VL2B,
-        _ => return false,
-    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let handle = &mut *handle_ptr;
+        let input_text = match CStr::from_ptr(text_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return error_result("Invalid UTF-8 text"),
+        };
 
-    config.vlm_model = Some(model);
-    config.save(None).is_ok()
+        let context_str = if context_ptr.is_null() {
+            None
+        } else {
+            match CStr::from_ptr(context_ptr).to_str() {
+                Ok(s) => Some(s),
+                Err(_) => None,
+            }
+        };
+
+        let image_bytes = if img_ptr.is_null() || img_len == 0 {
+            None
+        } else {
+            Some(std::slice::from_raw_parts(img_ptr, img_len))
+        };
+
+        let pipeline = match handle.pipeline.as_mut() {
+            Some(p) => p,
+            None => {
+                log_debug("ERROR - Pipeline not available.");
+                return error_result("Pipeline not available.");
+            }
+        };
+
+        log_debug(&format!(
+            "Processing text with image: text='{}', image={} bytes",
+            &input_text[..input_text.len().min(80)],
+            image_bytes.map_or(0, |b| b.len())
+        ));
+
+        let result = if let Some(img) = image_bytes {
+            pipeline.process_text_with_image(input_text, img, context_str)
+        } else {
+            pipeline.process_text(input_text, context_str)
+        };
+
+        match result {
+            Ok(result) => {
+                log_debug(&format!("Success! Formatted text: '{}'", result.formatted_text));
+                VoiceFlowResult {
+                    success: true,
+                    formatted_text: CString::new(result.formatted_text)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    raw_transcript: CString::new(result.raw_transcript)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    error_message: ptr::null_mut(),
+                    transcription_ms: 0,
+                    llm_ms: result.timings.llm_formatting_ms,
+                    total_ms: result.timings.total_ms,
+                }
+            }
+            Err(e) => {
+                log_debug(&format!("ERROR - process failed: {}", e));
+                error_result(&e.to_string())
+            }
+        }
+    }));
+
+    match result {
+        Ok(vf_result) => vf_result,
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic".to_string()
+            };
+            log_debug(&format!("PANIC caught in voiceflow_process_text_with_image: {}", msg));
+            error_result(&format!("Internal error: {}", msg))
+        }
+    }
+}
+
+// =============================================================================
+// User Corrections
+// =============================================================================
+
+/// Add a user-learned correction to the replacement dictionary.
+/// The correction is applied deterministically by the Rust pipeline's replacement step.
+///
+/// # Safety
+/// - handle must be a valid pointer from voiceflow_init
+/// - original and corrected must be valid null-terminated strings
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_add_replacement(
+    handle: *mut VoiceFlowHandle,
+    original: *const c_char,
+    corrected: *const c_char,
+) -> bool {
+    if handle.is_null() || original.is_null() || corrected.is_null() {
+        return false;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let handle = &mut *handle;
+
+        let orig_str = match CStr::from_ptr(original).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        let corr_str = match CStr::from_ptr(corrected).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        if let Some(ref mut pipeline) = handle.pipeline {
+            pipeline.add_user_correction(orig_str, corr_str);
+            log_debug(&format!("Added user correction: '{}' -> '{}'", orig_str, corr_str));
+            true
+        } else {
+            log_debug("Cannot add replacement: no pipeline (consolidated mode)");
+            false
+        }
+    }));
+
+    result.unwrap_or(false)
+}
+
+/// Remove a user-learned correction from the replacement dictionary.
+/// Call this when the user deletes a correction from the UI so it stops being applied immediately.
+///
+/// # Safety
+/// - handle must be a valid pointer from voiceflow_init
+/// - original must be a valid null-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_remove_replacement(
+    handle: *mut VoiceFlowHandle,
+    original: *const c_char,
+) -> bool {
+    if handle.is_null() || original.is_null() {
+        return false;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let handle = &mut *handle;
+
+        let orig_str = match CStr::from_ptr(original).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        if let Some(ref mut pipeline) = handle.pipeline {
+            let removed = pipeline.remove_user_correction(orig_str);
+            log_debug(&format!("Removed user correction: '{}' (found={})", orig_str, removed));
+            removed
+        } else {
+            log_debug("Cannot remove replacement: no pipeline (consolidated mode)");
+            false
+        }
+    }));
+
+    result.unwrap_or(false)
 }
 
 // =============================================================================
@@ -1296,6 +1277,116 @@ pub unsafe extern "C" fn voiceflow_format_text(
     }
 }
 
+/// C function pointer type for streaming token callbacks.
+/// Returns true to continue generation, false to abort.
+pub type TokenCallbackFn = unsafe extern "C" fn(token: *const c_char, userdata: *mut std::ffi::c_void) -> bool;
+
+/// Process pre-transcribed text through post-processing + LLM formatting with streaming.
+/// Each generated token is delivered to the callback as it's produced.
+/// Returns a VoiceFlowResult with the fully post-processed formatted_text.
+///
+/// # Safety
+/// - handle must be a valid pointer from voiceflow_init
+/// - text must be a valid null-terminated string
+/// - context can be null
+/// - callback must be a valid function pointer
+/// - userdata is passed through to the callback unchanged
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_format_text_streaming(
+    handle: *mut VoiceFlowHandle,
+    text: *const c_char,
+    context: *const c_char,
+    callback: TokenCallbackFn,
+    userdata: *mut std::ffi::c_void,
+) -> VoiceFlowResult {
+    log_debug("voiceflow_format_text_streaming called");
+
+    if handle.is_null() || text.is_null() {
+        log_debug("ERROR - Invalid handle or text");
+        return error_result("Invalid handle or text");
+    }
+
+    let handle_ptr = handle;
+    let text_ptr = text;
+    let context_ptr = context;
+
+    // userdata needs to be sendable across catch_unwind boundary
+    let userdata_val = userdata as usize;
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let handle = &mut *handle_ptr;
+        let input_text = match CStr::from_ptr(text_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return error_result("Invalid UTF-8 text"),
+        };
+
+        let context_str = if context_ptr.is_null() {
+            None
+        } else {
+            match CStr::from_ptr(context_ptr).to_str() {
+                Ok(s) => Some(s),
+                Err(_) => None,
+            }
+        };
+
+        let pipeline = match handle.pipeline.as_mut() {
+            Some(p) => p,
+            None => {
+                log_debug("ERROR - Pipeline not available. Cannot stream format without pipeline.");
+                return error_result("Pipeline not available. Initialize in traditional mode to use LLM formatting.");
+            }
+        };
+
+        log_debug(&format!("Calling pipeline.process_text_streaming() with: '{}'", &input_text[..input_text.len().min(80)]));
+
+        let ud = userdata_val as *mut std::ffi::c_void;
+        let mut on_token = |token: &str| -> bool {
+            match CString::new(token) {
+                Ok(c_token) => callback(c_token.as_ptr(), ud),
+                Err(_) => true, // skip tokens with null bytes, continue generating
+            }
+        };
+
+        match pipeline.process_text_streaming(input_text, context_str, &mut on_token) {
+            Ok(result) => {
+                log_debug(&format!("Streaming success! Formatted text: '{}'", result.formatted_text));
+                VoiceFlowResult {
+                    success: true,
+                    formatted_text: CString::new(result.formatted_text)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    raw_transcript: CString::new(result.raw_transcript)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    error_message: ptr::null_mut(),
+                    transcription_ms: 0,
+                    llm_ms: result.timings.llm_formatting_ms,
+                    total_ms: result.timings.total_ms,
+                }
+            }
+            Err(e) => {
+                log_debug(&format!("ERROR - process_text_streaming failed: {}", e));
+                error_result(&e.to_string())
+            }
+        }
+    }));
+
+    match result {
+        Ok(vf_result) => vf_result,
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic".to_string()
+            };
+            log_debug(&format!("PANIC caught in voiceflow_format_text_streaming: {}", msg));
+            error_result(&format!("Internal error: {}", msg))
+        }
+    }
+}
+
 /// Check if the current STT engine is external (handled outside Rust pipeline)
 #[no_mangle]
 pub extern "C" fn voiceflow_is_external_stt() -> bool {
@@ -1361,6 +1452,24 @@ pub unsafe extern "C" fn voiceflow_reset_llm(handle: *mut VoiceFlowHandle) {
     let handle = &mut *handle;
     if let Some(ref mut pipeline) = handle.pipeline {
         pipeline.reset_llm();
+    }
+}
+
+/// Unload the STT engine from memory
+/// Call this when streaming replaces STT to free memory
+///
+/// # Safety
+/// handle must be a valid pointer from voiceflow_init
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_unload_stt(handle: *mut VoiceFlowHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    log_debug("voiceflow_unload_stt called");
+    let handle = &mut *handle;
+    if let Some(ref mut pipeline) = handle.pipeline {
+        pipeline.unload_stt();
     }
 }
 

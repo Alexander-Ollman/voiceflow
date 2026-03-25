@@ -210,6 +210,24 @@
 "at symbol" = "@"
 
 # ============================================
+# PHONETIC MISHEARINGS (brand names & tools)
+# ============================================
+[phonetic]
+"eye phone" = "iPhone"
+"you tube" = "YouTube"
+"tik tok" = "TikTok"
+"linked in" = "LinkedIn"
+"git hub" = "GitHub"
+"stacked overflow" = "Stack Overflow"
+"no JS" = "Node.js"
+"node JS" = "Node.js"
+"react JS" = "React.js"
+"next JS" = "Next.js"
+"vue JS" = "Vue.js"
+"type script" = "TypeScript"
+"java script" = "JavaScript"
+
+# ============================================
 # YOUR CUSTOM REPLACEMENTS
 # Add your frequently used terms below!
 # ============================================

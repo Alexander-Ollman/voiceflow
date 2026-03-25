@@ -85,69 +85,6 @@ final class Qwen3ASREngine: ObservableObject {
         }
     }
 
-    // MARK: - VLM Support
-
-    /// Load a VLM model via the Python daemon.
-    func loadVlmModel(from modelDir: String, modelType: String) async -> Bool {
-        do {
-            try await ensureDaemonRunning()
-
-            let response = try await sendCommand([
-                "command": "preload_vlm",
-                "model_path": modelDir,
-                "model_type": modelType,
-            ])
-
-            if let status = response["status"] as? String, status == "ok" {
-                NSLog("[Qwen3ASR] VLM loaded from: \(modelDir)")
-                return true
-            } else {
-                let msg = response["message"] as? String ?? "Unknown VLM load error"
-                NSLog("[Qwen3ASR] VLM load failed: \(msg)")
-                return false
-            }
-        } catch {
-            NSLog("[Qwen3ASR] VLM load error: \(error)")
-            return false
-        }
-    }
-
-    /// Analyze an image using the loaded VLM.
-    /// Returns a description string, or nil on failure.
-    func analyzeImage(imageData: Data, prompt: String? = nil) async -> String? {
-        do {
-            let b64 = imageData.base64EncodedString()
-            var command: [String: Any] = [
-                "command": "analyze_image",
-                "image": b64,
-            ]
-            if let prompt = prompt {
-                command["prompt"] = prompt
-            }
-
-            let response = try await sendCommand(command)
-
-            if let status = response["status"] as? String, status == "ok",
-               let description = response["description"] as? String {
-                return description
-            } else {
-                let msg = response["message"] as? String ?? "VLM analysis failed"
-                NSLog("[Qwen3ASR] VLM analysis error: \(msg)")
-                return nil
-            }
-        } catch {
-            NSLog("[Qwen3ASR] VLM analysis error: \(error)")
-            return nil
-        }
-    }
-
-    /// Unload the VLM from the daemon (keeps daemon and ASR model alive).
-    func unloadVlm() {
-        Task.detached {
-            _ = try? await self.sendCommand(["command": "unload_vlm"])
-        }
-    }
-
     /// Shut down the Python daemon process.
     func stopDaemon() {
         // Send shutdown command

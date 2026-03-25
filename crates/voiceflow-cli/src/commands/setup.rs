@@ -5,7 +5,7 @@ use console::{style, Term};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::Path;
 use std::process::Command;
-use voiceflow_core::config::{ConsolidatedModel, LlmModel, MoonshineModel, VlmModel, WhisperModel};
+use voiceflow_core::config::{ConsolidatedModel, LlmModel, MoonshineModel, WhisperModel};
 use voiceflow_core::Config;
 
 /// Download a single STT model (Whisper or Moonshine)
@@ -139,33 +139,11 @@ pub async fn run_benchmark() -> Result<()> {
     }
     term.write_line("")?;
 
-    // List VLM models
-    let vlm_models = VlmModel::all_models();
-    let total_vlm_gb: f32 = vlm_models.iter().map(|m| m.size_gb()).sum();
-    let config = Config::default();
-    term.write_line(&format!("  {} VLM Models:", style("Vision-Language").bold()))?;
-    for model in &vlm_models {
-        let downloaded = config.vlm_model_downloaded_for(model);
-        let status = if downloaded {
-            style("✓ downloaded").green()
-        } else {
-            style("○ pending").dim()
-        };
-        term.write_line(&format!(
-            "    {} {} ({:.1} GB)",
-            status,
-            model.display_name(),
-            model.size_gb()
-        ))?;
-    }
-    term.write_line("")?;
-
     term.write_line(&format!(
-        "  {} Total: ~{} MB STT + ~{:.1} GB LLM + ~{:.1} GB VLM",
+        "  {} Total: ~{} MB STT + ~{:.1} GB LLM",
         style("💾").cyan(),
         total_whisper_mb + total_moonshine_mb,
-        total_llm_gb,
-        total_vlm_gb
+        total_llm_gb
     ))?;
     term.write_line("")?;
 
@@ -186,12 +164,6 @@ pub async fn run_benchmark() -> Result<()> {
     // Download LLM benchmark models
     for model in &llm_models {
         download_llm_model(&term, model)?;
-    }
-
-    // Download VLM models
-    let vlm_models = VlmModel::all_models();
-    for model in &vlm_models {
-        download_vlm_model(&term, model).await?;
     }
 
     term.write_line("")?;
@@ -312,24 +284,6 @@ pub fn list_models() -> Result<()> {
     }
     term.write_line("")?;
 
-    // VLM models
-    term.write_line(&format!("{}:", style("Vision-Language Models").bold().underlined()))?;
-    for model in VlmModel::all_models() {
-        let downloaded = config.vlm_model_downloaded_for(&model);
-        let status = if downloaded {
-            style("✓").green()
-        } else {
-            style("○").dim()
-        };
-        term.write_line(&format!(
-            "  {} {:30} {:>6.1} GB",
-            status,
-            model.display_name(),
-            model.size_gb()
-        ))?;
-    }
-    term.write_line("")?;
-
     term.write_line(&format!(
         "Use {} to download benchmark models",
         style("voiceflow setup --benchmark").cyan()
@@ -356,17 +310,12 @@ fn parse_whisper_model(name: &str) -> WhisperModel {
 
 fn parse_llm_model(name: &str) -> LlmModel {
     match name.to_lowercase().replace("-", "_").as_str() {
-        "qwen3_1_7b" | "qwen3_1.7b" | "qwen_1.7b" => LlmModel::Qwen3_1_7B,
-        "qwen3_4b" | "qwen3" | "qwen" => LlmModel::Qwen3_4B,
-        "smollm3_3b" | "smollm3" | "smollm" => LlmModel::SmolLM3_3B,
-        "gemma2_2b" | "gemma2" => LlmModel::Gemma2_2B,
-        "gemma3n_e2b" | "gemma3n_2b" | "gemma3n" => LlmModel::Gemma3nE2B,
-        "gemma3n_e4b" | "gemma3n_4b" => LlmModel::Gemma3nE4B,
-        "phi4_mini" | "phi4" => LlmModel::Phi4Mini,
-        "phi2" => LlmModel::Phi2,
+        "qwen3.5_0_8b" | "qwen3.5_0.8b" | "qwen3.5_0.8b" => LlmModel::Qwen3_5_0_8B,
+        "qwen3.5_2b" | "qwen3.5_2b" => LlmModel::Qwen3_5_2B,
+        "qwen3.5_4b" | "qwen3.5_4b" => LlmModel::Qwen3_5_4B,
         _ => {
-            eprintln!("Unknown LLM model '{}', using 'qwen3-1.7b'", name);
-            LlmModel::Qwen3_1_7B
+            eprintln!("Unknown LLM model '{}', using 'qwen3.5-0.8b'", name);
+            LlmModel::Qwen3_5_0_8B
         }
     }
 }
@@ -494,55 +443,6 @@ async fn download_moonshine_model(term: &Term, model: &MoonshineModel) -> Result
             model.hf_repo()
         );
         download_file(&tokenizer_url, &tokenizer_path)?;
-    }
-
-    term.write_line(&format!(
-        "  {} {} downloaded",
-        style("✓").green(),
-        model.display_name()
-    ))?;
-
-    Ok(())
-}
-
-async fn download_vlm_model(term: &Term, model: &VlmModel) -> Result<()> {
-    let models_dir = Config::models_dir()?;
-    let model_dir = models_dir.join(model.dir_name());
-
-    // Check if all files exist
-    let all_exist = model.required_files().iter().all(|f| model_dir.join(f).exists());
-
-    if all_exist {
-        term.write_line(&format!(
-            "  {} {} already downloaded",
-            style("✓").green(),
-            model.display_name()
-        ))?;
-        return Ok(());
-    }
-
-    term.write_line(&format!(
-        "  {} Downloading {} ({:.1} GB)...",
-        style("⬇").cyan(),
-        model.display_name(),
-        model.size_gb()
-    ))?;
-
-    // Create model directory
-    std::fs::create_dir_all(&model_dir)?;
-
-    // Download each required file
-    for file in model.required_files() {
-        let file_path = model_dir.join(file);
-        if !file_path.exists() {
-            let url = format!(
-                "https://huggingface.co/{}/resolve/main/{}",
-                model.hf_repo(),
-                file
-            );
-            term.write_line(&format!("    {} {}", style("↓").dim(), file))?;
-            download_file(&url, &file_path)?;
-        }
     }
 
     term.write_line(&format!(

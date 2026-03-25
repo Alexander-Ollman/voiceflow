@@ -4,8 +4,10 @@ use crate::{
     config::{Config, SttEngine as SttEngineConfig},
     llm::LlmEngine,
     prosody::{self, ProsodyHints, replace_voice_commands, concatenate_spelled_words_aggressive, ReplacementDictionary, fix_tokenization_artifacts, remove_filler_words},
-    transcribe::{WhisperEngine, MoonshineEngine, TranscriptionResult},
+    transcribe::{MoonshineEngine, TranscriptionResult},
 };
+#[cfg(feature = "whisper")]
+use crate::transcribe::WhisperEngine;
 use anyhow::{Context, Result};
 use std::time::Instant;
 
@@ -57,6 +59,7 @@ pub enum PipelineError {
 
 /// Unified STT engine wrapper
 enum SttEngine {
+    #[cfg(feature = "whisper")]
     Whisper(WhisperEngine),
     Moonshine(MoonshineEngine),
 }
@@ -65,8 +68,15 @@ impl SttEngine {
     fn new(config: &Config) -> Result<Option<Self>> {
         match config.stt_engine {
             SttEngineConfig::Whisper => {
-                tracing::info!("Using Whisper STT engine: {:?}", config.whisper_model);
-                Ok(Some(Self::Whisper(WhisperEngine::new(config)?)))
+                #[cfg(feature = "whisper")]
+                {
+                    tracing::info!("Using Whisper STT engine: {:?}", config.whisper_model);
+                    Ok(Some(Self::Whisper(WhisperEngine::new(config)?)))
+                }
+                #[cfg(not(feature = "whisper"))]
+                {
+                    anyhow::bail!("Whisper STT engine not available (compiled without 'whisper' feature)")
+                }
             }
             SttEngineConfig::Moonshine => {
                 tracing::info!("Using Moonshine STT engine: {:?}", config.moonshine_model);
@@ -81,6 +91,7 @@ impl SttEngine {
 
     fn transcribe(&mut self, audio: &[f32]) -> Result<String> {
         match self {
+            #[cfg(feature = "whisper")]
             Self::Whisper(engine) => engine.transcribe(audio),
             Self::Moonshine(engine) => engine.transcribe(audio),
         }
@@ -88,6 +99,7 @@ impl SttEngine {
 
     fn transcribe_with_timestamps(&mut self, audio: &[f32], enable_timestamps: bool) -> Result<TranscriptionResult> {
         match self {
+            #[cfg(feature = "whisper")]
             Self::Whisper(engine) => engine.transcribe_with_timestamps(audio, enable_timestamps),
             Self::Moonshine(engine) => engine.transcribe_with_timestamps(audio, enable_timestamps),
         }
@@ -95,7 +107,11 @@ impl SttEngine {
 
     /// Check if this engine supports word-level timestamps
     fn supports_timestamps(&self) -> bool {
-        matches!(self, Self::Whisper(_))
+        match self {
+            #[cfg(feature = "whisper")]
+            Self::Whisper(_) => true,
+            Self::Moonshine(_) => false,
+        }
     }
 }
 
@@ -262,6 +278,15 @@ impl Pipeline {
         Ok(self.llm.as_mut().unwrap())
     }
 
+    /// Unload the STT engine from memory
+    /// The pipeline will not be able to transcribe audio until reinitialized
+    pub fn unload_stt(&mut self) {
+        if self.stt.is_some() {
+            tracing::info!("Unloading STT engine from memory");
+            self.stt = None;
+        }
+    }
+
     /// Reset the LLM state, allowing re-initialization attempts
     pub fn reset_llm(&mut self) {
         self.llm = None;
@@ -285,12 +310,8 @@ impl Pipeline {
     pub fn unload_all(&mut self) {
         tracing::info!("Unloading all models from memory");
 
-        // Unload LLM
         self.unload_llm();
-
-        // Note: STT engine can't be easily unloaded without recreating the pipeline
-        // because it's not wrapped in Option. For now, just clear LLM.
-        // Full unload would require restructuring Pipeline to have Option<SttEngine>
+        self.unload_stt();
 
         tracing::info!("All models unloaded");
     }
@@ -298,6 +319,18 @@ impl Pipeline {
     /// Check if the LLM is ready for use
     pub fn is_llm_ready(&self) -> bool {
         self.llm.is_some() && !self.llm_permanently_failed
+    }
+
+    /// Add a user-learned correction to the replacement dictionary at runtime.
+    /// The correction is applied by the existing `replacements.apply()` step.
+    pub fn add_user_correction(&mut self, original: &str, corrected: &str) {
+        self.replacements.add_user_correction(original.to_string(), corrected.to_string());
+    }
+
+    /// Remove a user-learned correction from the replacement dictionary at runtime.
+    /// Returns true if the correction was found and removed.
+    pub fn remove_user_correction(&mut self, original: &str) -> bool {
+        self.replacements.remove_user_correction(original)
     }
 
     /// Check if the pipeline can fall back to transcription-only mode
@@ -371,8 +404,15 @@ impl Pipeline {
 
             // Run prosody analysis (only use timestamps if available)
             if self.prosody_options.pause_analysis || self.prosody_options.pitch_analysis {
-                let word_timestamps = if self.prosody_options.pause_analysis && !transcription_result.word_timestamps.is_empty() {
-                    Some(WhisperEngine::get_word_timestamp_tuples(&transcription_result))
+                let word_timestamps: Option<Vec<(String, i64, i64)>> = if self.prosody_options.pause_analysis && !transcription_result.word_timestamps.is_empty() {
+                    #[cfg(feature = "whisper")]
+                    {
+                        Some(WhisperEngine::get_word_timestamp_tuples(&transcription_result))
+                    }
+                    #[cfg(not(feature = "whisper"))]
+                    {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -620,6 +660,245 @@ impl Pipeline {
         let total_ms = start.elapsed().as_millis() as u64;
         tracing::info!(
             "process_text complete in {}ms (prosody: {}ms, format: {}ms)",
+            total_ms, prosody_ms, llm_formatting_ms
+        );
+
+        Ok(PipelineResult {
+            raw_transcript,
+            formatted_text,
+            timings: Timings {
+                transcription_ms: 0,
+                prosody_ms,
+                llm_formatting_ms,
+                total_ms,
+            },
+            prosody_hints: None,
+        })
+    }
+
+    /// Process pre-transcribed text with an image through post-processing + multimodal LLM.
+    /// Used for visual context dictation (Control+Option+Space hotkey).
+    pub fn process_text_with_image(
+        &mut self,
+        text: &str,
+        image_data: &[u8],
+        context: Option<&str>,
+    ) -> Result<PipelineResult> {
+        let start = Instant::now();
+
+        let mut raw_transcript = text.to_string();
+
+        // Same pre-processing as process_text()
+        raw_transcript = fix_tokenization_artifacts(&raw_transcript);
+        raw_transcript = remove_filler_words(&raw_transcript);
+
+        if raw_transcript.trim().is_empty() {
+            return Ok(PipelineResult {
+                raw_transcript: String::new(),
+                formatted_text: String::new(),
+                timings: Timings {
+                    transcription_ms: 0,
+                    prosody_ms: 0,
+                    llm_formatting_ms: 0,
+                    total_ms: start.elapsed().as_millis() as u64,
+                },
+                prosody_hints: None,
+            });
+        }
+
+        // Post-processing (voice commands, spelled words, replacements)
+        let t2 = Instant::now();
+        if self.prosody_options.voice_commands {
+            raw_transcript = replace_voice_commands(&raw_transcript);
+        }
+        raw_transcript = concatenate_spelled_words_aggressive(&raw_transcript);
+        raw_transcript = self.replacements.apply(&raw_transcript);
+        let prosody_ms = t2.elapsed().as_millis() as u64;
+
+        // Build prompt template (same logic as process_text)
+        let prompt_template = if let Some(ctx) = context {
+            if ctx.len() > 50 {
+                let base = self.config.get_prompt_for_context(None);
+                if let Some(input_pos) = base.find("## Input") {
+                    format!("{}\n{}\n\n{}", &base[..input_pos].trim_end(), ctx, &base[input_pos..])
+                } else {
+                    format!("{}\n{}", base, ctx)
+                }
+            } else {
+                self.config.get_prompt_for_context(Some(ctx))
+            }
+        } else {
+            self.config.get_prompt_for_context(None)
+        };
+
+        tracing::debug!("Formatting with multimodal LLM (image: {} bytes)", image_data.len());
+        let t3 = Instant::now();
+
+        let (formatted_text, llm_formatting_ms) = match self.get_llm() {
+            Ok(llm) => {
+                if llm.supports_multimodal() {
+                    match llm.format_with_image(&raw_transcript, &prompt_template, image_data) {
+                        Ok(text) => {
+                            let ms = t3.elapsed().as_millis() as u64;
+                            tracing::debug!("Multimodal LLM formatting took {}ms", ms);
+                            (text, ms)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Multimodal LLM formatting failed: {}. Falling back to text-only.", e);
+                            // Fall back to text-only formatting
+                            match llm.format(&raw_transcript, &prompt_template) {
+                                Ok(text) => (text, t3.elapsed().as_millis() as u64),
+                                Err(e2) => {
+                                    tracing::warn!("Text-only fallback also failed: {}", e2);
+                                    (raw_transcript.clone(), 0)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    tracing::warn!("Multimodal not supported, falling back to text-only LLM");
+                    match llm.format(&raw_transcript, &prompt_template) {
+                        Ok(text) => (text, t3.elapsed().as_millis() as u64),
+                        Err(e) => {
+                            tracing::warn!("LLM formatting failed: {}", e);
+                            (raw_transcript.clone(), 0)
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("LLM initialization failed: {}. Returning raw transcript.", e);
+                (raw_transcript.clone(), 0)
+            }
+        };
+
+        let formatted_text = if is_mid_sentence_continuation(context) {
+            fix_continuation_casing(&formatted_text)
+        } else {
+            formatted_text
+        };
+
+        let total_ms = start.elapsed().as_millis() as u64;
+        tracing::info!(
+            "process_text_with_image complete in {}ms (prosody: {}ms, format: {}ms)",
+            total_ms, prosody_ms, llm_formatting_ms
+        );
+
+        Ok(PipelineResult {
+            raw_transcript,
+            formatted_text,
+            timings: Timings {
+                transcription_ms: 0,
+                prosody_ms,
+                llm_formatting_ms,
+                total_ms,
+            },
+            prosody_hints: None,
+        })
+    }
+
+    /// Process pre-transcribed text with LLM token streaming.
+    /// Identical pre-processing to `process_text()`, but calls `format_streaming()` for
+    /// real-time token delivery via `on_token` callback.
+    pub fn process_text_streaming(
+        &mut self,
+        text: &str,
+        context: Option<&str>,
+        on_token: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<PipelineResult> {
+        let start = Instant::now();
+
+        let mut raw_transcript = text.to_string();
+
+        // Fix tokenization artifacts
+        raw_transcript = fix_tokenization_artifacts(&raw_transcript);
+
+        // Remove filler words
+        raw_transcript = remove_filler_words(&raw_transcript);
+
+        if raw_transcript.trim().is_empty() {
+            return Ok(PipelineResult {
+                raw_transcript: String::new(),
+                formatted_text: String::new(),
+                timings: Timings {
+                    transcription_ms: 0,
+                    prosody_ms: 0,
+                    llm_formatting_ms: 0,
+                    total_ms: start.elapsed().as_millis() as u64,
+                },
+                prosody_hints: None,
+            });
+        }
+
+        // Post-processing (voice commands, spelled words, replacements)
+        let t2 = Instant::now();
+        if self.prosody_options.voice_commands {
+            raw_transcript = replace_voice_commands(&raw_transcript);
+        }
+        raw_transcript = concatenate_spelled_words_aggressive(&raw_transcript);
+        raw_transcript = self.replacements.apply(&raw_transcript);
+        let prosody_ms = t2.elapsed().as_millis() as u64;
+
+        // Build prompt template (same logic as process_text)
+        let prompt_template = if let Some(ctx) = context {
+            if ctx.len() > 50 {
+                let base = self.config.get_prompt_for_context(None);
+                if let Some(input_pos) = base.find("## Input") {
+                    format!("{}\n{}\n\n{}", &base[..input_pos].trim_end(), ctx, &base[input_pos..])
+                } else {
+                    format!("{}\n{}", base, ctx)
+                }
+            } else {
+                self.config.get_prompt_for_context(Some(ctx))
+            }
+        } else {
+            self.config.get_prompt_for_context(None)
+        };
+
+        tracing::debug!("Streaming format of external transcript (context: {:?})", context);
+        let t3 = Instant::now();
+
+        let (formatted_text, llm_formatting_ms) = match self.get_llm() {
+            Ok(llm) => {
+                match llm.format_streaming(&raw_transcript, &prompt_template, on_token) {
+                    Ok(text) => {
+                        let ms = t3.elapsed().as_millis() as u64;
+                        tracing::debug!("LLM streaming formatting took {}ms", ms);
+                        (text, ms)
+                    }
+                    Err(e) => {
+                        tracing::warn!("LLM streaming formatting failed: {}. Falling back to raw transcript.", e);
+                        if self.recovery_config.fallback_to_transcribe_only {
+                            (raw_transcript.clone(), 0)
+                        } else {
+                            return Err(PipelineError::LlmFormattingFailed {
+                                message: e.to_string(),
+                            }.into());
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("LLM initialization failed: {}. Falling back to raw transcript.", e);
+                if self.recovery_config.fallback_to_transcribe_only {
+                    (raw_transcript.clone(), 0)
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
+        // Apply mid-sentence continuation fix
+        let formatted_text = if is_mid_sentence_continuation(context) {
+            tracing::debug!("Applying mid-sentence continuation casing fix");
+            fix_continuation_casing(&formatted_text)
+        } else {
+            formatted_text
+        };
+
+        let total_ms = start.elapsed().as_millis() as u64;
+        tracing::info!(
+            "process_text_streaming complete in {}ms (prosody: {}ms, format: {}ms)",
             total_ms, prosody_ms, llm_formatting_ms
         );
 

@@ -17,7 +17,7 @@ pub mod transcribe;
 
 mod pipeline;
 
-pub use config::{Config, LlmModel, WhisperModel, ConfigError, PipelineMode, ConsolidatedModel, VlmModel, env_vars};
+pub use config::{Config, LlmModel, WhisperModel, ConfigError, PipelineMode, ConsolidatedModel, env_vars};
 pub use pipeline::{Pipeline, PipelineResult, ProsodyOptions, Timings, RecoveryConfig, PipelineError};
 pub use prosody::{ProsodyHints, PitchContour};
 

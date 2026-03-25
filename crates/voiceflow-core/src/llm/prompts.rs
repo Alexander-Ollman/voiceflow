@@ -3,7 +3,11 @@
 use super::numbers::{fix_abbreviations, normalize_numbers};
 use crate::config::Config;
 
-/// Format a prompt template with the transcript and config
+/// Format a prompt template with the transcript and config.
+///
+/// Wraps the prompt in Qwen chat template markers (`<|im_start|>` / `<|im_end|>`)
+/// so that model instructions like `/no_think` are properly recognized.
+/// The instructions go in the system role; the transcript goes in the user role.
 pub fn format_prompt(template: &str, transcript: &str, config: &Config) -> String {
     let mut prompt = template.replace("{transcript}", transcript);
 
@@ -18,18 +22,33 @@ pub fn format_prompt(template: &str, transcript: &str, config: &Config) -> Strin
         prompt = prompt.replace("{personal_dictionary}", "");
     }
 
-    // Add /no_think for Qwen3 models when thinking is disabled (faster inference).
-    // Insert before "## Input" so it's treated as an instruction, not output content.
-    if !config.llm_options.enable_thinking {
-        if let Some(pos) = prompt.find("## Input") {
-            prompt.insert_str(pos, "/no_think\n\n");
-        } else {
-            // No ## Input marker — place before the last line
-            prompt.push_str(" /no_think");
-        }
-    }
+    // Split into system (instructions) and user (transcript) parts at "## Input"
+    let (system_part, user_part) = if let Some(pos) = prompt.find("## Input") {
+        (prompt[..pos].trim_end().to_string(), prompt[pos..].to_string())
+    } else {
+        (prompt.clone(), String::new())
+    };
 
-    prompt
+    // Build Qwen chat-template formatted prompt.
+    // For Qwen3.5: disable thinking by pre-filling an empty <think></think> block
+    // in the assistant turn (Qwen3.5 does NOT support /no_think soft switches).
+    let assistant_prefix = if config.llm_options.enable_thinking {
+        "<|im_start|>assistant\n<think>\n"
+    } else {
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    };
+
+    if user_part.is_empty() {
+        format!(
+            "<|im_start|>user\n{}<|im_end|>\n{}",
+            system_part, assistant_prefix,
+        )
+    } else {
+        format!(
+            "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n{}",
+            system_part, user_part, assistant_prefix,
+        )
+    }
 }
 
 /// Build a chat-formatted prompt for Qwen3/SmolLM3
@@ -57,12 +76,94 @@ pub fn build_chat_prompt(system: &str, user: &str, enable_thinking: bool) -> Str
 /// Apply all post-processing to LLM output
 pub fn post_process_output(text: &str) -> String {
     let trimmed = text.trim();
-    let urls_fixed = fix_url_spacing(trimmed);
+    let sanitized = strip_leaked_prompt_blocks(trimmed);
+    let deduped = strip_repeated_output(&sanitized);
+    let urls_fixed = fix_url_spacing(&deduped);
     let urls_lowercased = lowercase_urls(&urls_fixed);
     let fixed = fix_punctuation_spacing(&urls_lowercased);
     let ellipses = normalize_ellipses(&fixed);
-    let numbers = normalize_numbers(&ellipses);
+    let ellipses_stripped = strip_trailing_ellipsis(&ellipses);
+    let numbers = normalize_numbers(&ellipses_stripped);
     fix_abbreviations(&numbers)
+}
+
+/// Detect and remove repeated output from the LLM.
+/// Small models sometimes generate the correct output, then repeat it verbatim
+/// (separated by blank lines). This detects when the second half of the output
+/// is a near-exact copy of the first half and keeps only the first occurrence.
+fn strip_repeated_output(text: &str) -> String {
+    let trimmed = text.trim();
+
+    // Only bother for outputs long enough to plausibly contain a duplicate
+    // (at least 60 chars so each half has ~30+ chars of real content)
+    if trimmed.len() < 60 {
+        return trimmed.to_string();
+    }
+
+    // Try splitting on common separators between duplicated blocks:
+    // double newline, single newline, or just look for prefix match in second half
+    for separator in &["\n\n", "\n"] {
+        if let Some(pos) = trimmed.find(separator) {
+            let first_half = trimmed[..pos].trim();
+            let second_half = trimmed[pos + separator.len()..].trim();
+
+            // Both halves must be non-trivial
+            if first_half.len() < 20 || second_half.len() < 20 {
+                continue;
+            }
+
+            // Check if the second half starts with the same text as the first half
+            // (the second copy might be truncated by max_tokens, so check prefix)
+            if second_half.starts_with(first_half)
+                || first_half.starts_with(second_half)
+            {
+                tracing::debug!(
+                    "Stripped repeated output: first={} chars, second={} chars",
+                    first_half.len(),
+                    second_half.len()
+                );
+                // Keep the longer of the two (in case one is truncated)
+                return if first_half.len() >= second_half.len() {
+                    first_half.to_string()
+                } else {
+                    second_half.to_string()
+                };
+            }
+        }
+    }
+
+    trimmed.to_string()
+}
+
+/// Strip leaked prompt context blocks from LLM output.
+/// Small on-device models sometimes echo back system prompt instructions
+/// like [EMPTY_FIELD], [CORRECTION HISTORY], etc. as part of their output.
+fn strip_leaked_prompt_blocks(text: &str) -> String {
+    // Known prompt block tags that should never appear in output
+    const BLOCK_TAGS: &[&str] = &[
+        "[EMPTY_FIELD]",
+        "[CORRECTION HISTORY]",
+        "[CORRECTION_HISTORY]",
+        "[MID_SENTENCE_CONTINUATION]",
+        "[INPUT CONTEXT]",
+        "[INPUT_CONTEXT]",
+        "## Output",
+        "#Output",
+        "# Output",
+        "## Input",
+        "#Input",
+        "# Input",
+        "\nTranscript:",
+    ];
+
+    let mut result = text.to_string();
+    for tag in BLOCK_TAGS {
+        if let Some(pos) = result.find(tag) {
+            // Truncate everything from the tag onwards — the real content is before it
+            result = result[..pos].trim_end().to_string();
+        }
+    }
+    result
 }
 
 /// Lowercase URLs - "www.Google.Com" → "www.google.com"
@@ -434,6 +535,56 @@ pub fn normalize_ellipses(text: &str) -> String {
     result
 }
 
+/// Strip trailing ellipsis artifacts from otherwise complete sentences.
+/// STT engines sometimes append "..." at pause boundaries even when the sentence
+/// is complete. This removes trailing "..." when the text before it already ends
+/// with sentence-ending punctuation, or when the sentence appears complete.
+///
+/// Examples:
+/// - "Hello world...." (after normalize_ellipses → "Hello world...") → "Hello world."
+/// - "Hello world..." → "Hello world."
+/// - "I wonder..." → "I wonder..." (trails off mid-thought, kept)
+fn strip_trailing_ellipsis(text: &str) -> String {
+    let trimmed = text.trim_end();
+
+    // Only act on text that ends with "..."
+    if !trimmed.ends_with("...") {
+        return text.to_string();
+    }
+
+    let before_ellipsis = &trimmed[..trimmed.len() - 3];
+    let before_trimmed = before_ellipsis.trim_end();
+
+    // If there's sentence-ending punctuation right before the "...", strip the ellipsis
+    // e.g., "Hello world...." → normalize_ellipses made it "Hello world..." → "Hello world."
+    // Actually the period is consumed by normalize_ellipses into the "..." itself.
+    // So check if the text before "..." ends with a complete word (not a fragment).
+
+    // Heuristic: if the text before "..." ends with sentence-ending punctuation, strip ellipsis
+    if before_trimmed.ends_with('.') || before_trimmed.ends_with('?') || before_trimmed.ends_with('!') {
+        return before_trimmed.to_string();
+    }
+
+    // If the text before "..." looks like a complete sentence (ends with a regular word,
+    // not a conjunction/preposition/article that suggests trailing off), replace with period.
+    let trailing_incomplete = [
+        "and", "or", "but", "the", "a", "an", "to", "of", "in", "on", "for",
+        "with", "at", "by", "from", "if", "so", "that", "which", "who", "when",
+        "where", "while", "because", "although", "though", "whether", "I",
+    ];
+
+    if let Some(last_word) = before_trimmed.split_whitespace().last() {
+        let clean_word = last_word.trim_end_matches(|c: char| c.is_ascii_punctuation());
+        if !trailing_incomplete.contains(&clean_word) && !clean_word.is_empty() {
+            // Looks like a complete thought — replace ellipsis with period
+            return format!("{}.", before_trimmed);
+        }
+    }
+
+    // Unclear — keep the ellipsis (speaker was trailing off)
+    text.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,6 +623,33 @@ mod tests {
     }
 
     #[test]
+    fn test_strip_trailing_ellipsis_complete_sentence() {
+        // Complete sentence ending with "..." → replace with period
+        assert_eq!(strip_trailing_ellipsis("Hello world..."), "Hello world.");
+    }
+
+    #[test]
+    fn test_strip_trailing_ellipsis_after_punctuation() {
+        // Punctuation before ellipsis → strip ellipsis
+        assert_eq!(strip_trailing_ellipsis("Hello world!..."), "Hello world!");
+        assert_eq!(strip_trailing_ellipsis("Really?..."), "Really?");
+    }
+
+    #[test]
+    fn test_strip_trailing_ellipsis_trailing_off() {
+        // Trailing off mid-thought → keep ellipsis
+        assert_eq!(strip_trailing_ellipsis("I wonder if..."), "I wonder if...");
+        assert_eq!(strip_trailing_ellipsis("and then the..."), "and then the...");
+    }
+
+    #[test]
+    fn test_strip_trailing_ellipsis_no_ellipsis() {
+        // No ellipsis → pass through unchanged
+        assert_eq!(strip_trailing_ellipsis("Hello world."), "Hello world.");
+        assert_eq!(strip_trailing_ellipsis("Hello world"), "Hello world");
+    }
+
+    #[test]
     fn test_punctuation_spacing() {
         assert_eq!(fix_punctuation_spacing("Hello.World"), "Hello. World");
     }
@@ -503,5 +681,63 @@ mod tests {
     fn test_fix_url_spacing_no_false_positive() {
         // ". It" should NOT collapse (not a safe TLD)
         assert_eq!(fix_url_spacing("mind. It appears"), "mind. It appears");
+    }
+
+    #[test]
+    fn test_strip_leaked_prompt_blocks() {
+        // Model echoes [EMPTY_FIELD] block after real content
+        let input = "What are we going to offer?\n\n[EMPTY_FIELD]\nThe input field is empty.";
+        assert_eq!(strip_leaked_prompt_blocks(input), "What are we going to offer?");
+
+        // Model echoes [CORRECTION HISTORY] block
+        let input = "Hello world\n[CORRECTION HISTORY]\nThe user has corrected: 'so' -> 'vs'";
+        assert_eq!(strip_leaked_prompt_blocks(input), "Hello world");
+
+        // No leaked blocks — text passes through unchanged
+        assert_eq!(strip_leaked_prompt_blocks("Just normal text."), "Just normal text.");
+
+        // Model echoes ## Output marker and duplicates content
+        let input = "Deploy any page with or without Auth?\n\n## Output\n\nDeploy any page with or without Auth?";
+        assert_eq!(strip_leaked_prompt_blocks(input), "Deploy any page with or without Auth?");
+
+        // Variant without space
+        let input = "Hello world.\n\n#Output\n\nHello world.";
+        assert_eq!(strip_leaked_prompt_blocks(input), "Hello world.");
+
+        // Model echoes ## Input marker and re-outputs transcript
+        let input = "The honest answer is that there are multiple.\n\n## Input\n\nTranscript:\nThe honest answer is that there are multiple.";
+        assert_eq!(strip_leaked_prompt_blocks(input), "The honest answer is that there are multiple.");
+
+        // Model echoes Transcript: marker
+        let input = "Hello world.\n\nTranscript:\nHello world.";
+        assert_eq!(strip_leaked_prompt_blocks(input), "Hello world.");
+    }
+
+    #[test]
+    fn test_strip_repeated_output() {
+        // Verbatim duplication separated by double newline
+        let text = "The honest answer is that there are multiple matters.\n\nThe honest answer is that there are multiple matters.";
+        assert_eq!(
+            strip_repeated_output(text),
+            "The honest answer is that there are multiple matters."
+        );
+
+        // Second copy truncated (model hit max_tokens)
+        let text = "The honest answer is that there are multiple matters of the heart.\n\nThe honest answer is that there are multiple matters";
+        assert_eq!(
+            strip_repeated_output(text),
+            "The honest answer is that there are multiple matters of the heart."
+        );
+
+        // Short text should not be deduped (could be legitimate)
+        let text = "Hello.\n\nWorld.";
+        assert_eq!(strip_repeated_output(text), "Hello.\n\nWorld.");
+
+        // Non-duplicate paragraphs should be preserved
+        let text = "First paragraph about one topic.\n\nSecond paragraph about another topic entirely.";
+        assert_eq!(
+            strip_repeated_output(text),
+            "First paragraph about one topic.\n\nSecond paragraph about another topic entirely."
+        );
     }
 }

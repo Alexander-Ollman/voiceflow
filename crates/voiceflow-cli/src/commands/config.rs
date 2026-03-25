@@ -83,20 +83,15 @@ pub fn show(config: &Config) -> Result<()> {
 pub fn set_model(config: &mut Config, model: &str) -> Result<()> {
     let term = Term::stdout();
 
-    // Normalize model name: replace - and . with _ for matching
-    let normalized = model.to_lowercase().replace(['-', '.'], "_");
+    // Normalize model name for matching
+    let normalized = model.to_lowercase();
     let llm_model = match normalized.as_str() {
-        "qwen3_1_7b" | "qwen3" | "qwen" => LlmModel::Qwen3_1_7B,
-        "qwen3_4b" => LlmModel::Qwen3_4B,
-        "smollm3_3b" | "smollm3" | "smollm" => LlmModel::SmolLM3_3B,
-        "gemma2_2b" | "gemma2" | "gemma" => LlmModel::Gemma2_2B,
-        "gemma3n_e2b" | "gemma3n" => LlmModel::Gemma3nE2B,
-        "gemma3n_e4b" => LlmModel::Gemma3nE4B,
-        "phi4_mini" | "phi4" => LlmModel::Phi4Mini,
-        "phi_2" | "phi2" => LlmModel::Phi2,
+        "qwen3.5_0_8b" | "qwen3.5_0.8b" | "qwen3.5-0.8b" => LlmModel::Qwen3_5_0_8B,
+        "qwen3.5_2b" | "qwen3.5-2b" => LlmModel::Qwen3_5_2B,
+        "qwen3.5_4b" | "qwen3.5-4b" => LlmModel::Qwen3_5_4B,
         _ => {
             term.write_line(&format!(
-                "{} Unknown model '{}'. Available: qwen3-1.7b, qwen3-4b, smollm3-3b, gemma2-2b, gemma3n-e2b, gemma3n-e4b, phi4-mini, phi-2",
+                "{} Unknown model '{}'. Available: qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b",
                 style("✗").red(),
                 model
             ))?;

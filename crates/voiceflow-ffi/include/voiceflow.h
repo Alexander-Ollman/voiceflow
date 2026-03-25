@@ -61,15 +61,10 @@ typedef struct ConsolidatedModelInfo {
 } ConsolidatedModelInfo;
 
 /**
- * VLM model info struct for FFI
+ * C function pointer type for streaming token callbacks.
+ * Returns true to continue generation, false to abort.
  */
-typedef struct VlmModelInfo {
-  char *id;
-  char *display_name;
-  char *dir_name;
-  float size_gb;
-  bool is_downloaded;
-} VlmModelInfo;
+typedef bool (*TokenCallbackFn)(const char *token, void *userdata);
 
 /**
  * Memory info struct for FFI
@@ -301,79 +296,62 @@ bool voiceflow_consolidated_model_downloaded(const char *modelId);
 char *voiceflow_consolidated_model_dir(const char *modelId);
 
 /**
- * Get the number of available VLM models
+ * Get the mmproj filename for the current model, or null if not multimodal
  */
-uintptr_t voiceflow_vlm_model_count(void);
+char *voiceflow_model_mmproj_filename(void);
 
 /**
- * Get VLM model info by index
+ * Get the mmproj download URL for the current model, or null if not multimodal
+ */
+char *voiceflow_model_mmproj_download_url(void);
+
+/**
+ * Check if the mmproj file is downloaded for the current model
+ */
+bool voiceflow_model_mmproj_downloaded(void);
+
+/**
+ * Get the mmproj size in GB for the current model
+ */
+float voiceflow_model_mmproj_size_gb(void);
+
+/**
+ * Process pre-transcribed text with an image through post-processing + multimodal LLM formatting.
+ * Used for visual context dictation (Control+Option+Space hotkey).
  *
  * # Safety
- * index must be < voiceflow_vlm_model_count()
+ * - handle must be a valid pointer from voiceflow_init
+ * - text must be a valid null-terminated string
+ * - context can be null
+ * - image_data must point to image_len bytes of JPEG data (or null for text-only)
  */
-struct VlmModelInfo voiceflow_vlm_model_info(uintptr_t index);
+struct VoiceFlowResult voiceflow_process_text_with_image(struct VoiceFlowHandle *handle,
+                                                         const char *text,
+                                                         const char *context,
+                                                         const uint8_t *imageData,
+                                                         uintptr_t imageLen);
 
 /**
- * Free VLM model info strings
+ * Add a user-learned correction to the replacement dictionary.
+ * The correction is applied deterministically by the Rust pipeline's replacement step.
  *
  * # Safety
- * Only call once per VlmModelInfo
+ * - handle must be a valid pointer from voiceflow_init
+ * - original and corrected must be valid null-terminated strings
  */
-void voiceflow_free_vlm_model_info(struct VlmModelInfo info);
+bool voiceflow_add_replacement(struct VoiceFlowHandle *handle,
+                               const char *original,
+                               const char *corrected);
 
 /**
- * Check if a VLM model is downloaded
+ * Remove a user-learned correction from the replacement dictionary.
+ * Call this when the user deletes a correction from the UI so it stops being applied immediately.
  *
  * # Safety
- * model_id must be a valid null-terminated string
+ * - handle must be a valid pointer from voiceflow_init
+ * - original must be a valid null-terminated string
  */
-bool voiceflow_vlm_model_downloaded(const char *modelId);
-
-/**
- * Get the HuggingFace repo for a VLM model
- *
- * # Safety
- * model_id must be a valid null-terminated string
- */
-char *voiceflow_vlm_model_hf_repo(const char *modelId);
-
-/**
- * Get the number of required files for a VLM model
- *
- * # Safety
- * model_id must be a valid null-terminated string
- */
-uintptr_t voiceflow_vlm_model_file_count(const char *modelId);
-
-/**
- * Get a required file name for a VLM model by index
- *
- * # Safety
- * model_id must be a valid null-terminated string, index must be < file_count
- */
-char *voiceflow_vlm_model_file_name(const char *modelId, uintptr_t index);
-
-/**
- * Get the directory path for a VLM model
- *
- * # Safety
- * model_id must be a valid null-terminated string
- */
-char *voiceflow_vlm_model_dir(const char *modelId);
-
-/**
- * Get the current VLM model ID from config, or null if none selected
- */
-char *voiceflow_current_vlm_model(void);
-
-/**
- * Set the current VLM model in config (requires restart to take effect)
- * Pass null to clear the VLM selection (revert to LLM-only mode)
- *
- * # Safety
- * model_id must be a valid null-terminated string or null to clear
- */
-bool voiceflow_set_vlm_model(const char *modelId);
+bool voiceflow_remove_replacement(struct VoiceFlowHandle *handle, const char *original);
 
 /**
  * Apply post-processing to text (tokenization fix, voice commands, spelled words, replacements).
@@ -401,6 +379,24 @@ struct VoiceFlowResult voiceflow_format_text(struct VoiceFlowHandle *handle,
                                              const char *context);
 
 /**
+ * Process pre-transcribed text through post-processing + LLM formatting with streaming.
+ * Each generated token is delivered to the callback as it's produced.
+ * Returns a VoiceFlowResult with the fully post-processed formatted_text.
+ *
+ * # Safety
+ * - handle must be a valid pointer from voiceflow_init
+ * - text must be a valid null-terminated string
+ * - context can be null
+ * - callback must be a valid function pointer
+ * - userdata is passed through to the callback unchanged
+ */
+struct VoiceFlowResult voiceflow_format_text_streaming(struct VoiceFlowHandle *handle,
+                                                       const char *text,
+                                                       const char *context,
+                                                       TokenCallbackFn callback,
+                                                       void *userdata);
+
+/**
  * Check if the current STT engine is external (handled outside Rust pipeline)
  */
 bool voiceflow_is_external_stt(void);
@@ -426,6 +422,15 @@ void voiceflow_unload_models(struct VoiceFlowHandle *handle);
  * handle must be a valid pointer from voiceflow_init
  */
 void voiceflow_reset_llm(struct VoiceFlowHandle *handle);
+
+/**
+ * Unload the STT engine from memory
+ * Call this when streaming replaces STT to free memory
+ *
+ * # Safety
+ * handle must be a valid pointer from voiceflow_init
+ */
+void voiceflow_unload_stt(struct VoiceFlowHandle *handle);
 
 /**
  * Get approximate memory usage in bytes

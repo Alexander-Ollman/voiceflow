@@ -12,7 +12,7 @@ name = "voiceflow"
 path = "src/main.rs"
 
 [dependencies]
-voiceflow-core.workspace = true
+voiceflow-core = { workspace = true, default-features = false }
 
 # CLI
 clap.workspace = true
@@ -44,3 +44,4 @@ flate2 = "1.0"
 default = ["metal"]
 metal = ["voiceflow-core/metal"]
 cuda = ["voiceflow-core/cuda"]
+whisper = ["voiceflow-core/whisper"]
