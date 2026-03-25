@@ -24,18 +24,21 @@
 - **Push-to-talk** &mdash; Hold `⌥ Space` to record, release to transcribe and paste
 - **100% local** &mdash; All processing on-device with Metal GPU acceleration
 - **Multiple STT engines** &mdash; [Moonshine](https://github.com/usefulsensors/moonshine) (ONNX), [Whisper](https://github.com/openai/whisper) (whisper.cpp), and [Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
-- **Multiple LLM backends** &mdash; [mistral.rs](https://github.com/EricLBuehler/mistral.rs) and [llama.cpp](https://github.com/ggerganov/llama.cpp) for wide model coverage
+- **Qwen3.5 LLM** &mdash; [llama.cpp](https://github.com/ggerganov/llama.cpp) backend with Qwen3.5 0.8B/2B/4B models for formatting
 - **Smart formatting** &mdash; Automatic punctuation, capitalization, em-dashes, bullet lists
 - **Number normalization** &mdash; "fifty thousand dollars" becomes "$50,000", "three thirty pm" becomes "3:30 PM", phone numbers, percentages, dates, and keyword numbers (port 8000) all converted automatically
 - **Voice commands** &mdash; Say "new paragraph", "bullet point", "question mark" and more
 - **Filler word removal** &mdash; "um", "uh", "hmm" removed automatically
 - **Customizable dictionary** &mdash; Editable replacement file for technical terms and proper nouns
 - **Context-aware** &mdash; Reads cursor context via Accessibility API for seamless spacing
-- **Visual context (VLM)** &mdash; Uses a local vision-language model to capture and analyze your screen, extracting names, terms, and writing context to improve spelling accuracy. Supports Jina VLM and Qwen3-VL models
+- **Visual context** &mdash; Uses multimodal LLM (Qwen3.5 + mmproj) to capture and analyze your screen, extracting names, terms, and writing context to improve spelling accuracy
 - **Per-app formatting** &mdash; Auto-detects apps (email, Slack, code editors, etc.) and lets you customize dictation style per application with custom prompts
 - **Correction learning** &mdash; Learns from your edits to fix recurring spelling mistakes automatically, with 30-day history and pattern management
 - **Voice snippets** &mdash; Create custom trigger phrases that expand into any text (e.g., "my signature" expands to your full sign-off)
+- **AI voice commands** &mdash; Say "reply to this", "rewrite this", "proofread this", or "continue writing" for context-aware AI actions on the current text field
 - **Summarize this** &mdash; Say "summarize this" to have a local LLM read and summarize the current text field, with a live status pill showing each step
+- **Streaming transcription** &mdash; Moonshine streaming engine provides real-time transcription with live token display
+- **Token streaming** &mdash; LLM output streams token-by-token through the pipeline for faster perceived response
 - **Menu bar app** &mdash; Minimal footprint, no dock icon, launch at login
 
 ## How It Works
@@ -74,17 +77,19 @@ Audio → Qwen3-ASR (Python daemon) → Post-processing → Output
 │                                                      │
 │  Pipeline: Audio → STT → Prosody → LLM → Output     │
 │                                                      │
-│  STT Engines:         LLM Backends:    Prosody:      │
-│  - Moonshine (ONNX)   - mistral.rs    - Voice cmds  │
-│  - Whisper (cpp)       - llama.cpp     - Pause det.  │
-│  - Qwen3-ASR (ext.)                   - Pitch det.  │
-│                                        - Filler rem. │
-│  Post-processing:                      - Replacements│
-│  - Number normalization               - Spell concat │
+│  STT Engines:         LLM Backend:     Prosody:      │
+│  - Moonshine (ONNX)   - llama.cpp     - Voice cmds  │
+│  - Whisper (cpp)       (Qwen3.5)      - Pause det.  │
+│  - Qwen3-ASR (ext.)   - Multimodal    - Pitch det.  │
+│  - Moonshine Stream    - Streaming     - Filler rem. │
+│                                        - Replacements│
+│  Post-processing:                      - Spell concat│
+│  - Number normalization                              │
 │  - Abbreviation fixing                               │
+│  - Output deduplication                              │
 │                                                      │
 │  Smart Context:                                      │
-│  - VLM visual context (Jina/Qwen3-VL)               │
+│  - Visual context (multimodal mmproj)                │
 │  - Per-app profiles                                  │
 │  - Correction learning                               │
 └──────────────────────────────────────────────────────┘
@@ -134,11 +139,11 @@ open build/VoiceFlow.app
 ### Download Models
 
 ```bash
-# Download default models (Moonshine Base + Qwen3 1.7B)
+# Download default models (Moonshine Base + Qwen3.5 4B)
 cargo run -p voiceflow-cli -- setup
 
 # Specify different models
-cargo run -p voiceflow-cli -- setup --whisper base --llm qwen3-4b
+cargo run -p voiceflow-cli -- setup --whisper base --llm qwen3-5-2b
 
 # Download all models for benchmarking
 cargo run -p voiceflow-cli -- setup --benchmark
@@ -274,7 +279,7 @@ All commands support `--verbose` for debug output and `--config <path>` for a cu
 
 VoiceFlow uses three complementary systems to improve accuracy over time:
 
-- **Visual context (VLM)** &mdash; When enabled, captures a screenshot of your active window and uses a local vision-language model (Jina VLM or Qwen3-VL) to extract names, terms, and writing context. This helps the LLM spell proper nouns correctly &mdash; names visible on screen, project names in code editors, technical terms in documentation. Screenshots are compressed locally (JPEG, max 1280x720) and never leave your machine. Requires a VLM model download and Screen Recording permission.
+- **Visual context** &mdash; When enabled, captures a screenshot of your active window and uses the multimodal LLM (Qwen3.5 + mmproj projector) to extract names, terms, and writing context. This helps the LLM spell proper nouns correctly &mdash; names visible on screen, project names in code editors, technical terms in documentation. Screenshots are processed locally and never leave your machine. Requires Screen Recording permission.
 
 - **Per-app formatting** &mdash; VoiceFlow auto-detects the frontmost application and adjusts formatting style. Email apps (Outlook, Apple Mail, Gmail) get professional tone, chat apps (Slack, Discord, Teams) get casual formatting with emoji support, and code editors (VS Code, Cursor, Xcode) preserve technical precision. VoiceFlow auto-creates a profile the first time it sees a new app. Customize any app's formatting prompt in Settings > Style > App Profiles.
 
@@ -314,25 +319,15 @@ All three systems feed context into the LLM formatting stage, working together f
 
 ### LLM Models
 
-| Model | Backend | Size (Q4_K_M) | License |
-|-------|---------|---------------|---------|
-| Qwen3 1.7B | mistral.rs | 1.3 GB | Apache 2.0 |
-| Qwen3 4B | mistral.rs | 2.5 GB | Apache 2.0 |
-| SmolLM3 3B | llama.cpp | 1.9 GB | Apache 2.0 |
-| Gemma 2 2B | mistral.rs | 1.7 GB | Gemma |
-| Gemma 3n E2B | llama.cpp | 1.8 GB | Gemma |
-| Gemma 3n E4B | llama.cpp | 3.2 GB | Gemma |
-| Phi-4 Mini 3.8B | llama.cpp | 2.4 GB | MIT |
-| Phi-2 | mistral.rs | 1.6 GB | MIT |
+All models use llama.cpp for inference with Metal GPU acceleration.
 
-Custom GGUF models are also supported via `llama.cpp`.
+| Model | Size (Q4_K_M) | License | Notes |
+|-------|---------------|---------|-------|
+| Qwen3.5 0.8B | ~0.6 GB | Apache 2.0 | Fastest, good for short dictation |
+| Qwen3.5 2B | ~1.5 GB | Apache 2.0 | Good balance |
+| Qwen3.5 4B | ~2.8 GB | Apache 2.0 | Default, best quality |
 
-### VLM Models (Visual Context)
-
-| Model | Size | Notes |
-|-------|------|-------|
-| Jina VLM | ~9.9 GB | Default, best quality |
-| Qwen3-VL 2B Instruct | ~4.3 GB | Lighter alternative |
+Multimodal support (vision+text) is available via optional mmproj projector files for visual context dictation.
 
 ## Configuration
 
@@ -357,7 +352,7 @@ whisper_model = "base"
 consolidated_model = "qwen3-asr-0-6b"
 
 # LLM model for formatting
-llm_model = "qwen3-1-7b"
+llm_model = "qwen3-5-4b"
 
 # LLM generation parameters
 [llm_options]
@@ -419,7 +414,7 @@ voiceflow/
 │   │   ├── src/
 │   │   │   ├── config.rs        # Configuration management
 │   │   │   ├── pipeline.rs      # Main processing pipeline
-│   │   │   ├── llm/             # LLM inference (mistral.rs + llama.cpp backends)
+│   │   │   ├── llm/             # LLM inference (llama.cpp backend, multimodal, streaming)
 │   │   │   ├── transcribe/      # STT engines (Whisper, Moonshine)
 │   │   │   ├── prosody/         # Voice commands, filler removal, pauses, pitch
 │   │   │   └── audio/           # Audio capture and resampling
