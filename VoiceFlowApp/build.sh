@@ -40,7 +40,7 @@ fi
 echo "Step 1: Building Rust FFI library..."
 cd "$PROJECT_ROOT"
 source ~/.cargo/env 2>/dev/null || true
-cargo build --release -p voiceflow-ffi
+cargo build --release -p voiceflow-ffi --features mistralrs
 
 # Step 2: Create build directory
 echo "Step 2: Creating build directory..."
@@ -92,6 +92,12 @@ cp "$IMG_DIR/app.png" "$APP_BUNDLE/Contents/Resources/AppLogo.png"
 if [ -f "$PROJECT_ROOT/scripts/qwen3_asr_daemon.py" ]; then
     cp "$PROJECT_ROOT/scripts/qwen3_asr_daemon.py" "$APP_BUNDLE/Contents/Resources/"
     echo "  Copied qwen3_asr_daemon.py to Resources"
+fi
+
+# Copy Python daemon script for Parakeet-MLX batch STT
+if [ -f "$PROJECT_ROOT/scripts/parakeet_asr_daemon.py" ]; then
+    cp "$PROJECT_ROOT/scripts/parakeet_asr_daemon.py" "$APP_BUNDLE/Contents/Resources/"
+    echo "  Copied parakeet_asr_daemon.py to Resources"
 fi
 
 # Generate macOS app icon (.icns) from app.png
@@ -164,6 +170,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <string>VoiceFlow needs microphone access to transcribe your speech.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>VoiceFlow uses screen capture for visual context to improve dictation. All processing is local.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>VoiceFlow reads the URL of your active browser tab to apply site-specific dictation personas (e.g. github.com → Software Engineer). No content is read.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

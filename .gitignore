@@ -28,3 +28,7 @@ VoiceFlow.dmg
 
 # Local config
 config/local.toml
+
+# Tool / scratch
+.claude/
+test_llama/

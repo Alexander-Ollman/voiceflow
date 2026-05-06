@@ -131,7 +131,7 @@ pub unsafe extern "C" fn voiceflow_init(config_path: *const c_char) -> *mut Voic
             }
         };
 
-        let config = match Config::load(config_str) {
+        let mut config = match Config::load(config_str) {
             Ok(c) => {
                 log_debug(&format!("Config loaded: STT={:?}", c.stt_engine));
                 c
@@ -149,7 +149,14 @@ pub unsafe extern "C" fn voiceflow_init(config_path: *const c_char) -> *mut Voic
             return Box::into_raw(Box::new(VoiceFlowHandle { pipeline: None, config }));
         }
 
-        log_debug("Creating pipeline (loading ONNX models - this may take a while)...");
+        // In audio-direct mode, force Gemma 4 E2B + mistral.rs backend
+        if config.is_audio_direct_mode() {
+            log_debug("Audio-direct mode - configuring Gemma 4 E2B with mistral.rs backend");
+            config.llm_model = voiceflow_core::LlmModel::Gemma4E2B;
+            config.llm_backend = Some(voiceflow_core::LlmBackend::MistralRs);
+        }
+
+        log_debug("Creating pipeline (loading models - this may take a while)...");
         let pipeline = match Pipeline::new(&config) {
             Ok(p) => {
                 log_debug("Pipeline created successfully");
@@ -380,6 +387,8 @@ pub unsafe extern "C" fn voiceflow_model_info(index: usize) -> ModelInfo {
         LlmModel::Qwen3_5_0_8B => "qwen3.5-0.8b",
         LlmModel::Qwen3_5_2B => "qwen3.5-2b",
         LlmModel::Qwen3_5_4B => "qwen3.5-4b",
+        LlmModel::Gemma4E2B => "gemma4-e2b",
+        LlmModel::Gemma4E4B => "gemma4-e4b",
         LlmModel::Custom(_) => "custom",
     };
 
@@ -430,6 +439,8 @@ pub extern "C" fn voiceflow_current_model() -> *mut c_char {
         LlmModel::Qwen3_5_0_8B => "qwen3.5-0.8b",
         LlmModel::Qwen3_5_2B => "qwen3.5-2b",
         LlmModel::Qwen3_5_4B => "qwen3.5-4b",
+        LlmModel::Gemma4E2B => "gemma4-e2b",
+        LlmModel::Gemma4E4B => "gemma4-e4b",
         LlmModel::Custom(_) => "custom",
     };
 
@@ -457,6 +468,8 @@ pub unsafe extern "C" fn voiceflow_set_model(model_id: *const c_char) -> bool {
         "qwen3.5-0.8b" => LlmModel::Qwen3_5_0_8B,
         "qwen3.5-2b" => LlmModel::Qwen3_5_2B,
         "qwen3.5-4b" => LlmModel::Qwen3_5_4B,
+        "gemma4-e2b" => LlmModel::Gemma4E2B,
+        "gemma4-e4b" => LlmModel::Gemma4E4B,
         _ => return false,
     };
 
@@ -486,6 +499,8 @@ pub unsafe extern "C" fn voiceflow_model_download_url(model_id: *const c_char) -
         "qwen3.5-0.8b" => LlmModel::Qwen3_5_0_8B,
         "qwen3.5-2b" => LlmModel::Qwen3_5_2B,
         "qwen3.5-4b" => LlmModel::Qwen3_5_4B,
+        "gemma4-e2b" => LlmModel::Gemma4E2B,
+        "gemma4-e4b" => LlmModel::Gemma4E4B,
         _ => return ptr::null_mut(),
     };
 
@@ -712,6 +727,7 @@ pub extern "C" fn voiceflow_current_pipeline_mode() -> *mut c_char {
     let mode_str = match config.pipeline_mode {
         PipelineMode::SttPlusLlm => "stt-plus-llm",
         PipelineMode::Consolidated => "consolidated",
+        PipelineMode::AudioDirect => "audio-direct",
     };
 
     CString::new(mode_str).map(|s| s.into_raw()).unwrap_or(ptr::null_mut())
@@ -735,6 +751,7 @@ pub unsafe extern "C" fn voiceflow_set_pipeline_mode(mode: *const c_char) -> boo
     let pipeline_mode = match mode_str {
         "stt-plus-llm" | "traditional" => PipelineMode::SttPlusLlm,
         "consolidated" => PipelineMode::Consolidated,
+        "audio-direct" => PipelineMode::AudioDirect,
         _ => return false,
     };
 
@@ -1277,6 +1294,179 @@ pub unsafe extern "C" fn voiceflow_format_text(
     }
 }
 
+/// Process pre-transcribed text through deterministic normalization (no LLM).
+/// Uses the fast text_normalize pipeline instead of LLM formatting.
+/// Returns a VoiceFlowResult with formatted_text and raw_transcript.
+///
+/// # Safety
+/// - handle must be a valid pointer from voiceflow_init
+/// - text must be a valid null-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_format_text_deterministic(
+    handle: *mut VoiceFlowHandle,
+    text: *const c_char,
+) -> VoiceFlowResult {
+    log_debug("voiceflow_format_text_deterministic called");
+
+    if handle.is_null() || text.is_null() {
+        log_debug("ERROR - Invalid handle or text");
+        return error_result("Invalid handle or text");
+    }
+
+    let handle_ptr = handle;
+    let text_ptr = text;
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let handle = &mut *handle_ptr;
+        let input_text = match CStr::from_ptr(text_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return error_result("Invalid UTF-8 text"),
+        };
+
+        let pipeline = match handle.pipeline.as_mut() {
+            Some(p) => p,
+            None => {
+                log_debug("ERROR - Pipeline not available.");
+                return error_result("Pipeline not available.");
+            }
+        };
+
+        log_debug(&format!(
+            "Calling pipeline.process_text_deterministic() with: '{}'",
+            &input_text[..input_text.len().min(80)]
+        ));
+
+        match pipeline.process_text_deterministic(input_text) {
+            Ok(result) => {
+                log_debug(&format!("Success! Formatted text: '{}'", result.formatted_text));
+                VoiceFlowResult {
+                    success: true,
+                    formatted_text: CString::new(result.formatted_text)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    raw_transcript: CString::new(result.raw_transcript)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    error_message: ptr::null_mut(),
+                    transcription_ms: 0,
+                    llm_ms: 0,
+                    total_ms: result.timings.total_ms,
+                }
+            }
+            Err(e) => {
+                log_debug(&format!("ERROR - process_text_deterministic failed: {}", e));
+                error_result(&e.to_string())
+            }
+        }
+    }));
+
+    match result {
+        Ok(vf_result) => vf_result,
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic".to_string()
+            };
+            log_debug(&format!("PANIC caught in voiceflow_format_text_deterministic: {}", msg));
+            error_result(&format!("Internal error: {}", msg))
+        }
+    }
+}
+
+/// Process audio directly through an audio-native model (e.g., Gemma 4).
+/// Bypasses the separate STT step — the LLM handles both transcription and formatting.
+///
+/// # Safety
+/// - handle must be a valid pointer from voiceflow_init
+/// - audio_data must be a valid pointer to float samples (16kHz mono PCM)
+/// - audio_len must be the number of samples
+/// - context may be null
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_process_audio_direct(
+    handle: *mut VoiceFlowHandle,
+    audio_data: *const c_float,
+    audio_len: usize,
+    context: *const c_char,
+) -> VoiceFlowResult {
+    log_debug(&format!("voiceflow_process_audio_direct called with {} samples", audio_len));
+
+    if handle.is_null() || audio_data.is_null() {
+        log_debug("ERROR - Invalid handle or audio data");
+        return error_result("Invalid handle or audio data");
+    }
+
+    let handle_ptr = handle;
+    let audio_ptr = audio_data;
+    let context_ptr = context;
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let handle = &mut *handle_ptr;
+        let audio = std::slice::from_raw_parts(audio_ptr, audio_len);
+
+        let audio_duration = audio_len as f32 / 16000.0;
+        log_debug(&format!("Audio-direct: {:.2}s audio", audio_duration));
+
+        let context_str = if context_ptr.is_null() {
+            None
+        } else {
+            match CStr::from_ptr(context_ptr).to_str() {
+                Ok(s) => Some(s),
+                Err(_) => None,
+            }
+        };
+
+        let pipeline = match handle.pipeline.as_mut() {
+            Some(p) => p,
+            None => {
+                log_debug("ERROR - Pipeline not available.");
+                return error_result("Pipeline not available.");
+            }
+        };
+
+        log_debug("Calling pipeline.process_audio_direct()...");
+        match pipeline.process_audio_direct(audio, context_str) {
+            Ok(result) => {
+                log_debug(&format!("Audio-direct success: '{}'", &result.formatted_text[..result.formatted_text.len().min(80)]));
+                VoiceFlowResult {
+                    success: true,
+                    formatted_text: CString::new(result.formatted_text)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    raw_transcript: CString::new(result.raw_transcript)
+                        .map(|s| s.into_raw())
+                        .unwrap_or(ptr::null_mut()),
+                    error_message: ptr::null_mut(),
+                    transcription_ms: result.timings.transcription_ms,
+                    llm_ms: result.timings.llm_formatting_ms,
+                    total_ms: result.timings.total_ms,
+                }
+            }
+            Err(e) => {
+                log_debug(&format!("ERROR - process_audio_direct failed: {}", e));
+                error_result(&e.to_string())
+            }
+        }
+    }));
+
+    match result {
+        Ok(vf_result) => vf_result,
+        Err(e) => {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic".to_string()
+            };
+            log_debug(&format!("PANIC caught in voiceflow_process_audio_direct: {}", msg));
+            error_result(&format!("Internal error: {}", msg))
+        }
+    }
+}
+
 /// C function pointer type for streaming token callbacks.
 /// Returns true to continue generation, false to abort.
 pub type TokenCallbackFn = unsafe extern "C" fn(token: *const c_char, userdata: *mut std::ffi::c_void) -> bool;
@@ -1399,6 +1589,13 @@ pub extern "C" fn voiceflow_is_external_stt() -> bool {
 pub extern "C" fn voiceflow_is_consolidated_mode() -> bool {
     let config = Config::load(None).unwrap_or_default();
     config.is_consolidated_mode()
+}
+
+/// Check if the current config is in audio-direct mode
+#[no_mangle]
+pub extern "C" fn voiceflow_is_audio_direct_mode() -> bool {
+    let config = Config::load(None).unwrap_or_default();
+    config.is_audio_direct_mode()
 }
 
 // =============================================================================

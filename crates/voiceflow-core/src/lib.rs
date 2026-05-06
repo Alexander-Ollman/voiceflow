@@ -13,11 +13,12 @@ pub mod context;
 pub mod llm;
 pub mod prosody;
 pub mod runtime;
+pub mod text_normalize;
 pub mod transcribe;
 
 mod pipeline;
 
-pub use config::{Config, LlmModel, WhisperModel, ConfigError, PipelineMode, ConsolidatedModel, env_vars};
+pub use config::{Config, LlmModel, LlmBackend, LlmServerConfig, WhisperModel, ConfigError, PipelineMode, ConsolidatedModel, env_vars};
 pub use pipeline::{Pipeline, PipelineResult, ProsodyOptions, Timings, RecoveryConfig, PipelineError};
 pub use prosody::{ProsodyHints, PitchContour};
 

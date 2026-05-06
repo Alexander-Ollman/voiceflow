@@ -22,3 +22,4 @@ cbindgen = "0.27"
 default = ["metal"]
 metal = ["voiceflow-core/metal"]
 cuda = ["voiceflow-core/cuda"]
+mistralrs = ["voiceflow-core/mistralrs"]

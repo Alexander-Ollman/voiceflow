@@ -4,12 +4,13 @@ use anyhow::Result;
 use console::{style, Term};
 use voiceflow_core::{Config, Pipeline};
 
-pub async fn run(config: &Config, iterations: u32, file: Option<&str>) -> Result<()> {
+pub async fn run(config: &Config, iterations: u32, file: Option<&str>, audio_direct: bool) -> Result<()> {
     let term = Term::stdout();
 
     term.write_line(&format!(
-        "{} VoiceFlow Benchmark",
-        style("⚡").yellow()
+        "{} VoiceFlow Benchmark{}",
+        style("⚡").yellow(),
+        if audio_direct { " (audio-direct)" } else { "" }
     ))?;
     term.write_line("")?;
 
@@ -68,7 +69,11 @@ pub async fn run(config: &Config, iterations: u32, file: Option<&str>) -> Result
     for i in 0..iterations {
         term.write_line(&format!("Run {}/{}...", i + 1, iterations))?;
 
-        let result = pipeline.process(&samples, None)?;
+        let result = if audio_direct {
+            pipeline.process_audio_direct(&samples, None)?
+        } else {
+            pipeline.process(&samples, None)?
+        };
 
         transcription_times.push(result.timings.transcription_ms);
         llm_times.push(result.timings.llm_formatting_ms);
@@ -87,14 +92,21 @@ pub async fn run(config: &Config, iterations: u32, file: Option<&str>) -> Result
     let min_total = *total_times.iter().min().unwrap_or(&0);
     let max_total = *total_times.iter().max().unwrap_or(&0);
 
-    term.write_line(&format!(
-        "Transcription:  avg {}ms",
-        style(avg_transcription).cyan()
-    ))?;
-    term.write_line(&format!(
-        "LLM Formatting: avg {}ms",
-        style(avg_llm).cyan()
-    ))?;
+    if audio_direct {
+        term.write_line(&format!(
+            "Audio-Direct:   avg {}ms (single model, no STT)",
+            style(avg_llm).cyan()
+        ))?;
+    } else {
+        term.write_line(&format!(
+            "Transcription:  avg {}ms",
+            style(avg_transcription).cyan()
+        ))?;
+        term.write_line(&format!(
+            "LLM Formatting: avg {}ms",
+            style(avg_llm).cyan()
+        ))?;
+    }
     term.write_line(&format!(
         "Total:          avg {}ms (min: {}, max: {})",
         style(avg_total).green(),

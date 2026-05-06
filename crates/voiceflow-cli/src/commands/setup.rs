@@ -310,9 +310,11 @@ fn parse_whisper_model(name: &str) -> WhisperModel {
 
 fn parse_llm_model(name: &str) -> LlmModel {
     match name.to_lowercase().replace("-", "_").as_str() {
-        "qwen3.5_0_8b" | "qwen3.5_0.8b" | "qwen3.5_0.8b" => LlmModel::Qwen3_5_0_8B,
-        "qwen3.5_2b" | "qwen3.5_2b" => LlmModel::Qwen3_5_2B,
-        "qwen3.5_4b" | "qwen3.5_4b" => LlmModel::Qwen3_5_4B,
+        "qwen3.5_0_8b" | "qwen3.5_0.8b" => LlmModel::Qwen3_5_0_8B,
+        "qwen3.5_2b" => LlmModel::Qwen3_5_2B,
+        "qwen3.5_4b" => LlmModel::Qwen3_5_4B,
+        "gemma4_e2b" | "gemma4e2b" => LlmModel::Gemma4E2B,
+        "gemma4_e4b" | "gemma4e4b" => LlmModel::Gemma4E4B,
         _ => {
             eprintln!("Unknown LLM model '{}', using 'qwen3.5-0.8b'", name);
             LlmModel::Qwen3_5_0_8B

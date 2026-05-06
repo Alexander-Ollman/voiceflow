@@ -1,11 +1,12 @@
-//! LLM engine with llama.cpp backend
+//! LLM engine with switchable backends
 //!
-//! All Qwen3.5 models use llama.cpp for inference (Hybrid DeltaNet architecture).
-//! Supports multimodal (text + vision) via optional mmproj projector.
+//! Supports llama.cpp (Qwen3.5 GGUF) and mistral.rs (Gemma 4 audio-native).
+//! Backend selection based on config.effective_llm_backend().
 
-use crate::config::Config;
+use crate::config::{Config, LlmBackend};
 use crate::llm::backend::LlmBackendTrait;
 use crate::llm::llamacpp_backend::LlamaCppBackend;
+use crate::llm::openai_server_backend::OpenAIServerBackend;
 use crate::llm::prompts::{format_prompt, post_process_output};
 use anyhow::{Context, Result};
 
@@ -18,63 +19,57 @@ pub struct LlmEngine {
 impl LlmEngine {
     /// Create a new LLM engine with the given configuration (async)
     pub async fn new_async(config: &Config) -> Result<Self> {
-        let model_path = config.llm_model_path()?;
-
-        if !model_path.exists() {
-            anyhow::bail!(
-                "LLM model not found at {:?}. Run 'voiceflow setup' to download models.",
-                model_path
-            );
-        }
-
-        tracing::info!(
-            "Loading LLM model {} with llama.cpp backend",
-            config.llm_model.display_name(),
-        );
-
-        let backend: Box<dyn LlmBackendTrait> = {
-            let b = LlamaCppBackend::new(config)
-                .context("Failed to initialize llama.cpp backend")?;
-            Box::new(b)
-        };
-
-        tracing::info!(
-            "LLM engine ready: {} via {}",
-            config.llm_model.display_name(),
-            backend.name()
-        );
-
-        Ok(Self {
-            backend,
-            config: config.clone(),
-        })
+        // Delegate to sync new() which handles both backends
+        Self::new(config)
     }
 
     /// Create a new LLM engine (blocking/sync)
     ///
-    /// Loads the model directly on the calling thread. This avoids creating
-    /// a temporary Tokio runtime for model loading, which would cause Metal
-    /// GPU state issues when the runtime is dropped (the Metal context gets
-    /// invalidated, leading to segfaults during later inference calls).
+    /// Selects the appropriate backend based on config.effective_llm_backend().
+    /// For llama.cpp: loads GGUF model directly on the calling thread.
+    /// For mistral.rs: downloads from HF hub and applies ISQ4 quantization.
     pub fn new(config: &Config) -> Result<Self> {
-        let model_path = config.llm_model_path()?;
-
-        if !model_path.exists() {
-            anyhow::bail!(
-                "LLM model not found at {:?}. Run 'voiceflow setup' to download models.",
-                model_path
-            );
-        }
+        let effective_backend = config.effective_llm_backend();
 
         tracing::info!(
-            "Loading LLM model {} with llama.cpp backend",
+            "Loading LLM model {} with {} backend",
             config.llm_model.display_name(),
+            effective_backend.display_name(),
         );
 
-        let backend: Box<dyn LlmBackendTrait> = {
-            let b = LlamaCppBackend::new(config)
-                .context("Failed to initialize llama.cpp backend")?;
-            Box::new(b)
+        let backend: Box<dyn LlmBackendTrait> = match effective_backend {
+            LlmBackend::LlamaCpp => {
+                let model_path = config.llm_model_path()?;
+                if !model_path.exists() {
+                    anyhow::bail!(
+                        "LLM model not found at {:?}. Run 'voiceflow setup' to download models.",
+                        model_path
+                    );
+                }
+                let b = LlamaCppBackend::new(config)
+                    .context("Failed to initialize llama.cpp backend")?;
+                Box::new(b)
+            }
+            LlmBackend::MistralRs => {
+                #[cfg(feature = "mistralrs")]
+                {
+                    let b = crate::llm::mistralrs_backend::MistralRsBackend::new(config)
+                        .context("Failed to initialize mistral.rs backend")?;
+                    Box::new(b)
+                }
+                #[cfg(not(feature = "mistralrs"))]
+                {
+                    anyhow::bail!(
+                        "mistral.rs backend not available (compiled without 'mistralrs' feature). \
+                         Build with: cargo build --features mistralrs"
+                    );
+                }
+            }
+            LlmBackend::OpenAIServer => {
+                let b = OpenAIServerBackend::new(config.llm_server.clone())
+                    .context("Failed to initialize OpenAI-compatible server backend")?;
+                Box::new(b)
+            }
         };
 
         tracing::info!(
@@ -242,6 +237,146 @@ impl LlmEngine {
         let output = strip_thinking_tags(&raw_output);
         tracing::debug!("LLM multimodal streaming output length: {} chars", output.len());
         Ok(output)
+    }
+
+    /// Format a transcript using the LLM, returning TTFT (time to first visible token in ms).
+    /// Uses streaming internally to measure when the first non-thinking token arrives.
+    pub fn format_with_ttft(
+        &self,
+        transcript: &str,
+        prompt_template: &str,
+    ) -> Result<(String, u64)> {
+        let prompt = format_prompt(prompt_template, transcript, &self.config);
+        tracing::debug!("LLM format_with_ttft prompt length: {} chars", prompt.len());
+
+        let mut filter = ThinkingFilter::new();
+        let llm_start = std::time::Instant::now();
+        let mut first_token_time: Option<u64> = None;
+
+        let raw_output = self.backend.generate_streaming(
+            &prompt,
+            self.config.llm_options.max_tokens,
+            self.config.llm_options.temperature,
+            self.config.llm_options.top_p,
+            &mut |token: &str| -> bool {
+                if let Some(visible) = filter.process_token(token) {
+                    if first_token_time.is_none() && !visible.trim().is_empty() {
+                        first_token_time = Some(llm_start.elapsed().as_millis() as u64);
+                    }
+                }
+                true
+            },
+        )?;
+
+        let ttft = first_token_time.unwrap_or(llm_start.elapsed().as_millis() as u64);
+        let output = strip_thinking_tags(&raw_output);
+
+        if output.trim().is_empty() {
+            tracing::warn!("LLM output empty after stripping thinking tags, falling back to transcript");
+            return Ok((transcript.trim().to_string(), ttft));
+        }
+
+        Ok((output, ttft))
+    }
+
+    /// Transcribe audio directly using the LLM (audio-to-text, no separate STT)
+    pub fn transcribe_audio_direct(
+        &self,
+        audio_pcm: &[f32],
+        sample_rate: u32,
+        prompt: &str,
+    ) -> Result<String> {
+        let output = self.backend.generate_from_audio(
+            audio_pcm,
+            sample_rate,
+            prompt,
+            self.config.llm_options.max_tokens,
+            self.config.llm_options.temperature,
+            self.config.llm_options.top_p,
+        )?;
+
+        let output = strip_thinking_tags(&output);
+        tracing::debug!("Audio-direct output length: {} chars", output.len());
+
+        if output.trim().is_empty() {
+            tracing::warn!("Audio-direct output empty after stripping thinking tags");
+            return Ok(String::new());
+        }
+
+        Ok(output)
+    }
+
+    /// Transcribe audio directly with per-token streaming
+    pub fn transcribe_audio_direct_streaming(
+        &self,
+        audio_pcm: &[f32],
+        sample_rate: u32,
+        prompt: &str,
+        on_token: &mut dyn FnMut(&str) -> bool,
+    ) -> Result<String> {
+        let mut filter = ThinkingFilter::new();
+
+        let raw_output = self.backend.generate_from_audio_streaming(
+            audio_pcm,
+            sample_rate,
+            prompt,
+            self.config.llm_options.max_tokens,
+            self.config.llm_options.temperature,
+            self.config.llm_options.top_p,
+            &mut |token: &str| -> bool {
+                if let Some(visible) = filter.process_token(token) {
+                    on_token(&visible)
+                } else {
+                    true
+                }
+            },
+        )?;
+
+        if let Some(remaining) = filter.flush() {
+            let _ = on_token(&remaining);
+        }
+
+        let output = strip_thinking_tags(&raw_output);
+        tracing::debug!("Audio-direct streaming output length: {} chars", output.len());
+        Ok(output)
+    }
+
+    /// Transcribe audio directly with TTFT tracking (returns (text, ttft_ms))
+    pub fn transcribe_audio_direct_with_ttft(
+        &self,
+        audio_pcm: &[f32],
+        sample_rate: u32,
+        prompt: &str,
+    ) -> Result<(String, u64)> {
+        let mut filter = ThinkingFilter::new();
+        let start = std::time::Instant::now();
+        let mut first_token_time: Option<u64> = None;
+
+        let raw_output = self.backend.generate_from_audio_streaming(
+            audio_pcm,
+            sample_rate,
+            prompt,
+            self.config.llm_options.max_tokens,
+            self.config.llm_options.temperature,
+            self.config.llm_options.top_p,
+            &mut |token: &str| -> bool {
+                if let Some(visible) = filter.process_token(token) {
+                    if first_token_time.is_none() && !visible.trim().is_empty() {
+                        first_token_time = Some(start.elapsed().as_millis() as u64);
+                    }
+                }
+                true
+            },
+        )?;
+
+        let ttft = first_token_time.unwrap_or(start.elapsed().as_millis() as u64);
+        let output = strip_thinking_tags(&raw_output);
+        Ok((output, ttft))
+    }
+
+    /// Check if the backend supports direct audio-to-text
+    pub fn supports_audio_direct(&self) -> bool {
+        self.backend.supports_audio_direct()
     }
 
     /// Check if the backend supports multimodal inference

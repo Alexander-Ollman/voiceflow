@@ -15,6 +15,8 @@ final class VoiceFlowBridge: ObservableObject {
     @Published var isConsolidatedMode = false
     /// Whether the STT engine is external (Qwen3-ASR Python daemon) in traditional mode
     @Published var isExternalStt = false
+    /// Whether the pipeline is in audio-direct mode (Gemma 4 handles STT + formatting)
+    @Published var isAudioDirect = false
 
     struct ProcessResult {
         let formattedText: String
@@ -137,6 +139,92 @@ final class VoiceFlowBridge: ObservableObject {
         return nil
     }
 
+    /// Format text through the deterministic normalization pipeline (no LLM).
+    /// Instant — applies rule-based transforms only.
+    func formatTextDeterministic(_ text: String) async -> String? {
+        guard let handle = handle else { return nil }
+
+        let result: VoiceFlowResult = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ffiResult = text.withCString { textPtr in
+                    voiceflow_format_text_deterministic(handle, textPtr)
+                }
+                continuation.resume(returning: ffiResult)
+            }
+        }
+
+        defer { voiceflow_free_result(result) }
+
+        if result.success, let ptr = result.formatted_text {
+            return String(cString: ptr)
+        }
+        return nil
+    }
+
+    /// Process audio directly through an audio-native model (Gemma 4).
+    /// Bypasses separate STT — the LLM handles transcription and formatting in one pass.
+    func processAudioDirect(audio: [Float], context: String? = nil) async -> ProcessResult? {
+        guard let handle = handle else {
+            await MainActor.run {
+                self.lastError = "Pipeline not initialized"
+            }
+            return nil
+        }
+
+        await MainActor.run {
+            self.isProcessing = true
+            self.lastError = nil
+        }
+
+        defer {
+            Task { @MainActor in
+                self.isProcessing = false
+            }
+        }
+
+        let result: VoiceFlowResult = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ffiResult = audio.withUnsafeBufferPointer { buffer in
+                    let count = UInt(buffer.count)
+                    if let ctx = context {
+                        return ctx.withCString { ctxPtr in
+                            voiceflow_process_audio_direct(handle, buffer.baseAddress, count, ctxPtr)
+                        }
+                    } else {
+                        return voiceflow_process_audio_direct(handle, buffer.baseAddress, count, nil)
+                    }
+                }
+                continuation.resume(returning: ffiResult)
+            }
+        }
+
+        defer {
+            voiceflow_free_result(result)
+        }
+
+        if result.success {
+            let processResult = ProcessResult(
+                formattedText: result.formatted_text.map { String(cString: $0) } ?? "",
+                rawTranscript: result.raw_transcript.map { String(cString: $0) } ?? "",
+                transcriptionMs: result.transcription_ms,
+                llmMs: result.llm_ms,
+                totalMs: result.total_ms
+            )
+
+            await MainActor.run {
+                self.lastResult = processResult
+            }
+
+            return processResult
+        } else {
+            let errorMsg = result.error_message.map { String(cString: $0) } ?? "Unknown error"
+            await MainActor.run {
+                self.lastError = errorMsg
+            }
+            return nil
+        }
+    }
+
     /// Format text through the Rust LLM pipeline with real-time token streaming.
     /// Each token is delivered to `onToken` on the main actor as it's generated.
     /// Returns the fully post-processed final text (same as `formatText()`).
@@ -190,6 +278,7 @@ final class VoiceFlowBridge: ObservableObject {
     private func initialize() async {
         let consolidatedMode = voiceflow_is_consolidated_mode()
         let externalStt = voiceflow_is_external_stt()
+        let audioDirect = voiceflow_is_audio_direct_mode()
 
         // Initialize with default config
         let newHandle = voiceflow_init(nil)
@@ -198,6 +287,7 @@ final class VoiceFlowBridge: ObservableObject {
             self.handle = newHandle
             self.isConsolidatedMode = consolidatedMode
             self.isExternalStt = externalStt
+            self.isAudioDirect = audioDirect
             self.isInitialized = newHandle != nil
             if newHandle == nil {
                 self.lastError = "Failed to initialize VoiceFlow pipeline"
@@ -210,8 +300,8 @@ final class VoiceFlowBridge: ObservableObject {
                 }
             }
 
-            // Start Qwen3-ASR daemon if needed (consolidated mode or external STT)
-            let needsDaemon = consolidatedMode || externalStt
+            // Start Qwen3-ASR daemon if needed (consolidated mode or external STT, but NOT audio-direct)
+            let needsDaemon = !audioDirect && (consolidatedMode || externalStt)
             if needsDaemon {
                 self.asrEngine = Qwen3ASREngine()
 

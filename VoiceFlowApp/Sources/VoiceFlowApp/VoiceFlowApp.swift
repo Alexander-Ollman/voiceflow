@@ -135,7 +135,134 @@ struct AppProfile: Codable, Identifiable, Equatable {
     var displayName: String  // localized app name
     var category: String     // email, slack, code, default
     var customPrompt: String? // user override, nil = use category default
+    var personaId: String?   // optional: tie this app to a Persona (overrides customPrompt + category)
     let firstSeenDate: Date
+}
+
+// MARK: - Personas (named, reusable LLM context fragments)
+
+struct Persona: Codable, Identifiable, Equatable, Hashable {
+    let id: String          // UUID string, stable across renames
+    var name: String        // display name e.g. "Software Engineer"
+    var prompt: String      // the system-prompt fragment injected as context
+    let createdAt: Date
+    var isBuiltIn: Bool     // seeded defaults — UI may treat differently (e.g., disable delete)
+}
+
+class PersonaManager: ObservableObject {
+    static let shared = PersonaManager()
+
+    @Published var personas: [Persona] = []
+
+    private let storageKey = "voiceflow.personas"
+
+    init() {
+        loadPersonas()
+        // Seed starter personas on first run (when storage is empty)
+        if personas.isEmpty {
+            personas = Self.seedPersonas()
+            savePersonas()
+        }
+    }
+
+    func loadPersonas() {
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([Persona].self, from: data) {
+            personas = decoded
+        }
+    }
+
+    func savePersonas() {
+        if let encoded = try? JSONEncoder().encode(personas) {
+            UserDefaults.standard.set(encoded, forKey: storageKey)
+        }
+    }
+
+    func persona(byId id: String) -> Persona? {
+        personas.first(where: { $0.id == id })
+    }
+
+    func upsert(_ persona: Persona) {
+        if let idx = personas.firstIndex(where: { $0.id == persona.id }) {
+            personas[idx] = persona
+        } else {
+            personas.append(persona)
+        }
+        savePersonas()
+    }
+
+    func delete(_ persona: Persona) {
+        personas.removeAll { $0.id == persona.id }
+        savePersonas()
+        // Also clear personaId from any AppProfile that referenced this persona
+        let manager = AppProfileManager.shared
+        for profile in manager.profiles where profile.personaId == persona.id {
+            var updated = profile
+            updated.personaId = nil
+            manager.updateProfile(updated)
+        }
+    }
+
+    /// Seed a useful starter set. Users can edit/delete/rename freely.
+    static func seedPersonas() -> [Persona] {
+        let now = Date()
+        return [
+            Persona(
+                id: UUID().uuidString,
+                name: "Software Engineer",
+                prompt: """
+                The speaker is a software engineer working with terminal commands, APIs, and cloud infrastructure. \
+                Common technical terms in their dictation: kubectl, Docker, Kubernetes, GraphQL, OAuth, JWT, Postgres, \
+                Redis, AWS, GCP, Terraform, Helm, gRPC, SDK, CLI, regex, JSON, YAML, TOML, repo, PR, CI/CD. \
+                When a phonetically similar but semantically nonsensical word appears, prefer the technical term. \
+                Examples: "cube control" → "kubectl", "oh-auth" → "OAuth", "post gress" → "Postgres", \
+                "git hub" → "GitHub", "ya mall" → "YAML", "kee-ay-fka" → "Kafka". \
+                Preserve code-like syntax: snake_case, camelCase, kebab-case, dotted paths. Use technical capitalization \
+                for acronyms (API, URL, SQL) and product names (PostgreSQL, MongoDB).
+                """,
+                createdAt: now,
+                isBuiltIn: true
+            ),
+            Persona(
+                id: UUID().uuidString,
+                name: "Professional Email",
+                prompt: """
+                The speaker is composing professional email or business correspondence. Use complete sentences, \
+                formal tone, proper greetings ("Hi", "Hello", "Dear") and sign-offs ("Best", "Thanks", "Regards"). \
+                Spell out numbers under 10 in prose. Avoid contractions in formal contexts unless the rest of the \
+                message is conversational. Capitalize properly: people's names, company names, job titles when used \
+                as titles. When the speaker dictates an email address or URL, format it cleanly with no spaces.
+                """,
+                createdAt: now,
+                isBuiltIn: true
+            ),
+            Persona(
+                id: UUID().uuidString,
+                name: "Casual Chat",
+                prompt: """
+                The speaker is messaging in a casual chat context (Slack, iMessage, Discord, etc.). Contractions are \
+                expected ("don't", "I'm", "we'll"). Lowercase informal acronyms ("lol", "imo", "ngl", "tbh"). Sentences \
+                can be short or fragmentary. Don't over-format — match the speaker's casual register. Emoji are fine \
+                when the speaker explicitly requests them ("smile emoji" → 😊).
+                """,
+                createdAt: now,
+                isBuiltIn: true
+            ),
+            Persona(
+                id: UUID().uuidString,
+                name: "Technical Writing",
+                prompt: """
+                The speaker is writing technical documentation, blog posts, or long-form prose. Use full sentences \
+                with clear structure. Capitalize technical terms consistently (API, JSON, HTTP, REST). When the \
+                speaker references code identifiers, format them as code (`functionName`, `variable_name`). Prefer \
+                precise terminology: use "function" not "method" unless the language calls them methods, \
+                "endpoint" for HTTP routes, "repository" for git repos. Maintain a clear, instructive tone.
+                """,
+                createdAt: now,
+                isBuiltIn: true
+            ),
+        ]
+    }
 }
 
 /// Manages auto-detected per-app profiles with optional custom prompts
@@ -190,13 +317,38 @@ class AppProfileManager: ObservableObject {
         return profile
     }
 
-    /// Returns the custom prompt or the category default for the given app
+    /// Browser-aware prompt resolution. If the foreground app is a browser, attempts
+    /// to read the active tab's URL and match it against BrowserSiteRulesManager.
+    /// Falls back to the bundle-id persona if browser/URL detection fails or no
+    /// site rule matches.
+    func promptForApp(_ app: NSRunningApplication?) -> String {
+        guard let bundleId = app?.bundleIdentifier else { return "" }
+        if BrowserContext.isBrowser(bundleId: bundleId),
+           let url = BrowserContext.currentURL(forBundleId: bundleId),
+           let host = BrowserContext.hostname(from: url) {
+            let sitePrompt = BrowserSiteRulesManager.shared.promptForHostname(host)
+            if !sitePrompt.isEmpty {
+                return sitePrompt
+            }
+        }
+        return promptForApp(bundleId: bundleId)
+    }
+
+    /// Returns the persona/custom prompt or the category default for the given app.
+    /// Resolution order: persona → custom prompt → category default.
     func promptForApp(bundleId: String) -> String {
         guard let profile = profiles.first(where: { $0.id == bundleId }) else {
             return ""
         }
 
-        // Custom prompt takes priority
+        // Persona takes top priority
+        if let pid = profile.personaId,
+           let persona = PersonaManager.shared.persona(byId: pid),
+           !persona.prompt.isEmpty {
+            return "\n[PERSONA: \(persona.name) — for app \(profile.displayName)]\n\(persona.prompt)"
+        }
+
+        // Custom prompt next
         if let custom = profile.customPrompt, !custom.isEmpty {
             return "\n[APPLICATION CONTEXT: \(profile.displayName)]\n\(custom)"
         }
@@ -216,6 +368,195 @@ class AppProfileManager: ObservableObject {
     func deleteProfile(_ profile: AppProfile) {
         profiles.removeAll { $0.id == profile.id }
         saveProfiles()
+    }
+
+    // MARK: - Auto-mapping installed apps to personas
+
+    /// Curated bundle-id → persona name. Persona names must match
+    /// PersonaManager.seedPersonas (or a user-renamed persona).
+    private static let bundleIdToPersonaName: [String: String] = [
+        // Software Engineer
+        "com.cmuxterm.app": "Software Engineer",
+        "com.apple.Terminal": "Software Engineer",
+        "com.googlecode.iterm2": "Software Engineer",
+        "com.mitchellh.ghostty": "Software Engineer",
+        "dev.warp.Warp-Stable": "Software Engineer",
+        "io.alacritty": "Software Engineer",
+        "com.github.wez.wezterm": "Software Engineer",
+        "net.kovidgoyal.kitty": "Software Engineer",
+        "com.apple.dt.Xcode": "Software Engineer",
+        "dev.zed.Zed": "Software Engineer",
+        "com.microsoft.VSCode": "Software Engineer",
+        "com.sublimetext.4": "Software Engineer",
+        "com.panic.Nova": "Software Engineer",
+        "com.macromates.TextMate": "Software Engineer",
+        "cc.arduino.IDE2": "Software Engineer",
+        "com.raspberrypi.imagingutility": "Software Engineer",
+        "com.docker.docker": "Software Engineer",
+        "io.tailscale.ipn.macos": "Software Engineer",
+        "com.zerotier.ZeroTier-One": "Software Engineer",
+        "com.linear.linear": "Software Engineer",
+        "com.electron.ollama": "Software Engineer",
+        "com.anthropic.claudefordesktop": "Software Engineer",
+        "com.openai.codex": "Software Engineer",
+        "ai.opcode.opcode": "Software Engineer",
+        "ai.onemcp.onemcp": "Software Engineer",
+
+        // Professional Email
+        "com.apple.mail": "Professional Email",
+        "com.microsoft.Outlook": "Professional Email",
+        "it.bloop.airmail3": "Professional Email",
+        "com.readdle.smartemail-Mac": "Professional Email",
+
+        // Casual Chat
+        "com.tinyspeck.slackmacgap": "Casual Chat",
+        "com.apple.MobileSMS": "Casual Chat",
+        "com.apple.FaceTime": "Casual Chat",
+        "net.whatsapp.WhatsApp": "Casual Chat",
+        "com.hnc.Discord": "Casual Chat",
+        "ru.keepcoder.Telegram": "Casual Chat",
+        "org.whispersystems.signal-desktop": "Casual Chat",
+        "us.zoom.xos": "Casual Chat",
+        "com.microsoft.teams2": "Casual Chat",
+        "com.openai.atlas": "Casual Chat",
+
+        // Technical Writing
+        "notion.id": "Technical Writing",
+        "md.obsidian": "Technical Writing",
+        "com.apple.iWork.Pages": "Technical Writing",
+        "com.literatureandlatte.scrivener3": "Technical Writing",
+        "com.ulyssesapp.mac": "Technical Writing",
+        "pro.writer.mac": "Technical Writing", // iA Writer
+        "net.shinyfrog.bear": "Technical Writing",
+    ]
+
+    /// Display-name patterns (lowercased contains) used when bundle id isn't in the curated table.
+    /// This catches new apps + variants without us having to know every bundle id.
+    private static let displayNamePatterns: [(pattern: String, persona: String)] = [
+        // Software Engineer
+        ("terminal", "Software Engineer"),
+        ("iterm", "Software Engineer"),
+        ("ghostty", "Software Engineer"),
+        ("warp", "Software Engineer"),
+        ("alacritty", "Software Engineer"),
+        ("wezterm", "Software Engineer"),
+        ("kitty", "Software Engineer"),
+        ("xcode", "Software Engineer"),
+        ("vs code", "Software Engineer"),
+        ("vscode", "Software Engineer"),
+        ("zed", "Software Engineer"),
+        ("intellij", "Software Engineer"),
+        ("pycharm", "Software Engineer"),
+        ("webstorm", "Software Engineer"),
+        ("goland", "Software Engineer"),
+        ("clion", "Software Engineer"),
+        ("rubymine", "Software Engineer"),
+        ("phpstorm", "Software Engineer"),
+        ("rider", "Software Engineer"),
+        ("android studio", "Software Engineer"),
+        ("sublime", "Software Engineer"),
+        ("textmate", "Software Engineer"),
+        ("nova", "Software Engineer"),
+        ("docker", "Software Engineer"),
+        ("postman", "Software Engineer"),
+        ("paw", "Software Engineer"),
+        ("github", "Software Engineer"),
+        ("gitkraken", "Software Engineer"),
+        ("sourcetree", "Software Engineer"),
+        ("tower", "Software Engineer"),
+        ("linear", "Software Engineer"),
+        ("ollama", "Software Engineer"),
+
+        // Casual Chat
+        ("slack", "Casual Chat"),
+        ("messages", "Casual Chat"),
+        ("imessage", "Casual Chat"),
+        ("whatsapp", "Casual Chat"),
+        ("messenger", "Casual Chat"),
+        ("discord", "Casual Chat"),
+        ("telegram", "Casual Chat"),
+        ("signal", "Casual Chat"),
+        ("zoom", "Casual Chat"),
+        ("microsoft teams", "Casual Chat"),
+        ("facetime", "Casual Chat"),
+
+        // Professional Email
+        ("mail", "Professional Email"),
+        ("outlook", "Professional Email"),
+        ("airmail", "Professional Email"),
+        ("spark", "Professional Email"),
+
+        // Technical Writing
+        ("notion", "Technical Writing"),
+        ("obsidian", "Technical Writing"),
+        ("pages", "Technical Writing"),
+        ("scrivener", "Technical Writing"),
+        ("ulysses", "Technical Writing"),
+        ("ia writer", "Technical Writing"),
+        ("bear", "Technical Writing"),
+    ]
+
+    /// Scan installed apps and assign personas based on the curated tables above.
+    /// Adds new profiles for installed apps; updates existing profiles only when
+    /// they have no persona set (won't clobber user-customized assignments).
+    /// Returns the number of profiles created/updated.
+    @discardableResult
+    func autoMapInstalledApps() -> Int {
+        let appDirs = [
+            "/Applications",
+            "/Applications/Utilities",
+            "/System/Applications",
+            "/System/Applications/Utilities",
+            NSHomeDirectory() + "/Applications",
+        ]
+        let personaManager = PersonaManager.shared
+        var changed = 0
+
+        for dir in appDirs {
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".app") {
+                let path = dir + "/" + entry
+                guard let bundle = Bundle(path: path),
+                      let bundleId = bundle.bundleIdentifier else { continue }
+
+                let displayName = (bundle.infoDictionary?["CFBundleDisplayName"] as? String)
+                    ?? (bundle.infoDictionary?["CFBundleName"] as? String)
+                    ?? entry.replacingOccurrences(of: ".app", with: "")
+
+                let lcName = displayName.lowercased()
+                let personaName: String? = Self.bundleIdToPersonaName[bundleId]
+                    ?? Self.displayNamePatterns.first { lcName.contains($0.pattern) }?.persona
+
+                guard let pname = personaName,
+                      let persona = personaManager.personas.first(where: { $0.name == pname }) else {
+                    continue
+                }
+
+                if let idx = profiles.firstIndex(where: { $0.id == bundleId }) {
+                    // Only assign if user hasn't already customized this profile
+                    if profiles[idx].personaId == nil
+                        && (profiles[idx].customPrompt?.isEmpty ?? true) {
+                        profiles[idx].personaId = persona.id
+                        changed += 1
+                    }
+                } else {
+                    profiles.append(AppProfile(
+                        id: bundleId,
+                        displayName: displayName,
+                        category: "default",
+                        customPrompt: nil,
+                        personaId: persona.id,
+                        firstSeenDate: Date()
+                    ))
+                    changed += 1
+                }
+            }
+        }
+
+        if changed > 0 {
+            saveProfiles()
+        }
+        return changed
     }
 }
 
@@ -686,12 +1027,14 @@ enum AICommand {
 enum FormattingLevel: String, CaseIterable {
     case minimal = "minimal"
     case moderate = "moderate"
+    case intent = "intent"
     case aggressive = "aggressive"
 
     var displayName: String {
         switch self {
         case .minimal: return "Minimal"
         case .moderate: return "Moderate"
+        case .intent: return "Intent-Aware"
         case .aggressive: return "Aggressive"
         }
     }
@@ -700,6 +1043,7 @@ enum FormattingLevel: String, CaseIterable {
         switch self {
         case .minimal: return "Light cleanup, preserves original speech"
         case .moderate: return "Fix grammar, punctuation, filler words"
+        case .intent: return "Fix STT mishears using sentence context"
         case .aggressive: return "Full rewrite for clarity and conciseness"
         }
     }
@@ -720,6 +1064,39 @@ enum FormattingLevel: String, CaseIterable {
             Keep the original sentence structure where possible. \
             Capitalize proper nouns including names, places, brands, app names, UI elements, and technical terms. \
             Ensure proper spacing: one space after periods, commas, and other punctuation.
+            """
+        case .intent:
+            return """
+            [INTENT-AWARE FORMATTING — overrides the conservative \"preserve original wording\" rule above when a word is clearly misheard.]
+
+            The input is a noisy speech-to-text transcript. STT engines sometimes mishear individual words. \
+            Read each sentence as a fluent English speaker would. If a word or short phrase is grammatically out of place \
+            or makes no semantic sense in context, replace it with the most plausible word the speaker intended, \
+            using the surrounding sentence as context.
+
+            How to decide if a substitution is warranted:
+            1. The current word/phrase makes the sentence ungrammatical OR semantically nonsensical.
+            2. There exists a phonetically similar word (similar consonants, syllable count, or stressed vowels) \
+               that DOES make the sentence grammatical and meaningful.
+            3. The replacement is the highest-probability word given the rest of the sentence.
+
+            If any of those three is unclear, KEEP THE ORIGINAL. The cost of a wrong correction is higher than \
+            the cost of an awkward sentence. When uncertain, prefer the literal transcript.
+
+            Examples of corrections you SHOULD make:
+            - \"let's remove all we're gonna code\" → \"let's remove all redundant code\" \
+              (\"we're gonna code\" is nonsensical; \"redundant code\" is grammatical and phonetically plausible)
+            - \"click the sign-in but in\" → \"click the sign-in button\"
+            - \"the API endpoint is on port ate-oh-ate-oh\" → \"the API endpoint is on port 8080\"
+            - \"deploy to the staging environment using cube control\" → \"...using kubectl\"
+
+            Examples where you must NOT correct:
+            - Unusual but valid word choices (\"the meeting was lugubrious\" — leave it)
+            - Stylistic choices the speaker may have intended (\"I want to pivot, hard\" — leave it)
+            - Anything where you cannot identify a clearly better word
+
+            Beyond word-level fixes, also apply standard cleanup: punctuation, capitalization, filler-word removal, \
+            voice-command execution, and the other rules from above. Do NOT change meaning, condense, or paraphrase.
             """
         case .aggressive:
             return """
@@ -1130,6 +1507,82 @@ struct CursorContext {
 
         return text
     }
+
+    /// Get the cursor position (character offset) in the focused text field.
+    /// Returns nil if accessibility is unavailable or no text field is focused.
+    static func getCursorPosition() -> Int? {
+        guard AXIsProcessTrusted() else { return nil }
+
+        let systemWide = AXUIElementCreateSystemWide()
+
+        var focusedElementRef: CFTypeRef?
+        let focusedError = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElementRef
+        )
+
+        guard focusedError == .success,
+              let focusedElement = focusedElementRef else {
+            return nil
+        }
+
+        let element = focusedElement as! AXUIElement
+
+        var selectedRangeRef: CFTypeRef?
+        let rangeError = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &selectedRangeRef
+        )
+
+        guard rangeError == .success,
+              let rangeValue = selectedRangeRef else {
+            return nil
+        }
+
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else {
+            return nil
+        }
+
+        return range.location
+    }
+
+    /// Set the text selection in the focused text field via AX API.
+    /// Returns true on success.
+    static func selectRange(location: Int, length: Int) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+
+        let systemWide = AXUIElementCreateSystemWide()
+
+        var focusedElementRef: CFTypeRef?
+        let focusedError = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElementRef
+        )
+
+        guard focusedError == .success,
+              let focusedElement = focusedElementRef else {
+            return false
+        }
+
+        let element = focusedElement as! AXUIElement
+
+        var range = CFRange(location: location, length: length)
+        guard let rangeValue = AXValueCreate(.cfRange, &range) else {
+            return false
+        }
+
+        let result = AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            rangeValue
+        )
+
+        return result == .success
+    }
 }
 
 // MARK: - App Delegate
@@ -1153,6 +1606,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var moonshineEngine = MoonshineStreamingEngine()
     private var streamingTextCancellable: AnyCancellable?
     private var isStreamingActive = false
+
+    // Parakeet-MLX engine (batch STT alternative). When enabled via env var
+    // VOICEFLOW_USE_PARAKEET=1, replaces Moonshine on the recording-release path.
+    var parakeetEngine = ParakeetASREngine()
+    var useParakeet: Bool {
+        ProcessInfo.processInfo.environment["VOICEFLOW_USE_PARAKEET"] == "1"
+    }
+
+    // Direct-to-field streaming state
+    private var lastStreamedText: String = ""
+    private var dictationInsertedLength: Int = 0
+    private var dictationStartPosition: Int? = nil
+    private var directTypingActive: Bool = false
+    private var dictationTargetApp: NSRunningApplication? = nil
 
     // AI Result panel
     var aiResultPanel: NSPanel?
@@ -1377,8 +1844,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Auto-load Moonshine streaming model if enabled and downloaded
-        if streamingEnabled {
+        // Auto-load Moonshine streaming model if enabled and downloaded.
+        // Skipped when Parakeet is selected — Parakeet replaces both Moonshine
+        // streaming and the built-in STT for the recording-release path.
+        if streamingEnabled && !useParakeet {
             let size = streamingModelSize
             if MoonshineStreamingEngine.isModelDownloaded(size) {
                 do {
@@ -1392,6 +1861,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+        // Auto-load Parakeet-MLX if selected (batch STT, replaces Moonshine + built-in STT)
+        if useParakeet {
+            voiceFlow.unloadStt()
+            NSLog("[VoiceFlow] STT engine unloaded (Parakeet replaces it)")
+            Task { @MainActor in
+                await parakeetEngine.loadModel()
+                if case .ready = parakeetEngine.state {
+                    NSLog("[VoiceFlow] Parakeet model ready: %@", parakeetEngine.modelId)
+                } else {
+                    NSLog("[VoiceFlow] Parakeet load state: %@", String(describing: parakeetEngine.state))
+                }
+            }
+        }
+
+        // First-run: scan installed apps and assign personas based on the curated table.
+        // Idempotent — only assigns to profiles that have no persona/custom prompt set.
+        if !UserDefaults.standard.bool(forKey: "voiceflow.autoMapInstalledAppsCompleted") {
+            let count = AppProfileManager.shared.autoMapInstalledApps()
+            UserDefaults.standard.set(true, forKey: "voiceflow.autoMapInstalledAppsCompleted")
+            NSLog("[VoiceFlow] Auto-mapped %d apps to personas", count)
+        }
+
+        // Touch BrowserSiteRulesManager so it loads/seeds on first launch (the
+        // seed pass needs PersonaManager.shared to already be populated, which
+        // is true after the persona-touching code above runs).
+        let ruleCount = BrowserSiteRulesManager.shared.rules.count
+        NSLog("[VoiceFlow] Browser site rules loaded: %d", ruleCount)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -1400,6 +1897,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Clean up streaming engine
         moonshineEngine.unloadModel()
+
+        // Stop Parakeet daemon if it's running
+        if useParakeet {
+            parakeetEngine.stopDaemon()
+        }
 
         // Clean up resources before termination to prevent memory leaks
         // This ensures the Rust side properly releases all model memory
@@ -1974,8 +2476,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingMenuItem?.title = "Recording... (release ⌥ Space)"
 
             // If streaming is enabled and model is loaded, start streaming session
-            if streamingEnabled && moonshineEngine.isLoaded {
+            // (not applicable in audio-direct mode — audio goes directly to Gemma 4 on stop)
+            if streamingEnabled && moonshineEngine.isLoaded && !voiceFlow.isAudioDirect {
                 do {
+                    // Capture cursor position and target app before starting session
+                    dictationStartPosition = CursorContext.getCursorPosition()
+                    dictationInsertedLength = 0
+                    lastStreamedText = ""
+                    dictationTargetApp = NSWorkspace.shared.frontmostApplication
+                    directTypingActive = (dictationStartPosition != nil)
+
+                    NSLog("[VoiceFlow] Direct typing: %@, cursor position: %@",
+                          directTypingActive ? "active" : "inactive",
+                          dictationStartPosition.map { String($0) } ?? "nil")
+
                     try moonshineEngine.beginSession()
                     isStreamingActive = true
 
@@ -1988,25 +2502,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                     }
 
-                    // Subscribe to partial text updates for overlay
+                    // Subscribe to partial text updates
                     streamingTextCancellable = moonshineEngine.$partialText
                         .receive(on: DispatchQueue.main)
                         .sink { [weak self] text in
                             guard let self = self, self.isStreamingActive else { return }
-                            // Apply stored corrections to streaming display for real-time preview
                             let displayText = CorrectionManager.shared.applyStoredCorrections(text)
-                            self.overlayState.state = .streaming(displayText)
+
+                            // Safety: verify focus hasn't changed
+                            if self.directTypingActive {
+                                if NSWorkspace.shared.frontmostApplication?.processIdentifier
+                                    != self.dictationTargetApp?.processIdentifier {
+                                    NSLog("[VoiceFlow] Focus changed during dictation, falling back to overlay")
+                                    self.directTypingActive = false
+                                    self.showOverlay(state: .streaming(displayText))
+                                }
+                            }
+
+                            if self.directTypingActive {
+                                let (deleteCount, insertText) = Self.computeStreamingDiff(
+                                    previous: self.lastStreamedText, current: displayText)
+                                if deleteCount > 0 {
+                                    self.deleteBackward(count: deleteCount)
+                                    self.dictationInsertedLength -= deleteCount
+                                }
+                                if !insertText.isEmpty {
+                                    self.typeUnicodeText(insertText)
+                                    self.dictationInsertedLength += insertText.count
+                                }
+                                self.lastStreamedText = displayText
+                            } else {
+                                self.overlayState.state = .streaming(displayText)
+                            }
                         }
 
-                    showOverlay(state: .streaming(""))
+                    // Show recording pill when direct typing (text goes to field),
+                    // or streaming overlay when falling back
+                    showOverlay(state: directTypingActive ? .recording : .streaming(""))
                 } catch {
                     NSLog("[VoiceFlow] Streaming session failed to start, falling back to normal: %@", error.localizedDescription)
                     isStreamingActive = false
+                    directTypingActive = false
                     audioRecorder.onAudioChunk = nil
                     showOverlay(state: .recording)
                 }
             } else {
                 isStreamingActive = false
+                directTypingActive = false
                 showOverlay(state: .recording)
             }
 
@@ -2054,29 +2596,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioRecorder.onAudioChunk = nil
 
         let wasStreaming = isStreamingActive
+        let wasDirectTyping = directTypingActive
+        let insertedLength = dictationInsertedLength
+        let startPosition = dictationStartPosition
         isStreamingActive = false
+
+        // Reset direct typing state
+        directTypingActive = false
+        lastStreamedText = ""
+        dictationInsertedLength = 0
+        dictationStartPosition = nil
+        dictationTargetApp = nil
 
         let audio = audioRecorder.stopRecording()
         isRecording = false
         recordingMenuItem?.title = "Hold ⌥ Space to Record"
 
-        // Streaming path: get raw transcript from engine, then format via LLM
+        // Streaming path: get raw transcript from engine, then format deterministically
         if wasStreaming {
             let rawTranscript = moonshineEngine.endSession()
 
             guard !rawTranscript.isEmpty else {
+                if wasDirectTyping && insertedLength > 0 {
+                    // Clean up any partial text that was typed
+                    deleteBackward(count: insertedLength)
+                }
                 hideOverlay()
                 showNotification(title: "No Speech", body: "No speech was detected")
                 return
             }
 
-            showOverlay(state: .formatting(""))
+            // Streaming-release: tokens come back too fast on a fast LLM for the
+            // word-by-word bar to be readable, so just show the simple processing
+            // indicator until the result is ready to paste/correct.
+            showOverlay(state: .processing)
 
             let frontmostApp = NSWorkspace.shared.frontmostApplication
             let _ = frontmostApp.flatMap { AppProfileManager.shared.ensureProfile(for: $0) }
-            let appPrompt = frontmostApp?.bundleIdentifier.flatMap {
-                AppProfileManager.shared.promptForApp(bundleId: $0)
-            } ?? ""
+            let appPrompt = AppProfileManager.shared.promptForApp(frontmostApp)
             let frontApp = frontmostApp?.localizedName ?? "Unknown"
             let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
             let baseContext = formattingLevel.systemPrompt + appPrompt
@@ -2135,15 +2692,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     context += correctionHint
                 }
 
-                // Format raw streaming transcript through LLM with token streaming
+                // Format raw streaming transcript through LLM with token streaming.
+                // Token callback is a no-op visually — UI stays in .processing until done.
                 NSLog("[VoiceFlow] Streaming: formatting raw transcript (%d chars) via LLM (streaming)", rawTranscript.count)
-                let accumulated = TokenAccumulator()
                 if let formattedText = await voiceFlow.formatTextStreaming(
                     rawTranscript, context: context,
-                    onToken: { [weak self] token in
-                        accumulated.text += token
-                        self?.overlayState.state = .formatting(accumulated.text)
-                    }
+                    onToken: { _ in }
                 ) {
                     // Apply snippet expansion
                     var expandedText = SnippetManager.shared.expandSnippets(in: formattedText)
@@ -2217,19 +2771,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     )
                     TranscriptionLog.shared.append(logEntry)
 
-                    // Copy to clipboard and paste
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(spacedText, forType: .string)
+                    if wasDirectTyping && insertedLength > 0 {
+                        // Retroactive correction: select+replace the directly-typed text
+                        NSLog("[VoiceFlow] Retroactive correction: replacing %d chars at position %@",
+                              insertedLength, startPosition.map { String($0) } ?? "nil")
+                        await MainActor.run {
+                            hideOverlay()
+                            performRetroactiveCorrection(
+                                insertedLength: insertedLength,
+                                startPosition: startPosition,
+                                replacement: spacedText
+                            )
+                        }
+                    } else {
+                        // Standard overlay+paste path
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(spacedText, forType: .string)
 
-                    await MainActor.run { hideOverlay() }
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    await MainActor.run {
-                        simulatePaste()
+                        await MainActor.run { hideOverlay() }
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        await MainActor.run {
+                            simulatePaste()
+                        }
                     }
 
                     showNotification(
-                        title: "Pasted (streaming)",
+                        title: wasDirectTyping ? "Corrected (streaming)" : "Pasted (streaming)",
                         body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                     )
                     self.lastPastedText = spacedText
@@ -2237,6 +2805,236 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await MainActor.run { hideOverlay() }
                     showNotification(title: "Formatting Failed", body: voiceFlow.lastError ?? "Unknown error")
                 }
+            }
+            return
+        }
+
+        // Parakeet-MLX path: batch STT via Python daemon, then LLM-format.
+        // Activates when VOICEFLOW_USE_PARAKEET=1; replaces the in-process STT.
+        if useParakeet {
+            guard !audio.isEmpty else {
+                hideOverlay()
+                showNotification(title: "No Audio", body: "No audio was captured")
+                return
+            }
+
+            showOverlay(state: .processing)
+
+            let frontmostApp = NSWorkspace.shared.frontmostApplication
+            let _ = frontmostApp.flatMap { AppProfileManager.shared.ensureProfile(for: $0) }
+            let appPrompt = AppProfileManager.shared.promptForApp(frontmostApp)
+            let frontApp = frontmostApp?.localizedName ?? "Unknown"
+            let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
+            let baseContext = formattingLevel.systemPrompt + appPrompt
+            let currentSpacingMode = spacingMode
+
+            let isMidSentence: Bool
+            if let inputText = inputFieldText, !inputText.isEmpty {
+                let lastChar = inputText.trimmingCharacters(in: .whitespacesAndNewlines).last
+                isMidSentence = lastChar != nil && !".?!".contains(String(lastChar!))
+            } else {
+                isMidSentence = false
+            }
+
+            Task {
+                NSLog("[VoiceFlow] Parakeet: transcribing %d samples", audio.count)
+                guard let rawTranscript = await parakeetEngine.transcribe(audio: audio),
+                      !rawTranscript.isEmpty else {
+                    await MainActor.run { hideOverlay() }
+                    showNotification(title: "No Speech", body: "No speech was detected")
+                    return
+                }
+
+                var context = baseContext
+                if let inputText = inputFieldText, !inputText.isEmpty {
+                    context += """
+
+                    [INPUT CONTEXT]
+                    Text already in the input field (before the cursor):
+                    \(inputText)
+                    You are CONTINUING from this text. Rules:
+                    - Do NOT repeat or rewrite any of the existing text.
+                    - If the existing text ends mid-sentence (no final . ? ! or newline), your output must seamlessly continue the sentence. Do NOT capitalize your first word (unless it is "I" or a proper noun). Do NOT add a period at the end unless the thought is truly complete.
+                    - If the existing text ends with sentence-ending punctuation (. ? !) or a newline, start a new sentence with a capital letter.
+                    - Your output should read as a natural continuation — as if the existing text and your output were written together.
+                    """
+                }
+                if isMidSentence {
+                    context += "\n[MID_SENTENCE_CONTINUATION]"
+                }
+                let isEmptyField = inputFieldText == nil || (inputFieldText?.isEmpty ?? true)
+                if isEmptyField {
+                    context += """
+
+                    [EMPTY_FIELD]
+                    The input field is empty. This may be a form field (name, email, address, zip code, etc.).
+                    Do NOT add a trailing period unless the user's speech clearly forms a complete sentence.
+                    For short entries (names, single words, codes, numbers), output them WITHOUT trailing punctuation.
+                    """
+                }
+                let correctionHint = CorrectionManager.shared.correctionContext(for: "")
+                if !correctionHint.isEmpty {
+                    context += correctionHint
+                }
+
+                NSLog("[VoiceFlow] Parakeet → LLM: formatting %d-char transcript", rawTranscript.count)
+                guard let formattedText = await voiceFlow.formatTextStreaming(
+                    rawTranscript, context: context,
+                    onToken: { _ in }
+                ) else {
+                    await MainActor.run { hideOverlay() }
+                    showNotification(
+                        title: "Formatting Failed",
+                        body: voiceFlow.lastError ?? "Unknown error"
+                    )
+                    return
+                }
+
+                var expandedText = SnippetManager.shared.expandSnippets(in: formattedText)
+                if isEmptyField {
+                    let trimmed = expandedText.trimmingCharacters(in: .whitespaces)
+                    let wordCount = trimmed.split(separator: " ").count
+                    let hasInternalPeriod = trimmed.dropLast().contains(".")
+                    if wordCount <= 8 && !hasInternalPeriod && trimmed.hasSuffix(".") {
+                        expandedText = String(trimmed.dropLast())
+                    }
+                }
+                if isMidSentence && !expandedText.isEmpty {
+                    let first = expandedText.first!
+                    if first.isUppercase {
+                        let isStandaloneI = first == "I"
+                            && (expandedText.count == 1 || !expandedText.dropFirst().first!.isLetter)
+                        let isAcronym = expandedText.count >= 2
+                            && expandedText.dropFirst().first!.isUppercase
+                        if !isStandaloneI && !isAcronym {
+                            expandedText = expandedText.prefix(1).lowercased() + expandedText.dropFirst()
+                        }
+                    }
+                }
+                var spacedText: String
+                if currentSpacingMode == .contextAware {
+                    if let inputText = inputFieldText, !inputText.isEmpty {
+                        let lastChar = inputText.last!
+                        let isDash = lastChar == "\u{2014}" || lastChar == "\u{2013}" || lastChar == "-"
+                        if !lastChar.isWhitespace && !lastChar.isNewline && !isDash,
+                           let first = expandedText.first, first.isLetter || first.isNumber {
+                            spacedText = " " + expandedText
+                        } else {
+                            spacedText = expandedText
+                        }
+                    } else {
+                        spacedText = expandedText
+                    }
+                } else {
+                    spacedText = currentSpacingMode.apply(to: expandedText)
+                }
+                if !spacedText.isEmpty && !spacedText.hasSuffix(" ") && !spacedText.hasSuffix("\n") {
+                    switch currentSpacingMode {
+                    case .contextAware:
+                        if inputFieldText == nil { spacedText += " " }
+                    case .smart, .always, .trailing:
+                        spacedText += " "
+                    }
+                }
+
+                let logEntry = TranscriptionEntry(
+                    rawTranscript: rawTranscript,
+                    formattedText: spacedText.trimmingCharacters(in: .whitespaces),
+                    modelId: parakeetEngine.modelId,
+                    sttEngine: "parakeet-mlx",
+                    transcriptionMs: 0,
+                    llmMs: 0,
+                    totalMs: 0,
+                    targetApp: frontApp
+                )
+                TranscriptionLog.shared.append(logEntry)
+
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(spacedText, forType: .string)
+
+                await MainActor.run { hideOverlay() }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                await MainActor.run { simulatePaste() }
+
+                showNotification(
+                    title: "Pasted (parakeet)",
+                    body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
+                )
+                self.lastPastedText = spacedText
+            }
+            return
+        }
+
+        // Audio-direct path: send raw audio to Gemma 4 (no separate STT)
+        if voiceFlow.isAudioDirect {
+            guard !audio.isEmpty else {
+                hideOverlay()
+                showNotification(title: "No Audio", body: "No audio was captured")
+                return
+            }
+
+            showOverlay(state: .processing)
+
+            let frontmostApp = NSWorkspace.shared.frontmostApplication
+            let frontApp = frontmostApp?.localizedName ?? "Unknown"
+            let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
+            let currentSpacingMode = spacingMode
+
+            Task {
+                NSLog("[VoiceFlow] Audio-direct: sending %d samples to Gemma 4", audio.count)
+
+                guard let result = await voiceFlow.processAudioDirect(audio: audio) else {
+                    await MainActor.run { hideOverlay() }
+                    showNotification(title: "Audio Direct Failed", body: voiceFlow.lastError ?? "Unknown error")
+                    return
+                }
+
+                var spacedText = result.formattedText
+
+                // Apply spacing mode
+                if currentSpacingMode == .contextAware {
+                    if let inputText = inputFieldText, !inputText.isEmpty {
+                        let lastChar = inputText.last!
+                        let isDash = lastChar == "\u{2014}" || lastChar == "\u{2013}" || lastChar == "-"
+                        if !lastChar.isWhitespace && !lastChar.isNewline && !isDash,
+                           let first = spacedText.first, first.isLetter || first.isNumber {
+                            spacedText = " " + spacedText
+                        }
+                    }
+                } else {
+                    spacedText = currentSpacingMode.apply(to: spacedText)
+                }
+
+                // Log transcription
+                let logEntry = TranscriptionEntry(
+                    rawTranscript: result.rawTranscript,
+                    formattedText: spacedText.trimmingCharacters(in: .whitespaces),
+                    modelId: "gemma4-e2b",
+                    sttEngine: "audio-direct",
+                    transcriptionMs: 0,
+                    llmMs: result.llmMs,
+                    totalMs: result.totalMs,
+                    targetApp: frontApp
+                )
+                TranscriptionLog.shared.append(logEntry)
+
+                // Copy to clipboard and paste
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(spacedText, forType: .string)
+
+                await MainActor.run { hideOverlay() }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                await MainActor.run {
+                    simulatePaste()
+                }
+
+                showNotification(
+                    title: "Pasted (audio-direct)",
+                    body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
+                )
+                self.lastPastedText = spacedText
             }
             return
         }
@@ -2254,9 +3052,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Detect the application context via AppProfileManager (auto-creates on first encounter)
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let _ = frontmostApp.flatMap { AppProfileManager.shared.ensureProfile(for: $0) }
-        let appPrompt = frontmostApp?.bundleIdentifier.flatMap {
-            AppProfileManager.shared.promptForApp(bundleId: $0)
-        } ?? ""
+        let appPrompt = AppProfileManager.shared.promptForApp(frontmostApp)
         let frontApp = frontmostApp?.localizedName ?? "Unknown"
 
         // Read existing text from the focused input field (must be on main thread before async)
@@ -2910,6 +3706,131 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyUp.post(tap: .cgSessionEventTap)
     }
 
+    // MARK: - Direct Typing Utilities
+
+    /// Type arbitrary Unicode text via CGEvent keyboard events.
+    /// Chunks into 20 UTF-16 units per event (API limit).
+    private func typeUnicodeText(_ text: String) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+        let utf16 = Array(text.utf16)
+        let chunkSize = 20
+
+        for start in stride(from: 0, to: utf16.count, by: chunkSize) {
+            let end = min(start + chunkSize, utf16.count)
+            var chunk = Array(utf16[start..<end])
+
+            guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                  let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+                continue
+            }
+
+            keyDown.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: &chunk)
+            keyUp.keyboardSetUnicodeString(stringLength: 0, unicodeString: &chunk)
+
+            keyDown.post(tap: .cgSessionEventTap)
+            keyUp.post(tap: .cgSessionEventTap)
+            usleep(2000) // 2ms between chunks
+        }
+    }
+
+    /// Send `count` backspace keystrokes to delete characters before cursor.
+    private func deleteBackward(count: Int) {
+        guard count > 0 else { return }
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+
+        let backspaceKeyCode: CGKeyCode = 51
+        for _ in 0..<count {
+            guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: backspaceKeyCode, keyDown: true),
+                  let keyUp = CGEvent(keyboardEventSource: source, virtualKey: backspaceKeyCode, keyDown: false) else {
+                continue
+            }
+            keyDown.post(tap: .cgSessionEventTap)
+            keyUp.post(tap: .cgSessionEventTap)
+            usleep(1000) // 1ms between keystrokes
+        }
+    }
+
+    /// Send Shift+Left arrow keystrokes to extend selection backward.
+    /// Used as fallback when AX selectRange is unavailable.
+    private func selectBackward(count: Int) {
+        guard count > 0 else { return }
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+
+        let leftArrowKeyCode: CGKeyCode = 123
+        for _ in 0..<count {
+            guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: leftArrowKeyCode, keyDown: true),
+                  let keyUp = CGEvent(keyboardEventSource: source, virtualKey: leftArrowKeyCode, keyDown: false) else {
+                continue
+            }
+            keyDown.flags = .maskShift
+            keyUp.flags = .maskShift
+            keyDown.post(tap: .cgSessionEventTap)
+            keyUp.post(tap: .cgSessionEventTap)
+            usleep(1000) // 1ms between keystrokes
+        }
+    }
+
+    /// Compute the minimal edit between previous and current streaming text.
+    /// Returns (number of chars to delete from end of previous, new text to insert).
+    static func computeStreamingDiff(previous: String, current: String) -> (deleteCount: Int, insertText: String) {
+        // Find longest common prefix
+        let prevChars = Array(previous)
+        let curChars = Array(current)
+        var commonLen = 0
+        let minLen = min(prevChars.count, curChars.count)
+
+        while commonLen < minLen && prevChars[commonLen] == curChars[commonLen] {
+            commonLen += 1
+        }
+
+        let deleteCount = prevChars.count - commonLen
+        let insertText = commonLen < curChars.count ? String(curChars[commonLen...]) : ""
+
+        return (deleteCount, insertText)
+    }
+
+    /// Perform retroactive correction: select the inserted text and replace with normalized version.
+    private func performRetroactiveCorrection(insertedLength: Int, startPosition: Int?, replacement: String) {
+        // Save user's clipboard (first type+data pair from each item)
+        let pasteboard = NSPasteboard.general
+        let savedItems: [(NSPasteboard.PasteboardType, Data)] = pasteboard.pasteboardItems?.compactMap { item in
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    return (type, data)
+                }
+            }
+            return nil
+        } ?? []
+
+        // Put normalized text on clipboard
+        pasteboard.clearContents()
+        pasteboard.setString(replacement, forType: .string)
+
+        // Try AX API selection first (instant)
+        var selected = false
+        if let start = startPosition {
+            selected = CursorContext.selectRange(location: start, length: insertedLength)
+        }
+
+        // Fallback to Shift+Left arrow selection
+        if !selected {
+            selectBackward(count: insertedLength)
+            usleep(50000) // 50ms for selection to settle
+        }
+
+        // Paste to replace selection
+        usleep(50000) // 50ms before paste
+        simulatePaste()
+
+        // Restore clipboard after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            pasteboard.clearContents()
+            for (type, data) in savedItems {
+                pasteboard.setData(data, forType: type)
+            }
+        }
+    }
+
     // MARK: - Menu Actions
 
     @objc private func quitApp() {
@@ -3160,6 +4081,9 @@ enum SidebarPage: String, CaseIterable, Identifiable {
     case models = "Models"
     case snippets = "Snippets"
     case style = "Style"
+    case personas = "Personas"
+    case appProfiles = "App Profiles"
+    case browserSites = "Browser Sites"
     case aiFeatures = "AI Features"
     case settings = "Settings"
 
@@ -3171,6 +4095,9 @@ enum SidebarPage: String, CaseIterable, Identifiable {
         case .models: return "cpu"
         case .snippets: return "scissors"
         case .style: return "textformat"
+        case .personas: return "person.crop.circle"
+        case .appProfiles: return "app.badge"
+        case .browserSites: return "globe"
         case .aiFeatures: return "sparkles"
         case .settings: return "gearshape"
         }
@@ -3246,6 +4173,12 @@ struct MainAppView: View {
                         .environmentObject(snippetManager)
                 case .style:
                     StyleSettingsView()
+                case .personas:
+                    PersonasSettingsView()
+                case .appProfiles:
+                    AppProfilesSettingsView()
+                case .browserSites:
+                    BrowserSiteRulesView()
                 case .aiFeatures:
                     AIFeaturesSettingsView()
                 case .settings:
@@ -4326,18 +5259,57 @@ struct SnippetEditView: View {
 struct AppProfilesSettingsView: View {
     @ObservedObject var profileManager = AppProfileManager.shared
     @State private var editingProfile: AppProfile? = nil
+    @State private var lastAutoMapCount: Int? = nil
+
+    @State private var isClassifying: Bool = false
+    @State private var classifyProgress: String = ""
+    @State private var classifyResult: String? = nil
+    private let classifier = PersonaClassifier()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("App Profiles")
-                    .font(.headline)
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("App Profiles")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        Task { await runLLMClassify() }
+                    } label: {
+                        Label("Classify Unmapped (LLM)", systemImage: "brain")
+                    }
+                    .disabled(isClassifying)
+                    .help("Use the local LLM to classify apps that don't have a persona yet (≥90% confidence required)")
+                    Button {
+                        lastAutoMapCount = profileManager.autoMapInstalledApps()
+                    } label: {
+                        Label("Auto-Detect", systemImage: "wand.and.stars")
+                    }
+                    .help("Scan installed apps and assign personas based on common bundle IDs")
+                }
+                Text("Apps are auto-detected when you dictate. Customize formatting per app, or tie an app to a Persona.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if let n = lastAutoMapCount {
+                    Text(n == 0
+                         ? "Auto-detect: no new mappings (everything already covered)."
+                         : "Auto-detect: mapped \(n) app\(n == 1 ? "" : "s") to personas.")
+                        .font(.caption)
+                        .foregroundColor(.accentColor)
+                }
+                if isClassifying {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.6)
+                        Text(classifyProgress).font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                if let result = classifyResult, !isClassifying {
+                    Text(result).font(.caption).foregroundColor(.accentColor)
+                }
             }
+            .padding()
 
-            Text("Apps are auto-detected when you dictate. Customize formatting per app.")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            Divider()
 
             if profileManager.profiles.isEmpty {
                 VStack(spacing: 8) {
@@ -4345,8 +5317,7 @@ struct AppProfilesSettingsView: View {
                     Image(systemName: "app.badge")
                         .font(.system(size: 40))
                         .foregroundColor(.secondary)
-                    Text("No apps detected yet")
-                        .foregroundColor(.secondary)
+                    Text("No apps detected yet").foregroundColor(.secondary)
                     Text("Start dictating and they'll appear here")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -4369,22 +5340,54 @@ struct AppProfilesSettingsView: View {
                         }
                     }
                 }
-                .listStyle(.bordered)
+                .listStyle(.inset)
             }
         }
-        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $editingProfile) { profile in
             AppProfileEditView(profile: profile) { updated in
                 profileManager.updateProfile(updated)
             }
         }
     }
+
+    /// Drive PersonaClassifier across every unmapped AppProfile, updating UI state
+    /// as it goes. Confidence threshold defaults to 80%.
+    private func runLLMClassify() async {
+        isClassifying = true
+        classifyResult = nil
+        classifyProgress = "Starting…"
+        let result = await classifier.classifyUnmappedApps { done, total, app in
+            classifyProgress = "Classifying \(done)/\(total): \(app)"
+        }
+        isClassifying = false
+        if result.considered == 0 {
+            classifyResult = "Nothing to classify — every profile already has a persona or custom prompt."
+        } else {
+            classifyResult = "Applied \(result.applied) of \(result.considered) (≥90% confidence). Skipped \(result.considered - result.applied) low-confidence."
+        }
+    }
 }
 
 struct AppProfileRowView: View {
     let profile: AppProfile
+    @ObservedObject private var personaManager = PersonaManager.shared
 
-    private var categoryColor: Color {
+    /// Resolution: persona name > custom prompt label > category capitalized.
+    private var badgeText: String {
+        if let pid = profile.personaId,
+           let p = personaManager.persona(byId: pid) {
+            return p.name
+        }
+        if let custom = profile.customPrompt, !custom.isEmpty {
+            return "Custom"
+        }
+        return profile.category.capitalized
+    }
+
+    private var badgeColor: Color {
+        if profile.personaId != nil { return .accentColor }
+        if profile.customPrompt?.isEmpty == false { return .orange }
         switch profile.category {
         case "email": return .blue
         case "slack": return .purple
@@ -4399,15 +5402,15 @@ struct AppProfileRowView: View {
                 Text(profile.displayName)
                     .fontWeight(.medium)
                 Spacer()
-                Text(profile.category.capitalized)
+                Text(badgeText)
                     .font(.caption)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(categoryColor.opacity(0.2))
-                    .foregroundColor(categoryColor)
+                    .background(badgeColor.opacity(0.2))
+                    .foregroundColor(badgeColor)
                     .clipShape(Capsule())
             }
-            if let custom = profile.customPrompt, !custom.isEmpty {
+            if let custom = profile.customPrompt, !custom.isEmpty, profile.personaId == nil {
                 Text(String(custom.prefix(60)) + (custom.count > 60 ? "..." : ""))
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -4423,8 +5426,10 @@ struct AppProfileEditView: View {
     let onSave: (AppProfile) -> Void
 
     @Environment(\.dismiss) var dismiss
+    @ObservedObject private var personaManager = PersonaManager.shared
     @State private var category: String = "default"
     @State private var customPrompt: String = ""
+    @State private var personaId: String? = nil
 
     private let categories = ["default", "email", "slack", "code"]
 
@@ -4438,6 +5443,22 @@ struct AppProfileEditView: View {
                 .foregroundColor(.secondary)
 
             VStack(alignment: .leading, spacing: 4) {
+                Text("Persona")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("Tie this app to a persona. Persona prompt overrides custom prompt and category.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Picker("", selection: $personaId) {
+                    Text("None (use category/custom)").tag(String?.none)
+                    ForEach(personaManager.personas) { persona in
+                        Text(persona.name).tag(String?.some(persona.id))
+                    }
+                }
+                .labelsHidden()
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Category")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -4449,19 +5470,21 @@ struct AppProfileEditView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .disabled(personaId != nil)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Custom Prompt (optional)")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text("Overrides the category default. Leave empty to use category formatting.")
+                Text("Overrides the category default. Leave empty to use category formatting. Ignored when a persona is selected.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 TextEditor(text: $customPrompt)
                     .font(.body)
                     .frame(height: 100)
                     .border(Color.secondary.opacity(0.3), width: 1)
+                    .disabled(personaId != nil)
             }
 
             HStack {
@@ -4476,6 +5499,7 @@ struct AppProfileEditView: View {
                     var updated = profile
                     updated.category = category
                     updated.customPrompt = customPrompt.isEmpty ? nil : customPrompt
+                    updated.personaId = personaId
                     onSave(updated)
                     dismiss()
                 }
@@ -4483,10 +5507,306 @@ struct AppProfileEditView: View {
             }
         }
         .padding()
-        .frame(width: 400, height: 320)
+        .frame(width: 480, height: 440)
         .onAppear {
             category = profile.category
             customPrompt = profile.customPrompt ?? ""
+            personaId = profile.personaId
+        }
+    }
+}
+
+// MARK: - Browser Site Rules Settings
+
+struct BrowserSiteRulesView: View {
+    @ObservedObject var manager = BrowserSiteRulesManager.shared
+    @ObservedObject var personaManager = PersonaManager.shared
+    @State private var editingRule: BrowserSiteRule? = nil
+    @State private var showingNew = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Fixed header (outside the scrolling list so it never scrolls away)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Browser Site Rules")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        showingNew = true
+                    } label: {
+                        Label("New Rule", systemImage: "plus")
+                    }
+                }
+                Text("When you dictate while a browser is in the foreground, VoiceFlow reads the active tab's URL and applies a persona based on these rules. Use \"*.example.com\" for subdomain wildcards. First matching rule wins (exact host beats wildcard). First use of each browser triggers a macOS Automation permission prompt — grant it.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding()
+
+            Divider()
+
+            // Scrolling list — owns its own height, never gets squashed by parent.
+            if manager.rules.isEmpty {
+                Spacer()
+                Text("No rules yet")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                List {
+                    ForEach(manager.rules) { rule in
+                        let personaName = personaManager.persona(byId: rule.personaId)?.name ?? "(missing persona)"
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rule.hostnamePattern).font(.system(.body, design: .monospaced))
+                                Text(personaName).font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if rule.isBuiltIn {
+                                Text("Built-in").font(.caption2)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.2))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editingRule = rule }
+                    }
+                    .onDelete { offsets in
+                        for offset in offsets {
+                            manager.delete(manager.rules[offset])
+                        }
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $editingRule) { rule in
+            BrowserSiteRuleEditView(rule: rule) { updated in
+                manager.upsert(updated)
+            }
+        }
+        .sheet(isPresented: $showingNew) {
+            BrowserSiteRuleEditView(
+                rule: BrowserSiteRule(
+                    id: UUID().uuidString,
+                    hostnamePattern: "",
+                    personaId: personaManager.personas.first?.id ?? "",
+                    createdAt: Date(),
+                    isBuiltIn: false
+                )
+            ) { updated in
+                manager.upsert(updated)
+            }
+        }
+    }
+}
+
+struct BrowserSiteRuleEditView: View {
+    let rule: BrowserSiteRule
+    let onSave: (BrowserSiteRule) -> Void
+
+    @Environment(\.dismiss) var dismiss
+    @ObservedObject private var personaManager = PersonaManager.shared
+    @State private var hostnamePattern: String = ""
+    @State private var personaId: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(rule.hostnamePattern.isEmpty ? "New Site Rule" : "Edit Rule")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Hostname pattern").font(.caption).foregroundColor(.secondary)
+                Text("Examples: \"github.com\", \"mail.google.com\", \"*.atlassian.net\"")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                TextField("github.com", text: $hostnamePattern)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled(true)
+                    .font(.system(.body, design: .monospaced))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Persona").font(.caption).foregroundColor(.secondary)
+                Picker("", selection: $personaId) {
+                    ForEach(personaManager.personas) { p in
+                        Text(p.name).tag(p.id)
+                    }
+                }
+                .labelsHidden()
+            }
+
+            HStack {
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") {
+                    var updated = rule
+                    updated.hostnamePattern = hostnamePattern.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    updated.personaId = personaId
+                    onSave(updated)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(hostnamePattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || personaId.isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 460, height: 240)
+        .onAppear {
+            hostnamePattern = rule.hostnamePattern
+            personaId = rule.personaId.isEmpty
+                ? (personaManager.personas.first?.id ?? "")
+                : rule.personaId
+        }
+    }
+}
+
+// MARK: - Personas Settings
+
+struct PersonasSettingsView: View {
+    @ObservedObject var personaManager = PersonaManager.shared
+    @State private var editingPersona: Persona? = nil
+    @State private var showingNew = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Personas")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        showingNew = true
+                    } label: {
+                        Label("New", systemImage: "plus")
+                    }
+                }
+                Text("Personas are reusable LLM context fragments. Tie an app to a persona in App Profiles.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+
+            Divider()
+
+            if personaManager.personas.isEmpty {
+                Spacer()
+                Text("No personas yet").foregroundColor(.secondary).frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                List {
+                    ForEach(personaManager.personas) { persona in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(persona.name).fontWeight(.medium)
+                                if persona.isBuiltIn {
+                                    Text("Built-in")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Color.secondary.opacity(0.2))
+                                        .clipShape(Capsule())
+                                }
+                                Spacer()
+                            }
+                            Text(String(persona.prompt.prefix(120)) + (persona.prompt.count > 120 ? "..." : ""))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            editingPersona = persona
+                        }
+                    }
+                    .onDelete { offsets in
+                        for offset in offsets {
+                            personaManager.delete(personaManager.personas[offset])
+                        }
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $editingPersona) { persona in
+            PersonaEditView(persona: persona) { updated in
+                personaManager.upsert(updated)
+            }
+        }
+        .sheet(isPresented: $showingNew) {
+            PersonaEditView(
+                persona: Persona(
+                    id: UUID().uuidString,
+                    name: "",
+                    prompt: "",
+                    createdAt: Date(),
+                    isBuiltIn: false
+                )
+            ) { updated in
+                personaManager.upsert(updated)
+            }
+        }
+    }
+}
+
+struct PersonaEditView: View {
+    let persona: Persona
+    let onSave: (Persona) -> Void
+
+    @Environment(\.dismiss) var dismiss
+    @State private var name: String = ""
+    @State private var prompt: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(persona.name.isEmpty ? "New Persona" : "Edit \(persona.name)")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Name").font(.caption).foregroundColor(.secondary)
+                TextField("e.g. Software Engineer", text: $name)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Prompt").font(.caption).foregroundColor(.secondary)
+                Text("This text is injected into the LLM system context whenever an app tied to this persona is the foreground app.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                TextEditor(text: $prompt)
+                    .font(.body)
+                    .frame(minHeight: 220)
+                    .border(Color.secondary.opacity(0.3), width: 1)
+            }
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") {
+                    var updated = persona
+                    updated.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    updated.prompt = prompt
+                    onSave(updated)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 540, height: 460)
+        .onAppear {
+            name = persona.name
+            prompt = persona.prompt
         }
     }
 }
@@ -4545,11 +5865,13 @@ struct MoonshineModel: Identifiable {
 enum PipelineMode: String, CaseIterable {
     case sttPlusLlm = "stt-plus-llm"
     case consolidated = "consolidated"
+    case audioDirect = "audio-direct"
 
     var displayName: String {
         switch self {
         case .sttPlusLlm: return "STT + LLM (traditional)"
         case .consolidated: return "Consolidated (single model)"
+        case .audioDirect: return "Audio Direct (Gemma 4)"
         }
     }
 
@@ -4557,6 +5879,7 @@ enum PipelineMode: String, CaseIterable {
         switch self {
         case .sttPlusLlm: return "Separate speech-to-text and language model stages"
         case .consolidated: return "Single model handles audio-to-text (Qwen3-ASR via MLX)"
+        case .audioDirect: return "Audio-native LLM transcribes and formats in one pass (Gemma 4)"
         }
     }
 }
@@ -5231,451 +6554,276 @@ class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
 
 struct ModelSettingsView: View {
     @EnvironmentObject var modelManager: ModelManager
-    @EnvironmentObject var voiceFlow: VoiceFlowBridge
-    @AppStorage("streamingEnabled") private var streamingEnabled = false
-    @AppStorage("streamingModelSize") private var streamingModelSizeRaw = "small"
-    @StateObject private var streamingEngine = MoonshineStreamingEngine()
-    @State private var streamingDownloadError: String?
-
-    private var selectedStreamingModelSize: MoonshineStreamingEngine.StreamingModelSize {
-        MoonshineStreamingEngine.StreamingModelSize(rawValue: streamingModelSizeRaw) ?? .small
-    }
+    @StateObject private var setup = SetupHelper()
+    @StateObject private var monitor = ServiceMonitor()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Restart banner
-                if modelManager.needsRestart {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text("Restart required to apply model change")
-                            .font(.callout)
-                        Spacer()
-                        Button("Restart Now") {
-                            restartApp()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                    .padding(10)
-                    .background(Color.orange.opacity(0.15))
-                    .cornerRadius(8)
-                }
-
-                // Pipeline Mode Section
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(PipelineMode.allCases, id: \.self) { mode in
-                            HStack(spacing: 12) {
-                                // Radio button
-                                ZStack {
-                                    Circle()
-                                        .stroke(mode == modelManager.currentPipelineMode ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
-                                        .frame(width: 20, height: 20)
-                                    if mode == modelManager.currentPipelineMode {
-                                        Circle()
-                                            .fill(Color.accentColor)
-                                            .frame(width: 12, height: 12)
-                                    }
-                                }
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(mode.displayName)
-                                        .fontWeight(.medium)
-                                    Text(mode.description)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                Spacer()
-                            }
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                modelManager.selectPipelineMode(mode)
-                            }
-
-                            if mode != PipelineMode.allCases.last {
-                                Divider()
-                            }
-                        }
-
-                        // Show consolidated model selection when in consolidated mode
-                        if modelManager.currentPipelineMode == .consolidated {
-                            Divider()
-                            Text("Consolidated Model")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .padding(.top, 4)
-
-                            ForEach(modelManager.consolidatedModels) { model in
-                                HStack(spacing: 12) {
-                                    ZStack {
-                                        Circle()
-                                            .stroke(model.id == modelManager.currentConsolidatedModelId ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
-                                            .frame(width: 18, height: 18)
-                                        if model.id == modelManager.currentConsolidatedModelId {
-                                            Circle()
-                                                .fill(Color.accentColor)
-                                                .frame(width: 10, height: 10)
-                                        }
-                                    }
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(model.displayName)
-                                            .fontWeight(.medium)
-                                        Text(String(format: "%.1f GB", model.sizeGB))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-
-                                    Spacer()
-
-                                    if model.isDownloaded {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundColor(.green)
-                                    } else if modelManager.downloadingConsolidatedModelId == model.id {
-                                        HStack(spacing: 6) {
-                                            ProgressView()
-                                                .scaleEffect(0.7)
-                                            Text("\(Int(modelManager.consolidatedDownloadProgress * 100))%")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    } else {
-                                        Button(action: {
-                                            modelManager.downloadConsolidatedModel(model.id)
-                                        }) {
-                                            Image(systemName: "arrow.down.circle")
-                                                .foregroundColor(.accentColor)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(modelManager.downloadingConsolidatedModelId != nil)
-                                    }
-                                }
-                                .padding(.leading, 20)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    if model.isDownloaded {
-                                        modelManager.selectConsolidatedModel(model.id)
-                                    }
-                                }
-                            }
-
-                            HStack(spacing: 4) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(.blue)
-                                Text("Models are downloaded from HuggingFace (PyTorch format).")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.leading, 20)
-
-                            if let error = modelManager.downloadError, modelManager.downloadingConsolidatedModelId == nil {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "exclamationmark.triangle")
-                                        .foregroundColor(.orange)
-                                    Text(error)
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
-                                }
-                                .padding(.leading, 20)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Pipeline Mode", systemImage: "arrow.triangle.branch")
-                        .font(.headline)
-                }
-
-                // Real-Time Streaming Section (only in STT+LLM mode)
-                if modelManager.currentPipelineMode == .sttPlusLlm {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Toggle(isOn: $streamingEnabled) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Enable Streaming Transcription")
-                                        .font(.system(size: 13, weight: .medium))
-                                    Text("Live transcription while you speak. LLM formatting runs on release.")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .toggleStyle(.switch)
-                            .onChange(of: streamingEnabled) { enabled in
-                                if enabled {
-                                    voiceFlow.unloadStt()
-                                }
-                            }
-
-                            if streamingEnabled {
-                                Divider()
-
-                                Text("Model Size")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-
-                                ForEach(MoonshineStreamingEngine.StreamingModelSize.allCases) { size in
-                                    HStack(spacing: 12) {
-                                        ZStack {
-                                            Circle()
-                                                .stroke(size.rawValue == streamingModelSizeRaw ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
-                                                .frame(width: 20, height: 20)
-                                            if size.rawValue == streamingModelSizeRaw {
-                                                Circle()
-                                                    .fill(Color.accentColor)
-                                                    .frame(width: 12, height: 12)
-                                            }
-                                        }
-
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(size.displayName)
-                                                .fontWeight(.medium)
-                                            Text(size.description)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-
-                                        Spacer()
-
-                                        if MoonshineStreamingEngine.isModelDownloaded(size) {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.green)
-                                        } else if streamingEngine.isDownloading && size == selectedStreamingModelSize {
-                                            ProgressView(value: streamingEngine.downloadProgress)
-                                                .frame(width: 60)
-                                        } else {
-                                            Button("Download") {
-                                                downloadStreamingModel(size)
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.small)
-                                        }
-                                    }
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        streamingModelSizeRaw = size.rawValue
-                                    }
-
-                                    if size != MoonshineStreamingEngine.StreamingModelSize.allCases.last {
-                                        Divider()
-                                    }
-                                }
-
-                                if let error = streamingDownloadError {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "exclamationmark.triangle.fill")
-                                            .foregroundColor(.orange)
-                                        Text(error)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-
-                                Divider()
-
-                                HStack(spacing: 6) {
-                                    Image(systemName: "info.circle")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text("Streaming uses Moonshine models for real-time transcription. Models are downloaded once (~80-550 MB).")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                        .padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Models").font(.headline)
+                    Spacer()
+                    Button {
+                        monitor.refresh()
+                        setup.refreshInstallState()
                     } label: {
-                        HStack(spacing: 6) {
-                            Label("Real-Time Streaming", systemImage: "waveform")
-                                .font(.headline)
-                            Text("BETA")
-                                .font(.system(size: 8, weight: .bold))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Color.orange.opacity(0.2))
-                                .foregroundColor(.orange)
-                                .cornerRadius(3)
-                        }
+                        Label("Refresh", systemImage: "arrow.clockwise")
                     }
                 }
-
-                // STT Engine Section (only shown in traditional mode when streaming is off)
-                if modelManager.currentPipelineMode == .sttPlusLlm && !streamingEnabled {
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        // Engine selection
-                        ForEach(SttEngine.allCases, id: \.self) { engine in
-                            SttEngineRowView(
-                                engine: engine,
-                                isSelected: engine == modelManager.currentSttEngine,
-                                onSelect: {
-                                    modelManager.selectSttEngine(engine)
-                                }
-                            )
-
-                            // Show Moonshine model options when Moonshine is selected
-                            if engine == .moonshine && modelManager.currentSttEngine == .moonshine {
-                                VStack(spacing: 8) {
-                                    ForEach(modelManager.moonshineModels) { model in
-                                        MoonshineModelRowView(
-                                            model: model,
-                                            isSelected: model.id == modelManager.currentMoonshineModelId,
-                                            isDownloading: modelManager.downloadingMoonshineModelId == model.id,
-                                            downloadProgress: modelManager.moonshineDownloadProgress,
-                                            onSelect: {
-                                                modelManager.selectMoonshineModel(model.id)
-                                            },
-                                            onDownload: {
-                                                modelManager.downloadMoonshineModel(model.id)
-                                            }
-                                        )
-                                    }
-                                }
-                                .padding(.leading, 32)
-                                .padding(.top, 4)
-                            }
-
-                            // Show Qwen3-ASR model info when selected
-                            if engine == .qwen3Asr && modelManager.currentSttEngine == .qwen3Asr {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    let hasModel = modelManager.consolidatedModels.contains(where: { $0.isDownloaded })
-                                    if hasModel {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.green)
-                                                .font(.caption)
-                                            Text("Qwen3-ASR model available")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    } else {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "exclamationmark.triangle.fill")
-                                                .foregroundColor(.orange)
-                                                .font(.caption)
-                                            Text("Download a Qwen3-ASR model from Consolidated Models section")
-                                                .font(.caption)
-                                                .foregroundColor(.orange)
-                                        }
-                                    }
-                                    Text("Transcription via Python daemon + LLM formatting")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.leading, 32)
-                                .padding(.top, 4)
-                            }
-
-                            if engine != SttEngine.allCases.last {
-                                Divider()
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Speech-to-Text Engine", systemImage: "waveform")
-                        .font(.headline)
-                }
-                }
-
-                // LLM Models Section (only shown in STT+LLM mode)
-                if modelManager.currentPipelineMode == .sttPlusLlm {
-                GroupBox {
-                    VStack(spacing: 12) {
-                        ForEach(modelManager.models) { model in
-                            ModelRowView(
-                                model: model,
-                                isSelected: model.id == modelManager.currentModelId,
-                                isDownloading: modelManager.downloadingModelId == model.id,
-                                downloadProgress: modelManager.downloadProgress,
-                                onSelect: {
-                                    if model.isDownloaded {
-                                        modelManager.selectModel(model.id)
-                                    }
-                                },
-                                onDownload: {
-                                    modelManager.downloadModel(model.id)
-                                }
-                            )
-
-                            if model.id != modelManager.models.last?.id {
-                                Divider()
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("LLM Models", systemImage: "cpu")
-                        .font(.headline)
-                }
-                }
-
-                // Error display
-                if let error = modelManager.downloadError {
-                    HStack {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.red)
-                        Text(error)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                }
-
-                // Info section
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Larger models generally provide better formatting quality but require more memory and are slower to process.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        HStack(spacing: 4) {
-                            Image(systemName: "info.circle")
-                                .foregroundColor(.blue)
-                            Text("Models are downloaded from HuggingFace (Q4_K_M quantization)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Info", systemImage: "questionmark.circle")
-                        .font(.headline)
-                }
+                Text("Parakeet TDT 0.6B v2 (STT) + Bonsai-8B Q1_0 (LLM). Both run on-device on Apple Silicon.")
+                    .font(.caption).foregroundColor(.secondary)
             }
             .padding()
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    modelsCard
+                    servicesCard
+                    setupCard
+                }
+                .padding()
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            modelManager.loadModels()
+            setup.refreshInstallState()
+            monitor.start()
+        }
+        .onDisappear {
+            monitor.stop()
         }
     }
 
-    private func restartApp() {
-        let bundlePath = Bundle.main.bundlePath
-        let script = """
-            sleep 0.5
-            open "\(bundlePath)"
-            """
-        let task = Process()
-        task.launchPath = "/bin/bash"
-        task.arguments = ["-c", script]
-        try? task.run()
-        // applicationWillTerminate will handle cleanup
-        NSApp.terminate(nil)
+    private var modelsCard: some View {
+        GroupBox(label: Label("Installed Models", systemImage: "cpu").fontWeight(.medium)) {
+            VStack(alignment: .leading, spacing: 12) {
+                ModelStatusRow(
+                    icon: "waveform",
+                    title: "Parakeet TDT 0.6B v2",
+                    subtitle: "NVIDIA — speech-to-text via parakeet-mlx (MLX-accelerated)",
+                    size: fileSizeText(SetupHelper.parakeetCachePath, fallback: "~1.2 GB"),
+                    installed: setup.parakeetInstalled,
+                    location: SetupHelper.parakeetCachePath.path
+                )
+                Divider()
+                ModelStatusRow(
+                    icon: "brain",
+                    title: "Bonsai-8B Q1_0",
+                    subtitle: "PrismML — 1.125-bit GGUF, served via local llama.cpp",
+                    size: fileSizeText(SetupHelper.bonsaiPath, fallback: "~1.1 GB"),
+                    installed: setup.bonsaiInstalled,
+                    location: SetupHelper.bonsaiPath.path
+                )
+            }
+            .padding(.vertical, 4)
+        }
     }
 
-    private func downloadStreamingModel(_ size: MoonshineStreamingEngine.StreamingModelSize) {
-        streamingDownloadError = nil
-        Task {
-            do {
-                try await streamingEngine.downloadModel(size: size)
-            } catch {
-                streamingDownloadError = error.localizedDescription
+    private var servicesCard: some View {
+        GroupBox(label: Label("Services", systemImage: "bolt.horizontal.fill").fontWeight(.medium)) {
+            VStack(alignment: .leading, spacing: 12) {
+                ServiceStatusRow(service: monitor.parakeet,
+                                 endpointLabel: "/tmp/voiceflow_parakeet_daemon.sock",
+                                 requestLabel: "transcriptions")
+                Divider()
+                ServiceStatusRow(service: monitor.llamaServer,
+                                 endpointLabel: monitor.llamaServer.endpoint ?? "",
+                                 requestLabel: "completions")
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var setupCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    if setup.isFullyInstalled {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                        Text("Both models installed and ready.").font(.callout)
+                        Spacer()
+                        Button {
+                            Task { await setup.runSetup() }
+                        } label: {
+                            Label("Re-verify", systemImage: "arrow.clockwise")
+                        }
+                    } else {
+                        Button {
+                            Task { await setup.runSetup() }
+                        } label: {
+                            Label(setupButtonLabel, systemImage: "arrow.down.circle.fill")
+                                .frame(minWidth: 140)
+                        }
+                        .controlSize(.large)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isInProgress)
+                        Spacer()
+                        Text("Total download: ~2.3 GB. One-time.").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+
+                if setup.phase != .idle {
+                    if let frac = setup.progressFraction, !setup.isFullyInstalled {
+                        ProgressView(value: frac).progressViewStyle(.linear)
+                    } else if isInProgress {
+                        ProgressView()
+                    }
+                    Text(setup.phaseLabel).font(.caption).foregroundColor(.secondary)
+                }
+                if case .failed(let msg) = setup.phase {
+                    Text(msg).font(.caption).foregroundColor(.red)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var isInProgress: Bool {
+        switch setup.phase {
+        case .downloadingBonsai, .loadingParakeet: return true
+        default: return false
+        }
+    }
+
+    private var setupButtonLabel: String {
+        isInProgress ? "Installing..." : "Setup"
+    }
+
+    private func fileSizeText(_ url: URL, fallback: String) -> String {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64 else {
+            return directorySizeText(url) ?? fallback
+        }
+        let mb = Double(size) / 1_048_576.0
+        if mb >= 1024 { return String(format: "%.2f GB", mb / 1024.0) }
+        return String(format: "%.0f MB", mb)
+    }
+
+    private func directorySizeText(_ url: URL) -> String? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])
+        var total: UInt64 = 0
+        while let f = enumerator?.nextObject() as? URL {
+            if let v = try? f.resourceValues(forKeys: [.fileSizeKey]),
+               let s = v.fileSize {
+                total += UInt64(s)
+            }
+        }
+        guard total > 0 else { return nil }
+        let mb = Double(total) / 1_048_576.0
+        if mb >= 1024 { return String(format: "%.2f GB", mb / 1024.0) }
+        return String(format: "%.0f MB", mb)
+    }
+}
+
+struct ServiceStatusRow: View {
+    let service: ServiceMonitor.Service
+    let endpointLabel: String
+    let requestLabel: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(service.isAlive ? Color.green : Color.secondary.opacity(0.4))
+                .frame(width: 10, height: 10)
+                .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(service.name).fontWeight(.medium)
+                    if service.isAlive, let pid = service.pid {
+                        Text("PID \(pid)")
+                            .font(.caption2)
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15))
+                            .clipShape(Capsule())
+                    } else {
+                        Text("not running")
+                            .font(.caption2)
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15))
+                            .clipShape(Capsule())
+                    }
+                    Spacer()
+                }
+                if !endpointLabel.isEmpty {
+                    Text(endpointLabel)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if service.isAlive {
+                    HStack(spacing: 16) {
+                        StatChip(label: "Uptime", value: service.uptimeText)
+                        StatChip(label: "Memory", value: service.memoryText)
+                        if let n = service.requestCount {
+                            StatChip(label: requestLabel, value: "\(n)")
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+struct StatChip: View {
+    let label: String
+    let value: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(label).font(.caption2).foregroundColor(.secondary)
+            Text(value).font(.system(size: 12, weight: .medium, design: .monospaced))
+        }
+    }
+}
+
+
+struct ModelStatusRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let size: String
+    let installed: Bool
+    let location: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundColor(.accentColor)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(title).fontWeight(.medium)
+                    if installed {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 12))
+                    } else {
+                        Text("not installed")
+                            .font(.caption2)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.2))
+                            .clipShape(Capsule())
+                    }
+                    Spacer()
+                    Text(size).font(.caption).foregroundColor(.secondary)
+                }
+                Text(subtitle).font(.caption).foregroundColor(.secondary)
+                if installed {
+                    Text(location)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+    }
+}
+
 
 struct ModelRowView: View {
     let model: LLMModel

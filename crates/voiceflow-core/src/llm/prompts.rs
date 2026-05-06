@@ -167,7 +167,7 @@ fn strip_leaked_prompt_blocks(text: &str) -> String {
 }
 
 /// Lowercase URLs - "www.Google.Com" → "www.google.com"
-fn lowercase_urls(text: &str) -> String {
+pub(crate) fn lowercase_urls(text: &str) -> String {
     let mut result = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -198,7 +198,7 @@ fn lowercase_urls(text: &str) -> String {
 
 /// Fix spacing in URLs - remove spaces around dots in URL patterns
 /// Handles www/http prefixes and safe TLDs that won't collide with English.
-fn fix_url_spacing(text: &str) -> String {
+pub(crate) fn fix_url_spacing(text: &str) -> String {
     let mut result = text.to_string();
 
     // Safe TLDs: won't false-positive in normal English sentences
@@ -339,7 +339,7 @@ fn is_url_context(chars: &[char], dot_pos: usize) -> bool {
 /// Ensure proper spacing after punctuation marks
 /// Adds a space after . ? ! , ; : when followed directly by a letter or number
 /// BUT NOT for URLs (www.google.com should stay together)
-fn fix_punctuation_spacing(text: &str) -> String {
+pub(crate) fn fix_punctuation_spacing(text: &str) -> String {
     let mut result = String::with_capacity(text.len() + 50);
     let chars: Vec<char> = text.chars().collect();
 
@@ -495,7 +495,7 @@ pub fn wrap_ui_paths(text: &str) -> String {
 /// Normalize ellipses to exactly 3 dots maximum
 /// Collapses any sequence of 3+ dots into exactly "..."
 /// Also converts the Unicode ellipsis character (…) to three dots
-pub fn normalize_ellipses(text: &str) -> String {
+pub(crate) fn normalize_ellipses(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut dot_count = 0;
 
@@ -544,7 +544,7 @@ pub fn normalize_ellipses(text: &str) -> String {
 /// - "Hello world...." (after normalize_ellipses → "Hello world...") → "Hello world."
 /// - "Hello world..." → "Hello world."
 /// - "I wonder..." → "I wonder..." (trails off mid-thought, kept)
-fn strip_trailing_ellipsis(text: &str) -> String {
+pub(crate) fn strip_trailing_ellipsis(text: &str) -> String {
     let trimmed = text.trim_end();
 
     // Only act on text that ends with "..."

@@ -328,580 +328,145 @@ struct ModelDownloadStepView: View {
     @ObservedObject var modelManager: ModelManager
     let onNext: () -> Void
 
-    @State private var selectedProfileId: String = ""
-    @State private var isDownloading = false
-    @State private var downloadPhase: DownloadPhase = .idle
-    @State private var downloadError: String?
-    @State private var pythonAvailable: Bool = true
-    @State private var showPythonAlert: Bool = false
-    @State private var showAdvanced: Bool = false
-
-    // Advanced overrides (only used when showAdvanced is true)
-    @State private var advancedSttId: String = ""
-    @State private var advancedLlmId: String = ""
-
-    enum DownloadPhase: Equatable {
-        case idle
-        case downloadingStep1
-        case downloadingStep2
-        case complete
-    }
-
-    private var systemRAMGB: Int {
-        Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
-    }
-
-    // MARK: - Profiles
-
-    private var profiles: [ModelProfile] {
-        [
-            ModelProfile(
-                id: "lightweight",
-                name: "Lightweight",
-                icon: "hare",
-                description: "Fastest performance, smallest download",
-                downloadSize: "~0.9 GB",
-                bestFor: "Best for 8 GB Macs or quick setup",
-                sttId: "moonshine-tiny",
-                sttType: .moonshine(modelId: "tiny"),
-                llmId: "qwen3.5-0.8b",
-                requiresPython: false,
-                minRAMGB: 8
-            ),
-            ModelProfile(
-                id: "recommended",
-                name: "Recommended",
-                icon: "star",
-                description: "Great balance of speed and accuracy",
-                downloadSize: "~3.2 GB",
-                bestFor: "Best for most Macs with 16 GB+ RAM",
-                sttId: "qwen3-asr-0.6b",
-                sttType: .consolidated(modelId: "qwen3-asr-0.6b"),
-                llmId: "qwen3.5-2b",
-                requiresPython: true,
-                minRAMGB: 16
-            ),
-            ModelProfile(
-                id: "quality",
-                name: "Higher Quality",
-                icon: "dial.high",
-                description: "Most accurate transcription and formatting",
-                downloadSize: "~4.6 GB",
-                bestFor: "Best for 24 GB+ Macs",
-                sttId: "qwen3-asr-0.6b",
-                sttType: .consolidated(modelId: "qwen3-asr-0.6b"),
-                llmId: "qwen3.5-4b",
-                requiresPython: true,
-                minRAMGB: 24
-            ),
-        ]
-    }
-
-    private var selectedProfile: ModelProfile? {
-        profiles.first(where: { $0.id == selectedProfileId })
-    }
-
-    // Effective model IDs (advanced overrides or profile defaults)
-    private var effectiveSttId: String {
-        showAdvanced ? advancedSttId : (selectedProfile?.sttId ?? "")
-    }
-
-    private var effectiveLlmId: String {
-        showAdvanced ? advancedLlmId : (selectedProfile?.llmId ?? "")
-    }
-
-    private var sttIsDownloaded: Bool {
-        let sttId = effectiveSttId
-        if sttId == "moonshine-tiny" {
-            return modelManager.moonshineModels.first(where: { $0.id == "tiny" })?.isDownloaded ?? false
-        } else if sttId.hasPrefix("qwen3-asr") {
-            return modelManager.consolidatedModels.first(where: { $0.id == sttId })?.isDownloaded ?? false
-        }
-        return false
-    }
-
-    private var llmIsDownloaded: Bool {
-        modelManager.models.first(where: { $0.id == effectiveLlmId })?.isDownloaded ?? false
-    }
-
-    private var allDownloaded: Bool {
-        sttIsDownloaded && llmIsDownloaded
-    }
-
-    // Advanced dropdown options
-    private var sttOptions: [(id: String, label: String, size: String)] {
-        var opts: [(id: String, label: String, size: String)] = [
-            ("moonshine-tiny", "Moonshine Tiny", "~190 MB"),
-        ]
-        if pythonAvailable {
-            opts.append(("qwen3-asr-0.6b", "Qwen3-ASR 0.6B", "~1.2 GB"))
-        }
-        return opts
-    }
-
-    private var llmOptions: [(id: String, label: String, size: String)] {
-        [
-            ("qwen3.5-0.8b", "Qwen3.5 0.8B", "~0.7 GB"),
-            ("qwen3.5-2b", "Qwen3.5 2B", "~1.9 GB"),
-            ("qwen3.5-4b", "Qwen3.5 4B", "~3.4 GB"),
-        ]
-    }
-
-    // MARK: - Body
+    // SetupHelper drives the actual install — both onboarding wizard and the
+    // Models settings page share this code path.
+    @StateObject private var setup = SetupHelper()
 
     var body: some View {
-        VStack(spacing: 14) {
-            Text("Download AI Models")
-                .font(.title2.bold())
-                .padding(.top, 8)
+        VStack(spacing: 20) {
+            // Header
+            VStack(spacing: 8) {
+                Image(systemName: "shippingbox.and.arrow.backward")
+                    .font(.system(size: 38))
+                    .foregroundColor(.accentColor)
+                Text("Install models")
+                    .font(.title2.weight(.semibold))
+                Text("VoiceFlow uses two on-device models — both run locally on Apple Silicon.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 8)
 
-            Text("VoiceFlow runs entirely on your Mac. Choose a setup to download.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+            // Rundown
+            VStack(alignment: .leading, spacing: 10) {
+                ModelRundownRow(
+                    icon: "waveform",
+                    title: "Parakeet TDT 0.6B v2 (STT)",
+                    detail: "NVIDIA — speech-to-text via parakeet-mlx",
+                    size: "~1.2 GB",
+                    installed: setup.parakeetInstalled
+                )
+                ModelRundownRow(
+                    icon: "brain",
+                    title: "Bonsai-8B Q1_0 (LLM)",
+                    detail: "PrismML — 1.125-bit quantized formatter",
+                    size: "~1.1 GB",
+                    installed: setup.bonsaiInstalled
+                )
+                Divider()
+                Text("Total: about 2.3 GB. One-time download. Both models stay on your machine.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+            .padding(.horizontal, 32)
 
-            ScrollView {
-                VStack(spacing: 10) {
-                    // Profile cards
-                    ForEach(profiles) { profile in
-                        ProfileCard(
-                            profile: profile,
-                            isSelected: selectedProfileId == profile.id && !showAdvanced,
-                            isAvailable: true,
-                            unavailableReason: nil,
-                            isDownloaded: profileIsDownloaded(profile)
-                        ) {
-                            showAdvanced = false
-                            selectedProfileId = profile.id
-                            syncAdvancedToProfile(profile)
-                        }
-
+            // Phase / progress
+            if setup.phase != .idle && setup.phase != .complete {
+                VStack(spacing: 6) {
+                    if let frac = setup.progressFraction {
+                        ProgressView(value: frac)
+                            .progressViewStyle(.linear)
+                            .frame(maxWidth: 320)
+                    } else {
+                        ProgressView()
+                            .scaleEffect(0.8)
                     }
-
-                    // Advanced Settings
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showAdvanced.toggle()
-                        }
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: showAdvanced ? "chevron.down" : "chevron.right")
-                                .font(.caption2)
-                            Text("Advanced Settings")
-                                .font(.callout)
-                        }
-                        .foregroundColor(.accentColor)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 4)
-
-                    if showAdvanced {
-                        VStack(spacing: 12) {
-                            // Speech recognition picker
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Speech Recognition")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Picker("", selection: $advancedSttId) {
-                                    ForEach(sttOptions, id: \.id) { option in
-                                        Text("\(option.label) (\(option.size))")
-                                            .tag(option.id)
-                                    }
-                                }
-                                .labelsHidden()
-                                .disabled(isDownloading)
-                            }
-
-                            // Text formatting picker
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Text Formatting")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Picker("", selection: $advancedLlmId) {
-                                    ForEach(llmOptions, id: \.id) { option in
-                                        Text("\(option.label) (\(option.size))")
-                                            .tag(option.id)
-                                    }
-                                }
-                                .labelsHidden()
-                                .disabled(isDownloading)
-                            }
-                        }
-                        .padding(.top, 8)
-                    }
-
-                    // Download progress
-                    if isDownloading {
-                        downloadProgressView
-                    }
-
-                    // Error display
-                    if let error = downloadError ?? modelManager.downloadError {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundColor(.red)
-                            Text(error)
-                                .font(.caption)
-                                .foregroundColor(.red)
-                                .lineLimit(2)
-                            Spacer()
-                            Button("Retry") {
-                                downloadError = nil
-                                modelManager.downloadError = nil
-                                startDownloads()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                        .padding(10)
-                        .background(Color.red.opacity(0.08))
-                        .cornerRadius(8)
-                    }
+                    Text(setup.phaseLabel)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .padding(.horizontal, 24)
+            }
+            if case .failed(let msg) = setup.phase {
+                Text(msg).font(.caption).foregroundColor(.red)
             }
 
             Spacer(minLength: 0)
 
-            // Action buttons
-            VStack(spacing: 8) {
-                if allDownloaded || downloadPhase == .complete {
+            // Action
+            HStack {
+                Spacer()
+                if setup.isFullyInstalled || setup.phase == .complete {
                     Button(action: onNext) {
                         Text("Continue")
-                            .font(.headline)
-                            .frame(maxWidth: 200)
-                            .padding(.vertical, 8)
+                            .frame(minWidth: 140)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
-                } else if isDownloading {
-                    // Progress is shown inline above
+                    .buttonStyle(.borderedProminent)
                 } else {
-                    Button(action: handleDownloadPressed) {
-                        Text("Download")
-                            .font(.headline)
-                            .frame(maxWidth: 200)
-                            .padding(.vertical, 8)
+                    Button(action: { Task { await setup.runSetup() } }) {
+                        Text(isInProgress ? "Installing…" : "Setup")
+                            .frame(minWidth: 140)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
-                    .disabled(effectiveSttId.isEmpty || effectiveLlmId.isEmpty)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isInProgress)
                 }
-
-                if !isDownloading && !allDownloaded && downloadPhase != .complete {
-                    Button(action: onNext) {
-                        Text("Skip for now")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Models are needed before recording works. You can download them later from Settings.")
-                }
-            }
-            .padding(.bottom, 16)
-        }
-        .onAppear {
-            checkPythonAvailability()
-            modelManager.loadModels()
-            modelManager.loadSttSettings()
-            modelManager.loadConsolidatedSettings()
-            autoSelectProfile()
-        }
-        .alert("Python 3.10+ Required", isPresented: $showPythonAlert) {
-            Button("Install Python") {
-                NSWorkspace.shared.open(URL(string: "https://www.python.org/downloads/")!)
-            }
-            Button("Continue Anyway", role: .destructive) {
-                startDownloads()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The selected configuration uses Qwen3-ASR, which requires Python 3.10 or later.\n\nPython was not detected on this Mac. You can install it now, or continue anyway and set it up later.")
-        }
-    }
-
-    // MARK: - Download Progress View
-
-    @ViewBuilder
-    private var downloadProgressView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                ProgressView()
-                    .controlSize(.small)
-                Text(downloadPhaseLabel)
-                    .font(.callout)
-                    .foregroundColor(.secondary)
                 Spacer()
             }
-            ProgressView(value: currentProgress)
-                .progressViewStyle(.linear)
-            Text("\(Int(currentProgress * 100))%")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            .padding(.bottom, 28)
         }
-        .padding(12)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(10)
+        .padding(.top, 8)
+        .onAppear { setup.refreshInstallState() }
     }
 
-    private var downloadPhaseLabel: String {
-        switch downloadPhase {
-        case .downloadingStep1:
-            return "Downloading speech recognition model..."
-        case .downloadingStep2:
-            return "Downloading text formatting model..."
-        default:
-            return "Preparing..."
-        }
-    }
-
-    private var currentProgress: Double {
-        switch downloadPhase {
-        case .downloadingStep1:
-            return sttDownloadProgress
-        case .downloadingStep2:
-            return modelManager.downloadProgress
-        default:
-            return 0
-        }
-    }
-
-    private var sttDownloadProgress: Double {
-        let sttId = effectiveSttId
-        if sttId == "moonshine-tiny" {
-            return modelManager.moonshineDownloadProgress
-        } else if sttId.hasPrefix("qwen3-asr") {
-            return modelManager.consolidatedDownloadProgress
-        }
-        return 0
-    }
-
-    // MARK: - Profile Helpers
-
-    private func profileIsAvailable(_ profile: ModelProfile) -> Bool {
-        // All profiles are always selectable — warnings are shown instead of disabling
-        return true
-    }
-
-    private func profileWarning(_ profile: ModelProfile) -> String? {
-        if profile.requiresPython && !pythonAvailable {
-            return "Python 3.10+ required — install it before using this mode"
-        }
-        return nil
-    }
-
-    private func profileUnavailableReason(_ profile: ModelProfile) -> String? {
-        return nil
-    }
-
-    private func profileIsDownloaded(_ profile: ModelProfile) -> Bool {
-        let sttDownloaded: Bool
-        switch profile.sttType {
-        case .moonshine(let modelId):
-            sttDownloaded = modelManager.moonshineModels.first(where: { $0.id == modelId })?.isDownloaded ?? false
-        case .consolidated(let modelId):
-            sttDownloaded = modelManager.consolidatedModels.first(where: { $0.id == modelId })?.isDownloaded ?? false
-        }
-        let llmDownloaded = modelManager.models.first(where: { $0.id == profile.llmId })?.isDownloaded ?? false
-        return sttDownloaded && llmDownloaded
-    }
-
-    private func autoSelectProfile() {
-        // Pick the best profile for this Mac's RAM — always selectable
-        if systemRAMGB >= 24 {
-            selectedProfileId = "quality"
-        } else if systemRAMGB >= 16 {
-            selectedProfileId = "recommended"
-        } else {
-            selectedProfileId = "lightweight"
-        }
-        if let profile = selectedProfile {
-            syncAdvancedToProfile(profile)
-        }
-    }
-
-    private func syncAdvancedToProfile(_ profile: ModelProfile) {
-        advancedSttId = profile.sttId
-        advancedLlmId = profile.llmId
-    }
-
-    // MARK: - Python Check
-
-    private func checkPythonAvailability() {
-        // macOS GUI apps don't inherit the user's shell PATH, so /usr/bin/env may not
-        // find Homebrew Python. Check multiple common paths.
-        let candidates = [
-            "/opt/homebrew/bin/python3",        // Apple Silicon Homebrew
-            "/usr/local/bin/python3",           // Intel Homebrew
-            "/usr/bin/python3",                 // Xcode CLT / system
-        ]
-
-        for candidate in candidates {
-            if FileManager.default.fileExists(atPath: candidate) {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: candidate)
-                process.arguments = ["--version"]
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = pipe
-
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    if process.terminationStatus == 0 {
-                        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                        let output = String(data: data, encoding: .utf8) ?? ""
-                        if let versionStr = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                            .components(separatedBy: " ").last {
-                            let parts = versionStr.components(separatedBy: ".")
-                            if parts.count >= 2,
-                               let major = Int(parts[0]),
-                               let minor = Int(parts[1]),
-                               major >= 3 && minor >= 10 {
-                                pythonAvailable = true
-                                return
-                            }
-                        }
-                    }
-                } catch {
-                    continue
-                }
-            }
-        }
-
-        pythonAvailable = false
-    }
-
-    // MARK: - Download Logic
-
-    private func handleDownloadPressed() {
-        // Check if the selected config requires Python and it's not available
-        let needsPython: Bool
-        if showAdvanced {
-            needsPython = effectiveSttId.hasPrefix("qwen3-asr")
-        } else {
-            needsPython = selectedProfile?.requiresPython ?? false
-        }
-
-        if needsPython && !pythonAvailable {
-            showPythonAlert = true
-        } else {
-            startDownloads()
-        }
-    }
-
-    private func startDownloads() {
-        isDownloading = true
-        downloadError = nil
-        modelManager.downloadError = nil
-        downloadPhase = .idle
-        downloadSttModel()
-    }
-
-    private func downloadSttModel() {
-        if sttIsDownloaded {
-            downloadLlmModel()
-            return
-        }
-
-        downloadPhase = .downloadingStep1
-        let sttId = effectiveSttId
-
-        if sttId == "moonshine-tiny" {
-            modelManager.downloadMoonshineModel("tiny")
-            pollMoonshineCompletion()
-        } else if sttId.hasPrefix("qwen3-asr") {
-            modelManager.downloadConsolidatedModel(sttId)
-            pollConsolidatedCompletion()
-        }
-    }
-
-    private func pollMoonshineCompletion() {
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            DispatchQueue.main.async {
-                if modelManager.downloadingMoonshineModelId == nil {
-                    timer.invalidate()
-                    if modelManager.downloadError != nil {
-                        isDownloading = false
-                        downloadPhase = .idle
-                    } else {
-                        modelManager.loadSttSettings()
-                        downloadLlmModel()
-                    }
-                }
-            }
-        }
-    }
-
-    private func pollConsolidatedCompletion() {
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            DispatchQueue.main.async {
-                if modelManager.downloadingConsolidatedModelId == nil {
-                    timer.invalidate()
-                    if modelManager.downloadError != nil {
-                        isDownloading = false
-                        downloadPhase = .idle
-                    } else {
-                        modelManager.loadConsolidatedSettings()
-                        downloadLlmModel()
-                    }
-                }
-            }
-        }
-    }
-
-    private func downloadLlmModel() {
-        if llmIsDownloaded {
-            finishDownloads()
-            return
-        }
-
-        downloadPhase = .downloadingStep2
-        modelManager.downloadModel(effectiveLlmId)
-
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            DispatchQueue.main.async {
-                if !modelManager.isDownloading {
-                    timer.invalidate()
-                    if modelManager.downloadError != nil {
-                        isDownloading = false
-                        downloadPhase = .idle
-                    } else {
-                        modelManager.loadModels()
-                        finishDownloads()
-                    }
-                }
-            }
-        }
-    }
-
-    private func finishDownloads() {
-        isDownloading = false
-        downloadPhase = .complete
-        configureSelectedModels()
-    }
-
-    private func configureSelectedModels() {
-        let sttId = effectiveSttId
-        let llmId = effectiveLlmId
-
-        if sttId == "moonshine-tiny" {
-            modelManager.selectSttEngine(.moonshine)
-            modelManager.selectMoonshineModel("tiny")
-            modelManager.selectPipelineMode(.sttPlusLlm)
-        } else if sttId.hasPrefix("qwen3-asr") {
-            modelManager.selectSttEngine(.qwen3Asr)
-            modelManager.selectConsolidatedModel(sttId)
-            modelManager.selectPipelineMode(.sttPlusLlm)
-        }
-
-        if modelManager.models.first(where: { $0.id == llmId })?.isDownloaded == true {
-            modelManager.selectModel(llmId)
+    private var isInProgress: Bool {
+        switch setup.phase {
+        case .downloadingBonsai, .loadingParakeet: return true
+        default: return false
         }
     }
 }
+
+struct ModelRundownRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+    let size: String
+    let installed: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundColor(.accentColor)
+                .frame(width: 30)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(title).font(.callout).fontWeight(.medium)
+                    if installed {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 12))
+                    }
+                }
+                Text(detail).font(.caption).foregroundColor(.secondary)
+            }
+            Spacer()
+            Text(size).font(.caption).foregroundColor(.secondary)
+        }
+    }
+}
+
 
 // MARK: - Profile Card
 

@@ -39,6 +39,10 @@ enum Commands {
         /// Skip LLM formatting, output raw transcript
         #[arg(long)]
         raw: bool,
+
+        /// Use audio-direct mode (single model, requires mistral.rs + Gemma 4)
+        #[arg(long)]
+        audio_direct: bool,
     },
 
     /// Transcribe an existing audio file
@@ -53,6 +57,10 @@ enum Commands {
         /// Skip LLM formatting
         #[arg(long)]
         raw: bool,
+
+        /// Use audio-direct mode (single model, requires mistral.rs + Gemma 4)
+        #[arg(long)]
+        audio_direct: bool,
     },
 
     /// Download required models
@@ -85,6 +93,10 @@ enum Commands {
         /// Path to test audio file
         #[arg(short, long)]
         file: Option<String>,
+
+        /// Use audio-direct mode (single model, requires mistral.rs + Gemma 4)
+        #[arg(long)]
+        audio_direct: bool,
     },
 
     /// Evaluate transcription quality against LibriSpeech test-clean
@@ -120,6 +132,14 @@ enum Commands {
         /// Run full benchmark matrix across all downloaded models
         #[arg(long)]
         benchmark: bool,
+
+        /// Run side-by-side comparison: two-model vs audio-direct (requires mistral.rs + Gemma 4)
+        #[arg(long)]
+        audio_direct: bool,
+
+        /// Use deterministic text normalization instead of LLM formatting
+        #[arg(long)]
+        deterministic: bool,
     },
 
     /// List available models
@@ -184,12 +204,21 @@ async fn main() -> Result<()> {
             clipboard,
             context,
             raw,
+            audio_direct,
         } => {
-            commands::record::run(&config, clipboard, context.as_deref(), raw).await
+            if audio_direct {
+                config.llm_model = voiceflow_core::LlmModel::Gemma4E2B;
+                config.llm_backend = Some(voiceflow_core::LlmBackend::MistralRs);
+            }
+            commands::record::run(&config, clipboard, context.as_deref(), raw, audio_direct).await
         }
 
-        Commands::File { path, context, raw } => {
-            commands::file::run(&config, &path, context.as_deref(), raw).await
+        Commands::File { path, context, raw, audio_direct } => {
+            if audio_direct {
+                config.llm_model = voiceflow_core::LlmModel::Gemma4E2B;
+                config.llm_backend = Some(voiceflow_core::LlmBackend::MistralRs);
+            }
+            commands::file::run(&config, &path, context.as_deref(), raw, audio_direct).await
         }
 
         Commands::Setup { whisper, llm, benchmark } => {
@@ -224,15 +253,15 @@ async fn main() -> Result<()> {
             }
         },
 
-        Commands::Bench { iterations, file } => {
-            commands::bench::run(&config, iterations, file.as_deref()).await
+        Commands::Bench { iterations, file, audio_direct } => {
+            commands::bench::run(&config, iterations, file.as_deref(), audio_direct).await
         }
 
-        Commands::Eval { limit, samples, raw, analyze, report, stt, llm, benchmark } => {
+        Commands::Eval { limit, samples, raw, analyze, report, stt, llm, benchmark, audio_direct, deterministic } => {
             if benchmark {
                 commands::eval::run_benchmark(limit.unwrap_or(50)).await
             } else {
-                commands::eval::run(&config, limit, samples, raw, analyze, report.as_deref(), stt.as_deref(), llm.as_deref()).await
+                commands::eval::run(&config, limit, samples, raw, analyze, report.as_deref(), stt.as_deref(), llm.as_deref(), audio_direct, deterministic).await
             }
         }
 

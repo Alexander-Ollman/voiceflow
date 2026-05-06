@@ -1,0 +1,253 @@
+import Foundation
+
+/// Downloads and verifies the two models VoiceFlow ships with: Parakeet TDT 0.6B v2
+/// (STT) and Bonsai-8B Q1_0 (LLM). Centralizes the install logic so both the
+/// onboarding wizard and the Models settings page can share the same code path.
+///
+/// Parakeet is downloaded by the Python daemon on first `load_model` call (via
+/// parakeet-mlx → Hugging Face Hub). Bonsai is a single GGUF file we fetch
+/// directly via URLSession into the VoiceFlow models directory.
+/// SetupHelper is intentionally not @MainActor: SwiftUI views' implicit init runs
+/// off the main actor in Swift 6, and an `@StateObject` that constructs a MainActor
+/// type from there triggers actor-isolation runtime warnings (which on macOS can
+/// manifest as a blank view). Mutations of @Published vars are dispatched to main
+/// explicitly inside the methods that need it.
+final class SetupHelper: ObservableObject {
+
+    enum Phase: Equatable {
+        case idle
+        case downloadingBonsai(bytesDone: Int64, bytesTotal: Int64)
+        case loadingParakeet
+        case complete
+        case failed(String)
+    }
+
+    @Published var phase: Phase = .idle
+
+    // Public switches — true once the corresponding artifact is on disk/loaded.
+    @Published var bonsaiInstalled: Bool = false
+    @Published var parakeetInstalled: Bool = false
+
+    private var parakeetEngine: ParakeetASREngine?
+    private var bonsaiDownloadTask: URLSessionDownloadTask?
+
+    init() {
+        refreshInstallState()
+    }
+
+    @MainActor
+    private func ensureParakeetEngine() -> ParakeetASREngine {
+        if let e = parakeetEngine { return e }
+        let e = ParakeetASREngine()
+        parakeetEngine = e
+        return e
+    }
+
+    // MARK: - Paths
+
+    static let bonsaiFilename = "Bonsai-8B-Q1_0.gguf"
+    static let bonsaiURL = URL(string: "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B-Q1_0.gguf")!
+    /// Approximate size used purely for the UI rundown.
+    static let bonsaiApproxBytes: Int64 = 1_152_000_000  // ~1.1 GB
+    /// Approximate Parakeet bf16 weight size on Hugging Face cache.
+    static let parakeetApproxBytes: Int64 = 1_200_000_000  // ~1.2 GB
+    static var totalApproxBytes: Int64 { bonsaiApproxBytes + parakeetApproxBytes }
+
+    static var modelsDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent("com.era-laboratories.voiceflow/models")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static var bonsaiPath: URL {
+        modelsDirectory.appendingPathComponent(bonsaiFilename)
+    }
+
+    static var parakeetCachePath: URL {
+        // Hugging Face hub default cache — parakeet-mlx uses this layout.
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".cache/huggingface/hub/models--mlx-community--parakeet-tdt-0.6b-v2")
+    }
+
+    // MARK: - State refresh
+
+    func refreshInstallState() {
+        bonsaiInstalled = FileManager.default.fileExists(atPath: Self.bonsaiPath.path)
+        parakeetInstalled = FileManager.default.fileExists(atPath: Self.parakeetCachePath.path)
+    }
+
+    var isFullyInstalled: Bool {
+        bonsaiInstalled && parakeetInstalled
+    }
+
+    // MARK: - Setup driver
+
+    /// Run the complete install: Bonsai GGUF download, then Parakeet model load.
+    /// Idempotent — skips steps that already have artifacts present.
+    @MainActor
+    func runSetup() async {
+        phase = .idle
+        do {
+            if !bonsaiInstalled {
+                try await downloadBonsai()
+            }
+            await loadParakeet()
+            refreshInstallState()
+            phase = .complete
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Bonsai download
+
+    private func downloadBonsai() async throws {
+        phase = .downloadingBonsai(bytesDone: 0, bytesTotal: Self.bonsaiApproxBytes)
+
+        let dest = Self.bonsaiPath
+        let tmp = dest.appendingPathExtension("part")
+
+        // Resume support: if a .part file exists, treat its size as already-downloaded.
+        // Simpler approach for now: always re-download from scratch.
+        try? FileManager.default.removeItem(at: tmp)
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let delegate = DownloadProgressDelegate { [weak self] done, total in
+                Task { @MainActor in
+                    self?.phase = .downloadingBonsai(bytesDone: done, bytesTotal: max(total, Self.bonsaiApproxBytes))
+                }
+            } onComplete: { result in
+                continuation.resume(with: result)
+            }
+
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            var req = URLRequest(url: Self.bonsaiURL)
+            req.timeoutInterval = 60
+            let task = session.downloadTask(with: req) { url, _, error in
+                if let error = error {
+                    delegate.onComplete(.failure(error))
+                    return
+                }
+                guard let url = url else {
+                    delegate.onComplete(.failure(SetupError.downloadFailed("No file returned")))
+                    return
+                }
+                do {
+                    try? FileManager.default.removeItem(at: dest)
+                    try FileManager.default.moveItem(at: url, to: dest)
+                    delegate.onComplete(.success(()))
+                } catch {
+                    delegate.onComplete(.failure(error))
+                }
+            }
+            self.bonsaiDownloadTask = task
+            task.resume()
+        }
+
+        bonsaiInstalled = true
+    }
+
+    // MARK: - Parakeet load (downloads via parakeet-mlx if cache miss)
+
+    @MainActor
+    private func loadParakeet() async {
+        phase = .loadingParakeet
+        let engine = ensureParakeetEngine()
+        await engine.loadModel()
+        if case .ready = engine.state {
+            parakeetInstalled = true
+        }
+    }
+
+    // MARK: - Progress helpers for UI
+
+    var progressFraction: Double? {
+        switch phase {
+        case .downloadingBonsai(let done, let total):
+            guard total > 0 else { return nil }
+            return Double(done) / Double(total) * 0.5  // Bonsai is ~half the work
+        case .loadingParakeet:
+            return 0.5  // Parakeet load starts after Bonsai finished
+        case .complete:
+            return 1.0
+        default:
+            return nil
+        }
+    }
+
+    var phaseLabel: String {
+        switch phase {
+        case .idle:
+            return ""
+        case .downloadingBonsai(let done, let total):
+            let mb = Double(done) / 1_048_576.0
+            let totalMB = Double(total) / 1_048_576.0
+            return String(format: "Downloading Bonsai-8B GGUF — %.0f / %.0f MB", mb, totalMB)
+        case .loadingParakeet:
+            return "Downloading & loading Parakeet TDT 0.6B (first run, ~1.2 GB)…"
+        case .complete:
+            return "Setup complete. Both models installed."
+        case .failed(let msg):
+            return "Setup failed: \(msg)"
+        }
+    }
+}
+
+enum SetupError: Error, LocalizedError {
+    case downloadFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .downloadFailed(let msg): return msg
+        }
+    }
+}
+
+/// URLSession delegate that surfaces byte-level download progress.
+final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let onProgress: (Int64, Int64) -> Void
+    let onComplete: (Result<Void, Error>) -> Void
+    private var hasCompleted = false
+
+    init(
+        onProgress: @escaping (Int64, Int64) -> Void,
+        onComplete: @escaping (Result<Void, Error>) -> Void
+    ) {
+        self.onProgress = onProgress
+        self.onComplete = onComplete
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        // The download-task completion handler runs after this; it owns moving the file
+        // and calling onComplete. We just no-op here to keep the file alive briefly.
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        guard !hasCompleted else { return }
+        if let error = error {
+            hasCompleted = true
+            onComplete(.failure(error))
+        }
+        // Successful completion is signaled from the downloadTask completion handler
+        // in SetupHelper.downloadBonsai().
+    }
+}

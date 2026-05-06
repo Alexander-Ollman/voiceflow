@@ -22,15 +22,23 @@ pitch-detection = "0.3"
 
 # Speech-to-Text
 whisper-rs = "0.14"
-ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Moonshine (bundles library automatically)
+ort = { version = "2.0.0-rc.12" }  # ONNX Runtime for Moonshine (bundles library automatically)
 ndarray = "0.16"  # For tensor operations with ONNX
 serde_json = "1.0"  # For tokenizer loading
 
 # LLM Inference - llama.cpp backend with multimodal support
 llama-cpp-2 = { version = "=0.1.139", features = ["mtmd"] }
 
+# LLM Inference - mistral.rs backend (Candle-based, no GGML) for Gemma 4 audio
+mistralrs = { version = "0.8", features = ["metal", "accelerate"] }
+image = "0.25"
+
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }
+
+# HTTP client for OpenAI-compatible LLM servers (sync, no async overhead)
+ureq = { version = "2.12", features = ["json"] }
+base64 = "0.22"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }

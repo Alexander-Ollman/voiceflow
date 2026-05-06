@@ -108,6 +108,8 @@ struct SampleResult {
     wer: f32,
     transcription_ms: u64,
     llm_ms: u64,
+    ttft_ms: u64,
+    total_ms: u64,
 }
 
 /// Aggregate evaluation results
@@ -121,6 +123,8 @@ struct EvalResults {
     total_formatted_errors: usize,
     total_transcription_ms: u64,
     total_llm_ms: u64,
+    total_ttft_ms: u64,
+    total_total_ms: u64,
     samples: Vec<SampleResult>,
     // Error analysis
     error_analysis: ErrorAnalysis,
@@ -156,6 +160,22 @@ impl EvalResults {
             0
         } else {
             self.total_llm_ms / self.total_samples as u64
+        }
+    }
+
+    fn average_ttft_ms(&self) -> u64 {
+        if self.total_samples == 0 {
+            0
+        } else {
+            self.total_ttft_ms / self.total_samples as u64
+        }
+    }
+
+    fn average_total_ms(&self) -> u64 {
+        if self.total_samples == 0 {
+            0
+        } else {
+            self.total_total_ms / self.total_samples as u64
         }
     }
 }
@@ -841,9 +861,11 @@ fn parse_stt_model(name: &str) -> Option<(SttEngine, Option<WhisperModel>, Optio
 /// Parse LLM model from string
 fn parse_llm_model(name: &str) -> Option<LlmModel> {
     match name.to_lowercase().replace("-", "_").as_str() {
-        "qwen3.5_0_8b" | "qwen3.5_0.8b" | "qwen3.5_0.8b" => Some(LlmModel::Qwen3_5_0_8B),
-        "qwen3.5_2b" | "qwen3.5_2b" => Some(LlmModel::Qwen3_5_2B),
-        "qwen3.5_4b" | "qwen3.5_4b" => Some(LlmModel::Qwen3_5_4B),
+        "qwen3.5_0_8b" | "qwen3.5_0.8b" => Some(LlmModel::Qwen3_5_0_8B),
+        "qwen3.5_2b" => Some(LlmModel::Qwen3_5_2B),
+        "qwen3.5_4b" => Some(LlmModel::Qwen3_5_4B),
+        "gemma4_e2b" | "gemma4e2b" => Some(LlmModel::Gemma4E2B),
+        "gemma4_e4b" | "gemma4e4b" => Some(LlmModel::Gemma4E4B),
         _ => None,
     }
 }
@@ -858,6 +880,8 @@ pub async fn run(
     report_path: Option<&str>,
     stt_override: Option<&str>,
     llm_override: Option<&str>,
+    audio_direct: bool,
+    deterministic: bool,
 ) -> Result<()> {
     let term = Term::stdout();
 
@@ -882,7 +906,7 @@ pub async fn run(
         if let Some(llm) = parse_llm_model(llm_name) {
             config.llm_model = llm;
         } else {
-            anyhow::bail!("Unknown LLM model: {}. Valid options: qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b", llm_name);
+            anyhow::bail!("Unknown LLM model: {}. Valid options: qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b, gemma4-e2b, gemma4-e4b", llm_name);
         }
     }
 
@@ -919,10 +943,19 @@ pub async fn run(
     };
 
     let process_count = files_to_process.len();
+    let mode_label = if deterministic {
+        " (deterministic)"
+    } else if audio_direct {
+        " (audio-direct)"
+    } else if skip_llm {
+        " (transcription only)"
+    } else {
+        ""
+    };
     term.write_line(&format!(
         "Processing {} samples{}",
         style(process_count).cyan(),
-        if skip_llm { " (transcription only)" } else { "" }
+        mode_label
     ))?;
     term.write_line("")?;
 
@@ -971,7 +1004,25 @@ pub async fn run(
         };
 
         // Run through pipeline
-        let result = if skip_llm {
+        let result = if deterministic {
+            match pipeline.process_deterministic(&samples) {
+                Ok(r) => r,
+                Err(e) => {
+                    pb.println(format!("Failed to process (deterministic) {}: {}", audio_id, e));
+                    pb.inc(1);
+                    continue;
+                }
+            }
+        } else if audio_direct {
+            match pipeline.process_audio_direct(&samples, None) {
+                Ok(r) => r,
+                Err(e) => {
+                    pb.println(format!("Failed to process (audio-direct) {}: {}", audio_id, e));
+                    pb.inc(1);
+                    continue;
+                }
+            }
+        } else if skip_llm {
             match pipeline.transcribe_only(&samples) {
                 Ok(r) => r,
                 Err(e) => {
@@ -1000,7 +1051,10 @@ pub async fn run(
             eprintln!("  raw_transcript: '{}'", raw_transcript);
         }
 
-        let hypothesis = if skip_llm {
+        let hypothesis = if deterministic || audio_direct {
+            // In deterministic/audio-direct mode, formatted_text is the final output
+            result.formatted_text.clone()
+        } else if skip_llm {
             raw_transcript.clone()
         } else {
             result.formatted_text.clone()
@@ -1031,6 +1085,8 @@ pub async fn run(
         results.total_wer += wer;
         results.total_transcription_ms += result.timings.transcription_ms;
         results.total_llm_ms += result.timings.llm_formatting_ms;
+        results.total_ttft_ms += result.timings.ttft_ms;
+        results.total_total_ms += result.timings.total_ms;
 
         // Categorize errors if analysis is enabled
         if analyze_errors {
@@ -1055,6 +1111,8 @@ pub async fn run(
                 wer,
                 transcription_ms: result.timings.transcription_ms,
                 llm_ms: result.timings.llm_formatting_ms,
+                ttft_ms: result.timings.ttft_ms,
+                total_ms: result.timings.total_ms,
             });
         }
 
@@ -1118,13 +1176,22 @@ pub async fn run(
     }
 
     term.write_line("")?;
+    term.write_line(&format!("{}", style("Latency:").bold()))?;
     term.write_line(&format!(
-        "Avg transcription:    {}ms",
+        "  Avg transcription:  {}ms",
         style(results.average_transcription_ms()).cyan()
     ))?;
     term.write_line(&format!(
-        "Avg LLM formatting:   {}ms",
+        "  Avg LLM formatting: {}ms",
         style(results.average_llm_ms()).cyan()
+    ))?;
+    term.write_line(&format!(
+        "  Avg TTFT:           {}ms",
+        style(results.average_ttft_ms()).cyan()
+    ))?;
+    term.write_line(&format!(
+        "  Avg total:          {}ms",
+        style(results.average_total_ms()).cyan()
     ))?;
     term.write_line("")?;
 

@@ -140,9 +140,12 @@ impl MoonshineEngine {
             anyhow::bail!("Model file not found: {:?}", path);
         }
 
-        Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(std::thread::available_parallelism()?.get())?
+        Session::builder()
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .with_intra_threads(std::thread::available_parallelism()?.get())
+            .map_err(|e| anyhow::anyhow!("{e}"))?
             .commit_from_file(&path)
             .with_context(|| format!("Failed to load ONNX model: {:?}", path))
     }

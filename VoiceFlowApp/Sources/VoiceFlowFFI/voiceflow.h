@@ -378,6 +378,33 @@ struct VoiceFlowResult voiceflow_format_text(struct VoiceFlowHandle *handle,
                                               const char *context);
 
 /**
+ * Process pre-transcribed text through deterministic normalization (no LLM).
+ * Uses the fast text_normalize pipeline instead of LLM formatting.
+ * Returns a VoiceFlowResult with formatted_text and raw_transcript.
+ *
+ * # Safety
+ * - handle must be a valid pointer from voiceflow_init
+ * - text must be a valid null-terminated string
+ */
+struct VoiceFlowResult voiceflow_format_text_deterministic(struct VoiceFlowHandle *handle,
+                                                           const char *text);
+
+/**
+ * Process audio directly through an audio-native model (e.g., Gemma 4).
+ * Bypasses the separate STT step — the LLM handles both transcription and formatting.
+ *
+ * # Safety
+ * - handle must be a valid pointer from voiceflow_init
+ * - audio_data must be a valid pointer to float samples (16kHz mono PCM)
+ * - audio_len must be the number of samples
+ * - context may be null
+ */
+struct VoiceFlowResult voiceflow_process_audio_direct(struct VoiceFlowHandle *handle,
+                                                       const float *audio_data,
+                                                       unsigned long audio_len,
+                                                       const char *context);
+
+/**
  * Callback function type for streaming token delivery.
  * Returns true to continue generation, false to abort.
  */
@@ -410,6 +437,11 @@ bool voiceflow_is_external_stt(void);
  * Check if the current config is in consolidated mode
  */
 bool voiceflow_is_consolidated_mode(void);
+
+/**
+ * Check if the current config is in audio-direct mode
+ */
+bool voiceflow_is_audio_direct_mode(void);
 
 // =============================================================================
 // Memory Management and Cleanup

@@ -4,6 +4,7 @@ use crate::{
     config::{Config, SttEngine as SttEngineConfig},
     llm::LlmEngine,
     prosody::{self, ProsodyHints, replace_voice_commands, concatenate_spelled_words_aggressive, ReplacementDictionary, fix_tokenization_artifacts, remove_filler_words},
+    text_normalize,
     transcribe::{MoonshineEngine, TranscriptionResult},
 };
 #[cfg(feature = "whisper")]
@@ -135,6 +136,8 @@ pub struct Timings {
     pub prosody_ms: u64,
     pub llm_formatting_ms: u64,
     pub total_ms: u64,
+    /// Time to first visible token (from start of audio input)
+    pub ttft_ms: u64,
 }
 
 /// Prosody analysis options
@@ -198,11 +201,18 @@ impl Pipeline {
         tracing::info!("  STT engine: {}", config.stt_engine.display_name());
         tracing::info!("  LLM model: {}", config.llm_model.display_name());
 
-        let stt = SttEngine::new(config)
-            .context("Failed to initialize speech-to-text engine")?;
-        if stt.is_none() {
-            tracing::info!("  External STT engine selected - Rust STT skipped");
-        }
+        // Audio-direct mode: skip STT entirely — audio goes directly to LLM
+        let stt = if config.is_audio_direct_mode() {
+            tracing::info!("  Audio-direct mode - STT skipped (LLM handles transcription)");
+            None
+        } else {
+            let s = SttEngine::new(config)
+                .context("Failed to initialize speech-to-text engine")?;
+            if s.is_none() {
+                tracing::info!("  External STT engine selected - Rust STT skipped");
+            }
+            s
+        };
         let replacements = ReplacementDictionary::load_default();
         tracing::info!("  Loaded {} text replacements", replacements.len());
 
@@ -380,6 +390,7 @@ impl Pipeline {
                     prosody_ms: 0,
                     llm_formatting_ms: 0,
                     total_ms: start.elapsed().as_millis() as u64,
+                    ttft_ms: 0,
                 },
                 prosody_hints: None,
             });
@@ -457,22 +468,23 @@ impl Pipeline {
         }
 
         // Step 4: Format with LLM (lazy init here, with fallback)
+        // Uses streaming internally to capture TTFT (time to first visible token)
         tracing::debug!("Formatting with LLM (context: {:?})", context);
         let t3 = Instant::now();
 
-        let (formatted_text, llm_formatting_ms) = match self.get_llm() {
+        let (formatted_text, llm_formatting_ms, llm_ttft_ms) = match self.get_llm() {
             Ok(llm) => {
-                match llm.format(&raw_transcript, &prompt_template) {
-                    Ok(text) => {
+                match llm.format_with_ttft(&raw_transcript, &prompt_template) {
+                    Ok((text, ttft)) => {
                         let ms = t3.elapsed().as_millis() as u64;
-                        tracing::debug!("LLM formatting took {}ms", ms);
-                        (text, ms)
+                        tracing::debug!("LLM formatting took {}ms (TTFT: {}ms)", ms, ttft);
+                        (text, ms, ttft)
                     }
                     Err(e) => {
                         // LLM formatting failed - try fallback
                         tracing::warn!("LLM formatting failed: {}. Falling back to raw transcript.", e);
                         if self.recovery_config.fallback_to_transcribe_only {
-                            (raw_transcript.clone(), 0)
+                            (raw_transcript.clone(), 0, 0)
                         } else {
                             return Err(PipelineError::LlmFormattingFailed {
                                 message: e.to_string(),
@@ -485,7 +497,7 @@ impl Pipeline {
                 // LLM initialization failed - try fallback
                 tracing::warn!("LLM initialization failed: {}. Falling back to raw transcript.", e);
                 if self.recovery_config.fallback_to_transcribe_only {
-                    (raw_transcript.clone(), 0)
+                    (raw_transcript.clone(), 0, 0)
                 } else {
                     return Err(e);
                 }
@@ -501,12 +513,15 @@ impl Pipeline {
         };
 
         let total_ms = start.elapsed().as_millis() as u64;
+        // TTFT from audio input = STT time + prosody time + LLM TTFT
+        let ttft_ms = transcription_ms + prosody_ms + llm_ttft_ms;
         tracing::info!(
-            "Pipeline complete in {}ms (transcribe: {}ms, prosody: {}ms, format: {}ms)",
+            "Pipeline complete in {}ms (transcribe: {}ms, prosody: {}ms, format: {}ms, ttft: {}ms)",
             total_ms,
             transcription_ms,
             prosody_ms,
-            llm_formatting_ms
+            llm_formatting_ms,
+            ttft_ms,
         );
 
         Ok(PipelineResult {
@@ -517,6 +532,7 @@ impl Pipeline {
                 prosody_ms,
                 llm_formatting_ms,
                 total_ms,
+                ttft_ms,
             },
             prosody_hints,
         })
@@ -558,6 +574,7 @@ impl Pipeline {
                 prosody_ms: 0,
                 llm_formatting_ms: 0,
                 total_ms: transcription_ms,
+                ttft_ms: transcription_ms, // In transcribe-only mode, TTFT = transcription time
             },
             prosody_hints: None,
         })
@@ -585,6 +602,7 @@ impl Pipeline {
                     prosody_ms: 0,
                     llm_formatting_ms: 0,
                     total_ms: start.elapsed().as_millis() as u64,
+                    ttft_ms: 0,
                 },
                 prosody_hints: None,
             });
@@ -671,6 +689,7 @@ impl Pipeline {
                 prosody_ms,
                 llm_formatting_ms,
                 total_ms,
+                ttft_ms: 0,
             },
             prosody_hints: None,
         })
@@ -701,6 +720,7 @@ impl Pipeline {
                     prosody_ms: 0,
                     llm_formatting_ms: 0,
                     total_ms: start.elapsed().as_millis() as u64,
+                    ttft_ms: 0,
                 },
                 prosody_hints: None,
             });
@@ -792,6 +812,7 @@ impl Pipeline {
                 prosody_ms,
                 llm_formatting_ms,
                 total_ms,
+                ttft_ms: 0,
             },
             prosody_hints: None,
         })
@@ -825,6 +846,7 @@ impl Pipeline {
                     prosody_ms: 0,
                     llm_formatting_ms: 0,
                     total_ms: start.elapsed().as_millis() as u64,
+                    ttft_ms: 0,
                 },
                 prosody_hints: None,
             });
@@ -910,6 +932,194 @@ impl Pipeline {
                 prosody_ms,
                 llm_formatting_ms,
                 total_ms,
+                ttft_ms: 0,
+            },
+            prosody_hints: None,
+        })
+    }
+
+    /// Process audio directly through a single audio-native model (e.g., Gemma 4).
+    /// Bypasses the separate STT step — the LLM handles both transcription and formatting.
+    ///
+    /// # Arguments
+    /// * `audio` - PCM audio samples (f32, 16kHz)
+    /// * `context` - Optional context hint for the prompt
+    pub fn process_audio_direct(
+        &mut self,
+        audio: &[f32],
+        context: Option<&str>,
+    ) -> Result<PipelineResult> {
+        let start = Instant::now();
+
+        // Validate audio length
+        let duration_secs = audio.len() as f32 / 16000.0;
+        if duration_secs < 0.1 {
+            return Err(PipelineError::AudioTooShort {
+                duration_ms: (duration_secs * 1000.0) as u64,
+            }
+            .into());
+        }
+        if duration_secs > 30.0 {
+            tracing::warn!(
+                "Audio duration {:.1}s exceeds 30s limit for audio-direct mode, will be truncated by backend",
+                duration_secs
+            );
+        }
+
+        // Build prompt (audio_direct template, no transcript placeholder needed)
+        let prompt_template = self.config.get_prompt_for_context(Some("audio_direct"));
+        let prompt = if !self.config.personal_dictionary.is_empty() {
+            let dict_str = self.config.personal_dictionary.join(", ");
+            prompt_template.replace(
+                "{personal_dictionary}",
+                &format!("\nPersonal vocabulary: {}", dict_str),
+            )
+        } else {
+            prompt_template.replace("{personal_dictionary}", "")
+        };
+
+        // Inject additional context if provided
+        let prompt = if let Some(ctx) = context {
+            if ctx.len() > 50 {
+                format!("{}\n\n{}", prompt, ctx)
+            } else {
+                prompt
+            }
+        } else {
+            prompt
+        };
+
+        // Call the LLM with audio directly (using streaming to measure TTFT)
+        tracing::debug!(
+            "Audio-direct processing: {:.1}s audio, prompt {} chars",
+            duration_secs,
+            prompt.len()
+        );
+        let t_llm = Instant::now();
+
+        let (formatted_text, llm_ttft_ms) = match self.get_llm() {
+            Ok(llm) => {
+                if !llm.supports_audio_direct() {
+                    anyhow::bail!(
+                        "Current LLM backend ({}) does not support audio-direct mode. \
+                         Use a Gemma 4 model with mistral.rs backend.",
+                        llm.backend_name()
+                    );
+                }
+                match llm.transcribe_audio_direct_with_ttft(audio, 16000, &prompt) {
+                    Ok((text, ttft)) => (text, ttft),
+                    Err(e) => {
+                        tracing::warn!("Audio-direct transcription failed: {}", e);
+                        if self.recovery_config.fallback_to_transcribe_only {
+                            (String::new(), 0)
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("LLM initialization failed for audio-direct: {}", e);
+                return Err(e);
+            }
+        };
+        let llm_ms = t_llm.elapsed().as_millis() as u64;
+
+        // Apply deterministic post-processing (voice commands, spelling, replacements)
+        let mut text = formatted_text.clone();
+        if self.prosody_options.voice_commands {
+            text = replace_voice_commands(&text);
+        }
+        text = concatenate_spelled_words_aggressive(&text);
+        text = self.replacements.apply(&text);
+
+        let total_ms = start.elapsed().as_millis() as u64;
+        tracing::info!(
+            "Audio-direct pipeline complete in {}ms (llm: {}ms, ttft: {}ms)",
+            total_ms,
+            llm_ms,
+            llm_ttft_ms,
+        );
+
+        Ok(PipelineResult {
+            raw_transcript: formatted_text, // In audio-direct mode, the LLM output IS the transcript
+            formatted_text: text,
+            timings: Timings {
+                transcription_ms: 0, // No separate STT step
+                prosody_ms: 0,
+                llm_formatting_ms: llm_ms,
+                total_ms,
+                ttft_ms: llm_ttft_ms, // For audio-direct, TTFT = model TTFT
+            },
+            prosody_hints: None,
+        })
+    }
+
+    /// Process audio through STT + deterministic normalization (no LLM).
+    ///
+    /// Uses `text_normalize::normalize()` instead of the LLM step.
+    /// Expected latency: STT time + <5ms for normalization.
+    pub fn process_deterministic(&mut self, audio: &[f32]) -> Result<PipelineResult> {
+        let start = Instant::now();
+
+        let stt = self.stt.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("STT engine not available (using external STT). Use process_text_deterministic() instead.")
+        })?;
+
+        let t1 = Instant::now();
+        let raw_transcript = stt.transcribe(audio)?;
+        let transcription_ms = t1.elapsed().as_millis() as u64;
+
+        let result = text_normalize::normalize(&raw_transcript, &self.replacements);
+        let total_ms = start.elapsed().as_millis() as u64;
+
+        tracing::info!(
+            "Deterministic pipeline complete in {}ms (STT: {}ms, normalize: {}ms, transforms: {})",
+            total_ms,
+            transcription_ms,
+            total_ms - transcription_ms,
+            result.transforms_applied,
+        );
+
+        Ok(PipelineResult {
+            raw_transcript,
+            formatted_text: result.text,
+            timings: Timings {
+                transcription_ms,
+                prosody_ms: 0,
+                llm_formatting_ms: 0,
+                total_ms,
+                ttft_ms: transcription_ms, // No LLM — TTFT = STT time
+            },
+            prosody_hints: None,
+        })
+    }
+
+    /// Process pre-transcribed text through deterministic normalization (no LLM).
+    ///
+    /// Used when an external STT engine provides the raw transcript and we want
+    /// fast deterministic post-processing without the LLM.
+    pub fn process_text_deterministic(&mut self, text: &str) -> Result<PipelineResult> {
+        let start = Instant::now();
+
+        let result = text_normalize::normalize(text, &self.replacements);
+        let total_ms = start.elapsed().as_millis() as u64;
+
+        tracing::info!(
+            "Deterministic text processing complete in {}ms (transforms: {})",
+            total_ms,
+            result.transforms_applied,
+        );
+
+        Ok(PipelineResult {
+            raw_transcript: text.to_string(),
+            formatted_text: result.text,
+            timings: Timings {
+                transcription_ms: 0,
+                prosody_ms: 0,
+                llm_formatting_ms: 0,
+                total_ms,
+                ttft_ms: 0,
             },
             prosody_hints: None,
         })

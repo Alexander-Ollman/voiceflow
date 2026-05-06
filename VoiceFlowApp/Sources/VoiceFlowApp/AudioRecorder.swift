@@ -22,6 +22,15 @@ final class AudioRecorder: ObservableObject {
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
+        // Guard against invalid audio format (can happen after sleep, device switch, etc.)
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            throw NSError(
+                domain: "AudioRecorder",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Audio input format is invalid (sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)). Try again."]
+            )
+        }
+
         audioBuffer.removeAll()
 
         // Install tap on input node

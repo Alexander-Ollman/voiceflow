@@ -127,6 +127,8 @@ pub enum PipelineMode {
     SttPlusLlm,
     /// Consolidated: a single model handles audio-to-formatted-text (e.g., Qwen3-ASR via MLX Swift)
     Consolidated,
+    /// Audio-direct: audio-native LLM (Gemma 4) handles transcription + formatting in one pass
+    AudioDirect,
 }
 
 impl PipelineMode {
@@ -134,6 +136,7 @@ impl PipelineMode {
         match self {
             Self::SttPlusLlm => "STT + LLM (traditional)",
             Self::Consolidated => "Consolidated (single model)",
+            Self::AudioDirect => "Audio Direct (Gemma 4)",
         }
     }
 }
@@ -215,15 +218,55 @@ impl ConsolidatedModel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum LlmBackend {
-    /// llama.cpp via llama-cpp-2 crate - Supports all GGUF architectures
+    /// llama.cpp via llama-cpp-2 crate - Supports all GGUF architectures (in-process)
     #[default]
     LlamaCpp,
+    /// mistral.rs (Candle-based) - Supports Gemma 4 with native audio (in-process)
+    MistralRs,
+    /// OpenAI-compatible HTTP server (llama-server, mlx_lm.server, etc.) — out-of-process,
+    /// hot-swappable serving framework. Endpoint configured via `llm_server`.
+    OpenAIServer,
 }
 
 impl LlmBackend {
     pub fn display_name(&self) -> &str {
         match self {
             Self::LlamaCpp => "llama.cpp",
+            Self::MistralRs => "mistral.rs",
+            Self::OpenAIServer => "openai-server",
+        }
+    }
+}
+
+/// Configuration for an OpenAI-compatible server backend.
+/// Used when `llm_backend = OpenAIServer`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LlmServerConfig {
+    /// Base URL of the server (e.g. `http://127.0.0.1:8080`).
+    /// `/v1/chat/completions` is appended automatically.
+    pub endpoint: String,
+    /// Model name to send in the request body. For llama-server, any string works.
+    /// For mlx_lm.server, use the HF model id.
+    pub model: String,
+    /// Optional API key (sent as `Authorization: Bearer <key>`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Request timeout in seconds (covers full streaming generation)
+    #[serde(default = "default_server_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_server_timeout() -> u64 {
+    300
+}
+
+impl Default for LlmServerConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://127.0.0.1:8080".to_string(),
+            model: "default".to_string(),
+            api_key: None,
+            timeout_secs: default_server_timeout(),
         }
     }
 }
@@ -238,6 +281,10 @@ pub enum LlmModel {
     Qwen3_5_2B,
     /// Qwen3.5 4B - Highest quality (Apache 2.0)
     Qwen3_5_4B,
+    /// Gemma 4 E2B - Audio-native multimodal via mistral.rs
+    Gemma4E2B,
+    /// Gemma 4 E4B - Audio-native multimodal via mistral.rs (higher quality)
+    Gemma4E4B,
     /// Custom model path
     Custom(String),
 }
@@ -250,12 +297,25 @@ impl Default for LlmModel {
 
 impl LlmModel {
     /// Get the model filename for downloading (exact HuggingFace filenames)
+    /// For mistral.rs models (Gemma 4), returns the HF model ID instead (no GGUF file)
     pub fn filename(&self) -> &str {
         match self {
             Self::Qwen3_5_0_8B => "Qwen3.5-0.8B-Q4_K_M.gguf",
             Self::Qwen3_5_2B => "Qwen3.5-2B-Q4_K_M.gguf",
             Self::Qwen3_5_4B => "Qwen3.5-4B-Q4_K_M.gguf",
+            Self::Gemma4E2B => "gemma-4-e2b-it", // Directory name for HF cache
+            Self::Gemma4E4B => "gemma-4-e4b-it",
             Self::Custom(path) => path,
+        }
+    }
+
+    /// Get the HuggingFace model ID for mistral.rs models
+    /// Returns None for GGUF models (they use hf_repo + filename instead)
+    pub fn hf_model_id(&self) -> Option<&str> {
+        match self {
+            Self::Gemma4E2B => Some("google/gemma-4-E2B-it"),
+            Self::Gemma4E4B => Some("google/gemma-4-E4B-it"),
+            _ => None,
         }
     }
 
@@ -265,6 +325,8 @@ impl LlmModel {
             Self::Qwen3_5_0_8B => Some("unsloth/Qwen3.5-0.8B-GGUF"),
             Self::Qwen3_5_2B => Some("unsloth/Qwen3.5-2B-GGUF"),
             Self::Qwen3_5_4B => Some("unsloth/Qwen3.5-4B-GGUF"),
+            Self::Gemma4E2B => Some("google/gemma-4-E2B-it"),
+            Self::Gemma4E4B => Some("google/gemma-4-E4B-it"),
             Self::Custom(_) => None,
         }
     }
@@ -275,33 +337,47 @@ impl LlmModel {
             Self::Qwen3_5_0_8B => "Qwen3.5 0.8B",
             Self::Qwen3_5_2B => "Qwen3.5 2B",
             Self::Qwen3_5_4B => "Qwen3.5 4B",
+            Self::Gemma4E2B => "Gemma 4 E2B",
+            Self::Gemma4E4B => "Gemma 4 E4B",
             Self::Custom(path) => path,
         }
     }
 
-    /// Get estimated model size in GB (Q4_K_M quantization)
+    /// Get estimated model size in GB (Q4_K_M quantization for GGUF, ISQ4 for mistral.rs)
     pub fn size_gb(&self) -> f32 {
         match self {
             Self::Qwen3_5_0_8B => 0.53,
             Self::Qwen3_5_2B => 1.28,
             Self::Qwen3_5_4B => 2.74,
+            Self::Gemma4E2B => 1.5, // ISQ4 quantized at load time
+            Self::Gemma4E4B => 3.0,
             Self::Custom(_) => 0.0,
         }
     }
 
     /// Whether this model supports multimodal input (images/screenshots)
-    /// All Qwen3.5 models are natively multimodal via mmproj
+    /// Qwen3.5 via mmproj, Gemma 4 natively
     pub fn is_multimodal(&self) -> bool {
-        matches!(self, Self::Qwen3_5_0_8B | Self::Qwen3_5_2B | Self::Qwen3_5_4B)
+        matches!(
+            self,
+            Self::Qwen3_5_0_8B | Self::Qwen3_5_2B | Self::Qwen3_5_4B |
+            Self::Gemma4E2B | Self::Gemma4E4B
+        )
+    }
+
+    /// Whether this model supports direct audio-to-text (no separate STT needed)
+    pub fn supports_audio_direct(&self) -> bool {
+        matches!(self, Self::Gemma4E2B | Self::Gemma4E4B)
     }
 
     /// Get the mmproj filename for multimodal support (model-specific)
+    /// Gemma 4 doesn't use mmproj — multimodal is built-in
     pub fn mmproj_filename(&self) -> Option<&str> {
         match self {
             Self::Qwen3_5_0_8B => Some("mmproj-Qwen3.5-0.8B-F16.gguf"),
             Self::Qwen3_5_2B => Some("mmproj-Qwen3.5-2B-F16.gguf"),
             Self::Qwen3_5_4B => Some("mmproj-Qwen3.5-4B-F16.gguf"),
-            Self::Custom(_) => None,
+            Self::Gemma4E2B | Self::Gemma4E4B | Self::Custom(_) => None,
         }
     }
 
@@ -309,7 +385,7 @@ impl LlmModel {
     pub fn mmproj_hf_filename(&self) -> Option<&str> {
         match self {
             Self::Qwen3_5_0_8B | Self::Qwen3_5_2B | Self::Qwen3_5_4B => Some("mmproj-F16.gguf"),
-            Self::Custom(_) => None,
+            Self::Gemma4E2B | Self::Gemma4E4B | Self::Custom(_) => None,
         }
     }
 
@@ -319,7 +395,7 @@ impl LlmModel {
             Self::Qwen3_5_0_8B => 0.2,
             Self::Qwen3_5_2B => 0.65,
             Self::Qwen3_5_4B => 0.65,
-            Self::Custom(_) => 0.0,
+            Self::Gemma4E2B | Self::Gemma4E4B | Self::Custom(_) => 0.0,
         }
     }
 
@@ -329,9 +405,11 @@ impl LlmModel {
     }
 
     /// Get the recommended inference backend for this model
-    /// All Qwen3.5 models use llama.cpp (Hybrid DeltaNet architecture)
     pub fn backend(&self) -> LlmBackend {
-        LlmBackend::LlamaCpp
+        match self {
+            Self::Gemma4E2B | Self::Gemma4E4B => LlmBackend::MistralRs,
+            _ => LlmBackend::LlamaCpp,
+        }
     }
 
     /// Get all available models (excluding Custom)
@@ -340,6 +418,8 @@ impl LlmModel {
             Self::Qwen3_5_0_8B,
             Self::Qwen3_5_2B,
             Self::Qwen3_5_4B,
+            Self::Gemma4E2B,
+            Self::Gemma4E4B,
         ]
     }
 
@@ -521,6 +601,12 @@ pub struct Config {
     pub moonshine_model: MoonshineModel,
     /// LLM model selection
     pub llm_model: LlmModel,
+    /// LLM inference backend override (auto-detected from model if not set)
+    #[serde(default)]
+    pub llm_backend: Option<LlmBackend>,
+    /// OpenAI-compatible server config (used when llm_backend = OpenAIServer)
+    #[serde(default)]
+    pub llm_server: LlmServerConfig,
     /// LLM generation options
     pub llm_options: LlmOptions,
     /// Audio capture options
@@ -542,6 +628,8 @@ impl Default for Config {
             whisper_model: WhisperModel::default(),
             moonshine_model: MoonshineModel::default(),
             llm_model: LlmModel::default(),
+            llm_backend: None,
+            llm_server: LlmServerConfig::default(),
             llm_options: LlmOptions::default(),
             audio: AudioOptions::default(),
             default_context: "default".to_string(),
@@ -564,6 +652,9 @@ pub mod env_vars {
     pub const LLM_TOP_P: &str = "VOICEFLOW_LLM_TOP_P";
     pub const ENABLE_THINKING: &str = "VOICEFLOW_ENABLE_THINKING";
     pub const DEFAULT_CONTEXT: &str = "VOICEFLOW_DEFAULT_CONTEXT";
+    pub const LLM_BACKEND: &str = "VOICEFLOW_LLM_BACKEND";
+    pub const LLM_SERVER_ENDPOINT: &str = "VOICEFLOW_LLM_SERVER_ENDPOINT";
+    pub const LLM_SERVER_MODEL: &str = "VOICEFLOW_LLM_SERVER_MODEL";
     pub const MODELS_DIR: &str = "VOICEFLOW_MODELS_DIR";
 }
 
@@ -604,6 +695,7 @@ impl Config {
             match val.to_lowercase().replace("-", "_").as_str() {
                 "stt_plus_llm" | "traditional" | "default" => self.pipeline_mode = PipelineMode::SttPlusLlm,
                 "consolidated" => self.pipeline_mode = PipelineMode::Consolidated,
+                "audio_direct" | "audiodirect" => self.pipeline_mode = PipelineMode::AudioDirect,
                 _ => tracing::warn!("Unknown pipeline mode from env: {}", val),
             }
         }
@@ -651,6 +743,26 @@ impl Config {
                 "base" => self.moonshine_model = MoonshineModel::Base,
                 _ => tracing::warn!("Unknown Moonshine model from env: {}", val),
             }
+        }
+
+        // LLM backend
+        if let Ok(val) = env::var(env_vars::LLM_BACKEND) {
+            match val.to_lowercase().replace("-", "_").as_str() {
+                "llama_cpp" | "llamacpp" | "llama" => self.llm_backend = Some(LlmBackend::LlamaCpp),
+                "mistral_rs" | "mistralrs" | "mistral" => self.llm_backend = Some(LlmBackend::MistralRs),
+                "openai_server" | "openai" | "server" | "openaiserver" => {
+                    self.llm_backend = Some(LlmBackend::OpenAIServer);
+                }
+                _ => tracing::warn!("Unknown LLM backend from env: {}", val),
+            }
+        }
+
+        // OpenAI-compatible server endpoint and model overrides
+        if let Ok(val) = env::var(env_vars::LLM_SERVER_ENDPOINT) {
+            self.llm_server.endpoint = val;
+        }
+        if let Ok(val) = env::var(env_vars::LLM_SERVER_MODEL) {
+            self.llm_server.model = val;
         }
 
         // LLM temperature
@@ -849,9 +961,19 @@ impl Config {
         }
     }
 
+    /// Get the effective LLM backend (explicit override or auto-detected from model)
+    pub fn effective_llm_backend(&self) -> LlmBackend {
+        self.llm_backend.unwrap_or_else(|| self.llm_model.backend())
+    }
+
     /// Check if the pipeline is in consolidated mode
     pub fn is_consolidated_mode(&self) -> bool {
         self.pipeline_mode == PipelineMode::Consolidated
+    }
+
+    /// Check if the pipeline is in audio-direct mode
+    pub fn is_audio_direct_mode(&self) -> bool {
+        self.pipeline_mode == PipelineMode::AudioDirect
     }
 
     /// Get prompt template for a given context
@@ -871,6 +993,7 @@ impl Config {
             "email" => include_str!("../../../prompts/email.txt").to_string(),
             "slack" => include_str!("../../../prompts/slack.txt").to_string(),
             "code" => include_str!("../../../prompts/code.txt").to_string(),
+            "audio_direct" => include_str!("../../../prompts/audio_direct.txt").to_string(),
             _ => include_str!("../../../prompts/default.txt").to_string(),
         }
     }
@@ -1001,6 +1124,7 @@ mod tests {
             env_vars::WHISPER_MODEL,
             env_vars::MOONSHINE_MODEL,
             env_vars::LLM_MODEL,
+            env_vars::LLM_BACKEND,
             env_vars::LLM_TEMPERATURE,
             env_vars::LLM_MAX_TOKENS,
             env_vars::LLM_TOP_P,

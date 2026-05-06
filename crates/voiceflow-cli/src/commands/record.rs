@@ -14,6 +14,7 @@ pub async fn run(
     clipboard: bool,
     context: Option<&str>,
     raw: bool,
+    audio_direct: bool,
 ) -> Result<()> {
     let term = Term::stdout();
 
@@ -75,6 +76,8 @@ pub async fn run(
 
     let result = if raw {
         pipeline.transcribe_only(&samples)?
+    } else if audio_direct {
+        pipeline.process_audio_direct(&samples, context)?
     } else {
         pipeline.process(&samples, context)?
     };
