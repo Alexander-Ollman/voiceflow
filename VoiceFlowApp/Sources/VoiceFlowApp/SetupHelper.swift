@@ -17,7 +17,9 @@ final class SetupHelper: ObservableObject {
     enum Phase: Equatable {
         case idle
         case downloadingBonsai(bytesDone: Int64, bytesTotal: Int64)
-        case loadingParakeet
+        /// Parakeet doesn't expose download progress directly — we poll the HF
+        /// cache directory on disk and report observed size vs. an estimate.
+        case loadingParakeet(bytesDone: Int64, bytesTotal: Int64)
         case complete
         case failed(String)
     }
@@ -152,12 +154,50 @@ final class SetupHelper: ObservableObject {
 
     @MainActor
     private func loadParakeet() async {
-        phase = .loadingParakeet
+        phase = .loadingParakeet(bytesDone: 0, bytesTotal: Self.parakeetApproxBytes)
         let engine = ensureParakeetEngine()
+
+        // Poll the HF cache directory while parakeet-mlx downloads weights.
+        // Cancellation: we set this token to true when load completes.
+        let pollDone = ParakeetPollFlag()
+        Task.detached { [weak self] in
+            while !pollDone.done {
+                let bytes = SetupHelper.directorySize(SetupHelper.parakeetCachePath)
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    if case .loadingParakeet = self.phase {
+                        self.phase = .loadingParakeet(
+                            bytesDone: bytes,
+                            bytesTotal: max(bytes, Self.parakeetApproxBytes)
+                        )
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+
         await engine.loadModel()
+        pollDone.done = true
+
         if case .ready = engine.state {
             parakeetInstalled = true
         }
+    }
+
+    /// Compute total bytes under a directory — fast walk via FileManager enumerator.
+    private static func directorySize(_ url: URL) -> Int64 {
+        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+        let enumerator = FileManager.default.enumerator(
+            at: url, includingPropertiesForKeys: [.fileSizeKey]
+        )
+        var total: Int64 = 0
+        while let f = enumerator?.nextObject() as? URL {
+            if let v = try? f.resourceValues(forKeys: [.fileSizeKey]),
+               let s = v.fileSize {
+                total += Int64(s)
+            }
+        }
+        return total
     }
 
     // MARK: - Progress helpers for UI
@@ -166,9 +206,10 @@ final class SetupHelper: ObservableObject {
         switch phase {
         case .downloadingBonsai(let done, let total):
             guard total > 0 else { return nil }
-            return Double(done) / Double(total) * 0.5  // Bonsai is ~half the work
-        case .loadingParakeet:
-            return 0.5  // Parakeet load starts after Bonsai finished
+            return Double(done) / Double(total) * 0.5  // Bonsai is the first half
+        case .loadingParakeet(let done, let total):
+            guard total > 0 else { return 0.5 }
+            return 0.5 + Double(done) / Double(total) * 0.5
         case .complete:
             return 1.0
         default:
@@ -184,14 +225,24 @@ final class SetupHelper: ObservableObject {
             let mb = Double(done) / 1_048_576.0
             let totalMB = Double(total) / 1_048_576.0
             return String(format: "Downloading Bonsai-8B GGUF — %.0f / %.0f MB", mb, totalMB)
-        case .loadingParakeet:
-            return "Downloading & loading Parakeet TDT 0.6B (first run, ~1.2 GB)…"
+        case .loadingParakeet(let done, let total):
+            let mb = Double(done) / 1_048_576.0
+            let totalMB = Double(total) / 1_048_576.0
+            if mb < 1.0 {
+                return "Loading Parakeet TDT 0.6B (first run, ~1.2 GB)…"
+            }
+            return String(format: "Downloading Parakeet TDT 0.6B — %.0f / %.0f MB", mb, totalMB)
         case .complete:
             return "Setup complete. Both models installed."
         case .failed(let msg):
             return "Setup failed: \(msg)"
         }
     }
+}
+
+/// Simple flag wrapper so the detached polling Task can be told to stop.
+final class ParakeetPollFlag: @unchecked Sendable {
+    var done: Bool = false
 }
 
 enum SetupError: Error, LocalizedError {

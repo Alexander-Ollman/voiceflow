@@ -1614,6 +1614,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.environment["VOICEFLOW_USE_PARAKEET"] == "1"
     }
 
+    // llama-server (Bonsai) lifecycle. Spawns the PrismML llama-server fork on
+    // launch with our chosen context size, monitors, and shuts down on exit.
+    // Only autostarts when the OpenAIServer LLM backend is selected; suppressible
+    // via VOICEFLOW_LLAMA_SERVER_AUTOSTART=0 for devs running their own server.
+    var llamaServer = LlamaServerManager()
+    var llamaServerAutostart: Bool {
+        ProcessInfo.processInfo.environment["VOICEFLOW_LLAMA_SERVER_AUTOSTART"] != "0"
+            && ProcessInfo.processInfo.environment["VOICEFLOW_LLM_BACKEND"] == "openai_server"
+    }
+
     // Direct-to-field streaming state
     private var lastStreamedText: String = ""
     private var dictationInsertedLength: Int = 0
@@ -1889,6 +1899,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // is true after the persona-touching code above runs).
         let ruleCount = BrowserSiteRulesManager.shared.rules.count
         NSLog("[VoiceFlow] Browser site rules loaded: %d", ruleCount)
+
+        // Spawn local llama-server (Bonsai) when configured for the OpenAI-compatible
+        // backend. Async so the rest of launch isn't blocked on server warmup.
+        if llamaServerAutostart {
+            Task { @MainActor in
+                await llamaServer.start()
+                switch llamaServer.state {
+                case .ready:
+                    NSLog("[VoiceFlow] llama-server ready on http://127.0.0.1:%d (ctx=%d)",
+                          LlamaServerManager.port, LlamaServerManager.contextSize)
+                case .missingBinary:
+                    NSLog("[VoiceFlow] llama-server binary missing — see RELEASE_NOTES.md install steps.")
+                case .crashed(let msg):
+                    NSLog("[VoiceFlow] llama-server failed to start: %@", msg)
+                default:
+                    break
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -1902,6 +1931,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if useParakeet {
             parakeetEngine.stopDaemon()
         }
+
+        // Stop llama-server (only if we spawned it).
+        llamaServer.stop()
 
         // Clean up resources before termination to prevent memory leaks
         // This ensures the Rust side properly releases all model memory
@@ -4115,14 +4147,23 @@ struct MainAppView: View {
     @StateObject private var modelManager = ModelManager()
     @State private var selectedPage: SidebarPage = .home
 
+    /// Logo loaded once from the bundle. Loading inside body() on every
+    /// re-evaluation was causing intermittent SwiftUI flicker / blank-sidebar
+    /// renders on macOS — caching it as state fixes that.
+    private static let cachedLogo: NSImage? = {
+        guard let path = Bundle.main.path(forResource: "AppLogo", ofType: "png") else {
+            return nil
+        }
+        return NSImage(contentsOfFile: path)
+    }()
+
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 // Logo header
                 HStack(spacing: 10) {
-                    if let logoPath = Bundle.main.path(forResource: "AppLogo", ofType: "png"),
-                       let logoImage = NSImage(contentsOfFile: logoPath) {
-                        Image(nsImage: logoImage)
+                    if let logo = Self.cachedLogo {
+                        Image(nsImage: logo)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(width: 28, height: 28)
@@ -4158,7 +4199,11 @@ struct MainAppView: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
             }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
+            // Pin a minimum height so the inner Spacer doesn't collapse the
+            // VStack on certain layout passes, which was leaving the sidebar
+            // visibly empty after navigating away and back.
+            .frame(minWidth: 200, minHeight: 400, maxHeight: .infinity)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
         } detail: {
             Group {
                 switch selectedPage {

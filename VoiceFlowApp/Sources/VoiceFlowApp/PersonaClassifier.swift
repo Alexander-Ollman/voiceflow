@@ -125,11 +125,14 @@ final class PersonaClassifier {
 
         """
 
+        // Temperature is intentionally non-zero — the self-consistency vote in
+        // classifyAppWithSelfConsistency relies on independent samples to
+        // surface uncertainty. With T=0 every trial would be identical.
         let body: [String: Any] = [
             "model": model,
             "prompt": prompt,
             "max_tokens": 120,
-            "temperature": 0.1,
+            "temperature": 0.5,
             "top_p": 0.9,
             "stream": false,
         ]
@@ -214,19 +217,20 @@ final class PersonaClassifier {
             await MainActor.run {
                 progress?(index + 1, unmapped.count, profile.displayName)
             }
-            guard let cls = await classifyApp(
+
+            // Self-consistency: ask the model 3 times, only apply if a single
+            // (non-null) persona wins ≥2 votes AND every vote that picked it
+            // was confident enough. Cuts the rate of confident-but-wrong picks
+            // that small models like Bonsai produce on ambiguous inputs.
+            let cls = await classifyAppWithSelfConsistency(
                 displayName: profile.displayName,
-                bundleId: profile.id
-            ) else { continue }
+                bundleId: profile.id,
+                trials: 3,
+                minConfidence: minConfidence
+            )
 
-            NSLog("[PersonaClassifier] %@ → %@ (%.2f) — %@",
-                  profile.displayName,
-                  cls.personaName ?? "(none)",
-                  cls.confidence,
-                  cls.reason ?? "")
-
-            guard let pname = cls.personaName,
-                  cls.confidence >= minConfidence,
+            guard let cls = cls,
+                  let pname = cls.personaName,
                   let persona = PersonaManager.shared.personas.first(where: {
                       $0.name.lowercased() == pname.lowercased()
                   })
@@ -238,5 +242,59 @@ final class PersonaClassifier {
             applied += 1
         }
         return (applied: applied, considered: unmapped.count)
+    }
+
+    /// Run `trials` independent classifications and return the winner only when
+    /// a single (non-null) persona is picked ≥2 times AND every vote for it is
+    /// at confidence ≥ minConfidence. Returns nil otherwise — the user can
+    /// always assign manually.
+    private func classifyAppWithSelfConsistency(
+        displayName: String,
+        bundleId: String,
+        trials: Int,
+        minConfidence: Double
+    ) async -> Classification? {
+        var results: [Classification] = []
+        for _ in 0..<trials {
+            if let cls = await classifyApp(displayName: displayName, bundleId: bundleId) {
+                results.append(cls)
+            }
+        }
+
+        let voteSummary = results.map { c in
+            "\(c.personaName ?? "(null)")@\(String(format: "%.2f", c.confidence))"
+        }.joined(separator: ", ")
+        NSLog("[PersonaClassifier] %@ votes: [%@]", displayName, voteSummary)
+
+        // Tally non-null persona votes (case-insensitive).
+        var byPersona: [String: [Classification]] = [:]
+        for r in results {
+            guard let p = r.personaName else { continue }
+            byPersona[p.lowercased(), default: []].append(r)
+        }
+        // Find the winning persona — most votes; ties → no apply (ambiguous).
+        let sorted = byPersona.sorted { $0.value.count > $1.value.count }
+        guard let (winnerKey, winnerVotes) = sorted.first,
+              winnerVotes.count >= 2 else {
+            return nil
+        }
+        // Tie-break check: if a second persona also has ≥2 votes, drop.
+        if sorted.count > 1, sorted[1].value.count >= 2 {
+            return nil
+        }
+        // Confidence floor: every vote for the winner must clear the threshold.
+        guard winnerVotes.allSatisfy({ $0.confidence >= minConfidence }) else {
+            return nil
+        }
+
+        let canonicalName = winnerVotes.first?.personaName ?? winnerKey
+        let avgConf = winnerVotes.map(\.confidence).reduce(0, +) / Double(winnerVotes.count)
+        NSLog("[PersonaClassifier] %@ → %@ (avg %.2f, %d/%d votes) — applied",
+              displayName, canonicalName, avgConf, winnerVotes.count, results.count)
+        return Classification(
+            personaName: canonicalName,
+            confidence: avgConf,
+            reason: winnerVotes.first?.reason
+        )
     }
 }

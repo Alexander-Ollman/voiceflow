@@ -1,6 +1,61 @@
 # Release Notes
 
-## Unreleased — Parakeet + Bonsai pivot
+## v0.2.1 — Stability & lifecycle
+
+Follow-up to v0.2.0 focused on the known issues called out in that
+release. Headline: VoiceFlow now self-hosts the local LLM server,
+which incidentally also fixes the output-truncation bug and removes
+the manual `llama-server` setup step.
+
+### Fixes
+
+- **LLM output no longer truncated mid-sentence.** A new
+  `LlamaServerManager` (Swift) spawns the PrismML `llama-server`
+  fork on app launch with **`-c 16384`** (was 4096). Long prompts
+  with persona context + transcript no longer hit
+  `truncated = 1` in the server log. The manager also adopts an
+  already-running server on `:8080` instead of double-spawning,
+  searches multiple paths for the binary (`Bundle.main` Resources →
+  `VOICEFLOW_LLAMA_SERVER` env → `~/PrismML-llama.cpp/build/bin/...`
+  → `~/dev/PrismML-llama.cpp/...`), and surfaces a clear error
+  with build instructions when the binary isn't found.
+- **Persona auto-classifier is much more conservative.** The
+  **Classify Unmapped (LLM)** path now uses self-consistency: 3
+  trials per app at `temperature=0.5` (was 1 trial at 0.1). A
+  classification is only applied when a single persona wins **≥2
+  votes** AND every vote for it clears the **0.90** confidence
+  threshold. Ties or split votes are dropped. Per-app vote tallies
+  are logged so you can audit decisions in
+  `/tmp/voiceflow_app.log`.
+- **Parakeet first-load shows real progress.** Setup now polls the
+  Hugging Face cache directory every 500 ms while parakeet-mlx
+  fetches its weights and surfaces byte-level progress, e.g.
+  `Downloading Parakeet TDT 0.6B — 612 / 1200 MB`. Replaces the
+  previous indeterminate spinner.
+- **Sidebar emptiness mitigation.** Couldn't reliably reproduce,
+  but cached the app logo `NSImage` as a static (was reloaded from
+  disk on every body re-eval — a known cause of SwiftUI flicker on
+  macOS) and pinned `minWidth: 200 / minHeight: 400` on the sidebar
+  VStack so the inner `Spacer()` can't collapse it during a layout
+  pass.
+
+### New
+
+- **`LlamaServerManager.swift`** — lifecycle manager for the local
+  LLM server. Spawns on `applicationDidFinishLaunching`, terminates
+  on `applicationWillTerminate`. Health-checked via a `/v1/models`
+  probe before reporting `.ready`.
+- **`VOICEFLOW_LLAMA_SERVER_AUTOSTART=0`** env var lets developers
+  who run their own server bypass autostart.
+
+### Known Issues (carried forward)
+
+- **PrismML `llama-server` install is still manual.** The new
+  manager finds the binary if you've built it locally, but Setup
+  doesn't yet build/download it. Documented in
+  `LlamaServerManager.start()`'s error path.
+
+## v0.2.0 — Parakeet + Bonsai pivot
 
 This release retools VoiceFlow around two on-device models:
 **Parakeet TDT 0.6B v2** for speech-to-text (NVIDIA, MLX-accelerated) and
