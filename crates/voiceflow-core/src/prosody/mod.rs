@@ -34,40 +34,35 @@ pub struct ProsodyHints {
 }
 
 impl ProsodyHints {
-    /// Format hints as a string for LLM context
+    /// Format hints as imperative tags the LLM can act on directly.
+    ///
+    /// Emits one or more `[PROSODY: ...]` tags. The default prompt explicitly
+    /// maps each tag to a punctuation/structure action — keep these strings
+    /// in sync with the "Prosody Hints" section of `prompts/default.txt`.
     pub fn to_llm_context(&self) -> String {
-        let mut hints = Vec::new();
+        let mut tags = Vec::new();
 
-        // Add pitch hint
         match self.pitch_contour {
-            PitchContour::Rising => {
-                hints.push("The speaker's pitch rose at the end, suggesting a question.".to_string());
-            }
-            PitchContour::Falling => {
-                hints.push("The speaker's pitch fell at the end, suggesting a statement.".to_string());
-            }
-            PitchContour::Emphatic => {
-                hints.push("The speaker used emphatic intonation, possibly an exclamation.".to_string());
-            }
+            PitchContour::Rising => tags.push("[PROSODY: rising pitch]".to_string()),
+            PitchContour::Falling => tags.push("[PROSODY: falling pitch]".to_string()),
+            PitchContour::Emphatic => tags.push("[PROSODY: emphatic]".to_string()),
             PitchContour::Neutral => {}
         }
 
-        // Add pause hints (only significant ones)
-        let long_pauses: Vec<_> = self.pause_hints.iter()
+        let long_pause_count = self
+            .pause_hints
+            .iter()
             .filter(|p| p.duration_ms > 300)
-            .collect();
+            .count();
 
-        if !long_pauses.is_empty() {
-            hints.push(format!(
-                "Detected {} significant pause(s) that may indicate sentence boundaries.",
-                long_pauses.len()
-            ));
+        if long_pause_count > 0 {
+            tags.push(format!("[PROSODY: long pauses {}]", long_pause_count));
         }
 
-        if hints.is_empty() {
+        if tags.is_empty() {
             String::new()
         } else {
-            format!("\n[Prosody hints: {}]", hints.join(" "))
+            format!("\n{}", tags.join("\n"))
         }
     }
 }
@@ -180,7 +175,7 @@ mod tests {
             confidence: 0.8,
         };
         let context = hints.to_llm_context();
-        assert!(context.contains("question"));
+        assert!(context.contains("[PROSODY: rising pitch]"));
     }
 
     #[test]
@@ -191,7 +186,7 @@ mod tests {
             confidence: 0.8,
         };
         let context = hints.to_llm_context();
-        assert!(context.contains("statement"));
+        assert!(context.contains("[PROSODY: falling pitch]"));
     }
 
     #[test]
@@ -202,7 +197,7 @@ mod tests {
             confidence: 0.8,
         };
         let context = hints.to_llm_context();
-        assert!(context.contains("exclamation"));
+        assert!(context.contains("[PROSODY: emphatic]"));
     }
 
     #[test]
@@ -221,7 +216,7 @@ mod tests {
             confidence: 0.8,
         };
         let context = hints.to_llm_context();
-        assert!(context.contains("pause"));
+        assert!(context.contains("[PROSODY: long pauses 1]"));
     }
 
     #[test]

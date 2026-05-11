@@ -11,12 +11,15 @@ use crate::config::Config;
 pub fn format_prompt(template: &str, transcript: &str, config: &Config) -> String {
     let mut prompt = template.replace("{transcript}", transcript);
 
-    // Add personal dictionary if present
+    // Add personal dictionary if present, as a labeled metadata block.
+    // The default prompt's Spelling Resolution section instructs the model
+    // to treat [PERSONAL_DICTIONARY] entries as ground truth for proper-noun
+    // and technical-term spelling, with phonetic-similarity matching.
     if !config.personal_dictionary.is_empty() {
         let dict_str = config.personal_dictionary.join(", ");
         prompt = prompt.replace(
             "{personal_dictionary}",
-            &format!("\nPersonal vocabulary: {}", dict_str),
+            &format!("\n[PERSONAL_DICTIONARY]\n{}\n", dict_str),
         );
     } else {
         prompt = prompt.replace("{personal_dictionary}", "");
@@ -139,7 +142,10 @@ fn strip_repeated_output(text: &str) -> String {
 /// Small on-device models sometimes echo back system prompt instructions
 /// like [EMPTY_FIELD], [CORRECTION HISTORY], etc. as part of their output.
 fn strip_leaked_prompt_blocks(text: &str) -> String {
-    // Known prompt block tags that should never appear in output
+    // Known prompt block tags that should never appear in output.
+    // Some entries are prefixes (e.g. "[APPLICATION CONTEXT", "[PROSODY")
+    // so all subtype variants like "[APPLICATION CONTEXT: Email]" or
+    // "[PROSODY: rising pitch]" get caught by `find()`.
     const BLOCK_TAGS: &[&str] = &[
         "[EMPTY_FIELD]",
         "[CORRECTION HISTORY]",
@@ -147,6 +153,12 @@ fn strip_leaked_prompt_blocks(text: &str) -> String {
         "[MID_SENTENCE_CONTINUATION]",
         "[INPUT CONTEXT]",
         "[INPUT_CONTEXT]",
+        "[APPLICATION CONTEXT",
+        "[PERSONAL_DICTIONARY]",
+        "[PERSONAL DICTIONARY]",
+        "[VOCABULARY HINT]",
+        "[VOCABULARY_HINT]",
+        "[PROSODY",
         "## Output",
         "#Output",
         "# Output",

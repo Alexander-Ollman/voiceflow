@@ -1,5 +1,146 @@
 # Release Notes
 
+## v2.0.0 — Parakeet + Bonsai by default, vocabulary-aware spelling, new Settings UI
+
+VoiceFlow v2.0.0 is a major release. The Parakeet → Bonsai stack is now
+the **shipped default** — no env vars, no toggles, it just launches.
+The polish prompt is fully rewritten around an explicit pipeline + 6
+end-to-end examples. Spelling for proper nouns and technical terms is
+now driven by a tiered vocabulary system seeded from your active
+persona, the focused window, and your recent dictations. The settings
+window is a top-to-bottom redesign with a new activity dashboard.
+
+### Default runtime stack
+
+- **Parakeet TDT 0.6B (MLX) is now the default STT.** Previously gated
+  behind `VOICEFLOW_USE_PARAKEET=1`. The Rust pipeline's built-in STT is
+  unloaded at launch; Parakeet runs out-of-process over a UNIX socket at
+  `/tmp/voiceflow_parakeet_daemon.sock`. Set `VOICEFLOW_USE_PARAKEET=0`
+  to opt out and use the legacy stack.
+- **Bonsai-8B (Q1_0) is now the default LLM.** Served by a bundled
+  PrismML `llama-server` fork that the app spawns automatically on
+  launch with `-c 16384`. The Rust pipeline routes through
+  `LlmBackend::OpenAIServer` to `http://127.0.0.1:8080`. Set
+  `VOICEFLOW_LLAMA_SERVER_AUTOSTART=0` if you'd rather run your own
+  server.
+
+### Vocabulary-aware spelling
+
+- **Personas now carry vocabulary lists.** Built-in personas come seeded
+  (Software Engineer: `kubectl`, `Docker`, `Kubernetes`, `Postgres`,
+  `Terraform`, `gRPC`, …; Technical Writer: `API`, `JSON`, `WebSocket`,
+  `endpoint`, …). A tag-style chip editor in the Personas settings pane
+  lets you add or remove terms with one click.
+- **New `[VOCABULARY HINT]` context block.** At dictation time, a new
+  `VocabularyContext` module assembles up to ~48 candidate terms from
+  four sources, in confidence tiers:
+    1. **Hard bias** — proper nouns and identifiers visible in the
+       focused field (read from the AX text-before-cursor buffer).
+    2. **Hard bias** — host + path tokens for the active browser tab.
+    3. **Soft bias** — your active persona's vocabulary list.
+    4. **Soft bias** — terms recurring in your recent dictation history.
+  The block sits in the LLM prompt's cached prefix, so it costs ~150
+  tokens and effectively zero added latency after the first request.
+- **Migration is transparent.** Older stored personas without a
+  `vocabulary` field decode cleanly; built-in personas get the seed
+  terms backfilled on first launch.
+
+### Polish prompt overhaul
+
+`prompts/default.txt` is fully rewritten around an explicit eight-step
+pipeline and a single, deduplicated set of safety rules.
+
+- **Spelling Resolution is now the first step,** with phonetic-match
+  rules across `[VOCABULARY HINT]`, `[INPUT CONTEXT]`,
+  `[PERSONAL_DICTIONARY]`, and on-screen text. Examples added for the
+  cases we'd actually been getting wrong: "argo c d" → "ArgoCD", "oh
+  auth" → "OAuth", "post gress" → "Postgres", "kuda" → "CUDA", "era
+  core" → "Era Code".
+- **Prosody hints are now imperative tags.** The previous
+  natural-language hint ("The speaker's pitch rose at the end,
+  suggesting a question") is replaced by `[PROSODY: rising pitch]` /
+  `[PROSODY: falling pitch]` / `[PROSODY: emphatic]` / `[PROSODY: long
+  pauses N]`, each explicitly mapped to a punctuation action in the
+  prompt. Small models stopped ignoring the hint.
+- **Six end-to-end examples** added at the bottom of the prompt
+  covering prose-with-fillers, voice command + self-correction, URL /
+  IP / version notation, list, vocabulary-driven spelling, and a
+  question detected by prosody.
+- **Anti-conversational guarantee strengthened** with seven diverse
+  examples (questions to AI, soliciting feedback, hedged opinions, a
+  "tell me a joke" provocation) so the model stops answering questions
+  it should be transcribing.
+- **Abstain rule** — empty, single-syllable, or garbled input is now
+  passed through verbatim instead of hallucinated into a sentence.
+- **Length guard** — output word count must approximate input word
+  count minus fillers. Cuts mid-sentence drift on smaller models.
+- **Voice command disambiguation** — phrases only execute as commands
+  when at sentence boundaries or grammatically nonsensical as nouns.
+  Explicit negative examples ("the comma is overused" → keeps "comma"
+  as a word).
+- **Numbers / URL / IP rules consolidated.** Self-contradicting bullets
+  ("Small counts spell out" vs "ALWAYS use digits") removed. One rule
+  per context.
+- **`email.txt`, `code.txt`, `audio_direct.txt` brought to parity.**
+  Each now has the same anti-conversational + preserve-content + Spelling
+  Resolution guarantees as the default prompt.
+
+### Personal dictionary as a labeled block
+
+`personal_dictionary` is now injected as a `[PERSONAL_DICTIONARY]`
+metadata block rather than a free-floating "Personal vocabulary: …"
+line. Combined with `[VOCABULARY HINT]`, the Spelling Resolution
+section now has a uniform way to address vocabulary across all sources.
+
+### Settings UI
+
+The whole settings window is rebuilt on a new "Liquid Glass" design
+system (`VF.*` tokens):
+
+- **New Home with Overview + Activity tabs.** A speed gauge shows your
+  current WPM and tier (`Steady` 80–130, `Fast` 130–200, `Top` 200+).
+  Per-app usage bars surface where you dictate most. A
+  GitHub-style streak heatmap tracks daily activity, with a "longest
+  streak" stat. An "estimated time saved vs typing at 40 wpm" headline
+  number sits at the top.
+- **Persona vocabulary editor.** Inline chip-style tag editor on the
+  Personas pane — type a term, press Enter, it's added; click the × to
+  remove.
+- **Sidebar regrouped** into named sections via the new
+  `SidebarGroup` / `SidebarLayout` model.
+- **All settings panes restyled** with consistent `VFCard`,
+  `VFPageHeader`, `VFSectionHeader`, and pill-button affordances.
+  Style, AI Features, General, Snippets, App Profiles, Browser Site
+  Rules, and Personas all share the same visual language now.
+
+### Devex / observability
+
+- **LLM input/output pairs are logged on every dictation path.** Three
+  new `NSLog` lines per request:
+    ```
+    [VoiceFlow] Parakeet → LLM: formatting N-char transcript
+    [VoiceFlow] LLM input:  <raw Parakeet output>
+    [VoiceFlow] LLM output: <Bonsai-formatted text>
+    ```
+  Pipe through `/usr/bin/log stream --predicate 'eventMessage CONTAINS
+  "[VoiceFlow]"'` for a live trace.
+- **Runtime prompt override.** Prompts under
+  `~/Library/Application Support/com.era-laboratories.voiceflow/prompts/<name>.txt`
+  are loaded if present, otherwise the compiled-in copy is used. Useful
+  for iterating on prompts without a rebuild.
+- **Leaked-block stripper expanded.** Any of `[VOCABULARY HINT]`,
+  `[APPLICATION CONTEXT: …]`, `[PERSONAL_DICTIONARY]`, or `[PROSODY: …]`
+  appearing in model output is now truncated by the post-processor.
+
+### Migration notes
+
+- No config changes required. If you previously launched VoiceFlow with
+  `VOICEFLOW_USE_PARAKEET=1` etc. in your shell rc, you can remove
+  those — the defaults now match.
+- Existing persona JSONs are forward-compatible. The new `vocabulary`
+  field decodes to `[]` on old records, and built-in personas get
+  seed terms backfilled on first launch.
+
 ## v0.2.1 — Stability & lifecycle
 
 Follow-up to v0.2.0 focused on the known issues called out in that

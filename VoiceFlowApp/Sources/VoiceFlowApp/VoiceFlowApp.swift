@@ -145,8 +145,29 @@ struct Persona: Codable, Identifiable, Equatable, Hashable {
     let id: String          // UUID string, stable across renames
     var name: String        // display name e.g. "Software Engineer"
     var prompt: String      // the system-prompt fragment injected as context
+    var vocabulary: [String] = []  // soft-bias terms injected into [VOCABULARY HINT]
     let createdAt: Date
     var isBuiltIn: Bool     // seeded defaults — UI may treat differently (e.g., disable delete)
+
+    init(id: String, name: String, prompt: String, vocabulary: [String] = [], createdAt: Date, isBuiltIn: Bool) {
+        self.id = id
+        self.name = name
+        self.prompt = prompt
+        self.vocabulary = vocabulary
+        self.createdAt = createdAt
+        self.isBuiltIn = isBuiltIn
+    }
+
+    /// Custom decoder so older stored personas (without `vocabulary`) keep loading.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.prompt = try c.decode(String.self, forKey: .prompt)
+        self.vocabulary = (try? c.decode([String].self, forKey: .vocabulary)) ?? []
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.isBuiltIn = try c.decode(Bool.self, forKey: .isBuiltIn)
+    }
 }
 
 class PersonaManager: ObservableObject {
@@ -162,6 +183,21 @@ class PersonaManager: ObservableObject {
         if personas.isEmpty {
             personas = Self.seedPersonas()
             savePersonas()
+        } else {
+            // Migration: backfill `vocabulary` on built-in personas that pre-date the field.
+            // Match by name (stable across the seed's regenerated UUIDs) and only copy when
+            // the user has not added their own terms.
+            let seedByName: [String: [String]] = Dictionary(
+                uniqueKeysWithValues: Self.seedPersonas().map { ($0.name, $0.vocabulary) }
+            )
+            var changed = false
+            for i in personas.indices where personas[i].isBuiltIn && personas[i].vocabulary.isEmpty {
+                if let seed = seedByName[personas[i].name], !seed.isEmpty {
+                    personas[i].vocabulary = seed
+                    changed = true
+                }
+            }
+            if changed { savePersonas() }
         }
     }
 
@@ -220,6 +256,12 @@ class PersonaManager: ObservableObject {
                 Preserve code-like syntax: snake_case, camelCase, kebab-case, dotted paths. Use technical capitalization \
                 for acronyms (API, URL, SQL) and product names (PostgreSQL, MongoDB).
                 """,
+                vocabulary: [
+                    "kubectl", "Docker", "Kubernetes", "GraphQL", "OAuth", "JWT", "Postgres", "PostgreSQL",
+                    "Redis", "AWS", "GCP", "Azure", "Terraform", "Helm", "gRPC", "SDK", "CLI", "regex",
+                    "JSON", "YAML", "TOML", "Kafka", "MongoDB", "Nginx", "Ansible", "Jenkins", "GitHub",
+                    "GitLab", "Bitbucket", "TypeScript", "Rust", "Golang", "Swift", "Webhook", "OpenAPI",
+                ],
                 createdAt: now,
                 isBuiltIn: true
             ),
@@ -233,6 +275,7 @@ class PersonaManager: ObservableObject {
                 message is conversational. Capitalize properly: people's names, company names, job titles when used \
                 as titles. When the speaker dictates an email address or URL, format it cleanly with no spaces.
                 """,
+                vocabulary: [],
                 createdAt: now,
                 isBuiltIn: true
             ),
@@ -245,6 +288,7 @@ class PersonaManager: ObservableObject {
                 can be short or fragmentary. Don't over-format — match the speaker's casual register. Emoji are fine \
                 when the speaker explicitly requests them ("smile emoji" → 😊).
                 """,
+                vocabulary: [],
                 createdAt: now,
                 isBuiltIn: true
             ),
@@ -258,6 +302,7 @@ class PersonaManager: ObservableObject {
                 precise terminology: use "function" not "method" unless the language calls them methods, \
                 "endpoint" for HTTP routes, "repository" for git repos. Maintain a clear, instructive tone.
                 """,
+                vocabulary: ["API", "JSON", "HTTP", "REST", "WebSocket", "endpoint", "repository", "middleware", "schema"],
                 createdAt: now,
                 isBuiltIn: true
             ),
@@ -558,6 +603,203 @@ class AppProfileManager: ObservableObject {
         }
         return changed
     }
+}
+
+// MARK: - Vocabulary Context
+
+/// Gathers local, on-device sources of likely-relevant vocabulary for the current
+/// dictation and renders them as a `[VOCABULARY HINT]` block appended to the LLM
+/// polish prompt.
+///
+/// Sources, ordered from highest- to lowest-confidence:
+///   1. **Hard bias** — terms visible in the focused window's text (the user is
+///      literally looking at these). Pulled from the AX text-before-cursor buffer.
+///   2. **Hard bias** — browser host + path tokens for the active tab.
+///   3. **Soft bias** — the active persona's user-curated vocabulary list.
+///   4. **Soft bias** — words frequently seen in recent transcripts.
+///
+/// Result lives in the LLM polish prompt's prefix and is therefore prompt-cache
+/// friendly: collecting it costs <100 ms and adds ~150 tokens.
+enum VocabularyContext {
+    /// Max terms per tier — keep total prompt cost bounded.
+    private static let hardTermLimit = 24
+    private static let softTermLimit = 24
+
+    /// Build the `[VOCABULARY HINT]` block. Returns "" if there is nothing useful
+    /// to bias on (e.g. cold start, no focused field, no persona vocab).
+    static func block(for app: NSRunningApplication?, inputFieldText: String?) -> String {
+        let hard = hardBiasTerms(app: app, inputFieldText: inputFieldText)
+        let soft = softBiasTerms(app: app)
+        if hard.isEmpty && soft.isEmpty { return "" }
+
+        var lines: [String] = ["", "[VOCABULARY HINT]"]
+        if !hard.isEmpty {
+            lines.append(
+                "On-screen / current context (strongly prefer these exact spellings when phonetically plausible): "
+                + hard.joined(separator: ", ")
+            )
+        }
+        if !soft.isEmpty {
+            lines.append(
+                "Likely relevant from this user's recent usage (consider these as candidates): "
+                + soft.joined(separator: ", ")
+            )
+        }
+        lines.append("Do not force a match — only substitute when the dictation is phonetically plausible for the listed term.")
+        return "\n" + lines.joined(separator: "\n")
+    }
+
+    // MARK: - Hard bias
+
+    private static func hardBiasTerms(app: NSRunningApplication?, inputFieldText: String?) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+
+        func add(_ candidates: [String]) {
+            for term in candidates {
+                let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, !seen.contains(trimmed.lowercased()) else { continue }
+                seen.insert(trimmed.lowercased())
+                ordered.append(trimmed)
+                if ordered.count >= hardTermLimit { return }
+            }
+        }
+
+        // 1. Visible text in the focused field.
+        if let text = inputFieldText, !text.isEmpty {
+            add(extractInterestingTokens(from: text))
+        }
+
+        // 2. Browser URL host + path segments.
+        if let bundleId = app?.bundleIdentifier,
+           BrowserContext.isBrowser(bundleId: bundleId),
+           let url = BrowserContext.currentURL(forBundleId: bundleId) {
+            add(urlTokens(url))
+        }
+
+        return ordered
+    }
+
+    /// Tokenize URL host + path into vocabulary candidates.
+    /// Example: github.com/anthropics/anthropic-cookbook → ["anthropics", "anthropic", "cookbook"]
+    private static func urlTokens(_ url: URL) -> [String] {
+        var parts: [String] = []
+        if let host = url.host {
+            parts.append(contentsOf: host.lowercased()
+                .replacingOccurrences(of: "www.", with: "")
+                .split(separator: ".")
+                .map(String.init)
+                .filter { commonTLDs.contains($0) == false && $0.count > 2 })
+        }
+        parts.append(contentsOf: url.pathComponents
+            .flatMap { $0.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) }
+            .map(String.init)
+            .filter { $0.count > 2 })
+        // Capitalize first letter so "anthropic" becomes "Anthropic" — better LLM bias.
+        return parts.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+    }
+
+    private static let commonTLDs: Set<String> = [
+        "com", "org", "net", "io", "ai", "co", "app", "dev", "edu", "gov", "us", "uk"
+    ]
+
+    // MARK: - Soft bias
+
+    private static func softBiasTerms(app: NSRunningApplication?) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+
+        func add(_ candidates: [String]) {
+            for term in candidates {
+                let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, !seen.contains(trimmed.lowercased()) else { continue }
+                seen.insert(trimmed.lowercased())
+                ordered.append(trimmed)
+                if ordered.count >= softTermLimit { return }
+            }
+        }
+
+        // 1. Active persona's vocabulary.
+        if let app, let bundleId = app.bundleIdentifier,
+           let profile = AppProfileManager.shared.profiles.first(where: { $0.id == bundleId }),
+           let pid = profile.personaId,
+           let persona = PersonaManager.shared.persona(byId: pid) {
+            add(persona.vocabulary)
+        }
+
+        // 2. Recently frequent words from transcripts.
+        add(recentTranscriptTerms())
+
+        return ordered
+    }
+
+    /// Extract distinctive multi-letter, non-common words frequent in recent transcripts.
+    private static func recentTranscriptTerms() -> [String] {
+        let recent = TranscriptionLog.shared.entries.prefix(40)
+        var counts: [String: Int] = [:]
+        for entry in recent {
+            for raw in entry.formattedText.split(whereSeparator: { !$0.isLetter && $0 != "-" && $0 != "_" }) {
+                let token = String(raw)
+                if isInterestingToken(token) {
+                    counts[token, default: 0] += 1
+                }
+            }
+        }
+        // Prefer terms seen at least twice — single-shot noise is noise.
+        return counts
+            .filter { $0.value >= 2 }
+            .sorted { $0.value > $1.value }
+            .map { $0.key }
+    }
+
+    /// Extract on-screen tokens worth biasing on (proper nouns, identifiers, jargon).
+    private static func extractInterestingTokens(from text: String) -> [String] {
+        var counts: [String: Int] = [:]
+        for raw in text.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" && $0 != "_" }) {
+            let token = String(raw)
+            if isInterestingToken(token) {
+                counts[token, default: 0] += 1
+            }
+        }
+        return counts
+            .sorted { $0.value > $1.value }
+            .map { $0.key }
+    }
+
+    /// Heuristic for "this looks like a name or jargon, not a stopword".
+    private static func isInterestingToken(_ token: String) -> Bool {
+        guard token.count >= 3 else { return false }
+        if stopwords.contains(token.lowercased()) { return false }
+        let hasUpper = token.contains(where: { $0.isUppercase })
+        let hasDigit = token.contains(where: { $0.isNumber })
+        let hasSep = token.contains("-") || token.contains("_")
+        // Identifier-shaped or capitalized → likely a name/jargon → keep.
+        if hasUpper || hasDigit || hasSep { return true }
+        // Long lowercase words can still be useful (e.g. "kubernetes") — keep words of 6+ letters.
+        return token.count >= 6
+    }
+
+    /// Small English stopword list — enough to drop obvious noise without dragging
+    /// in a full NLP dependency.
+    private static let stopwords: Set<String> = [
+        "the", "and", "for", "are", "was", "were", "you", "your", "yours", "with", "from", "this",
+        "that", "those", "these", "have", "has", "had", "but", "not", "all", "any", "can", "could",
+        "should", "would", "will", "shall", "may", "might", "must", "into", "onto", "out", "off",
+        "over", "under", "again", "more", "most", "some", "such", "than", "then", "them", "they",
+        "their", "theirs", "what", "which", "who", "whom", "whose", "why", "how", "where", "when",
+        "while", "about", "after", "before", "above", "below", "between", "through", "during",
+        "because", "since", "until", "without", "within", "across", "around", "though", "although",
+        "however", "therefore", "thus", "just", "very", "really", "also", "only", "even", "still",
+        "yet", "ever", "never", "always", "often", "sometimes", "now", "soon", "today", "yesterday",
+        "tomorrow", "here", "there", "everywhere", "anywhere", "nowhere", "let", "make", "made",
+        "took", "take", "taken", "give", "gave", "given", "got", "get", "getting", "going", "goes",
+        "want", "wants", "wanted", "need", "needs", "needed", "use", "used", "using", "say", "said",
+        "see", "seen", "look", "looking", "looked", "find", "found", "tell", "told", "ask", "asked",
+        "work", "worked", "working", "way", "ways", "thing", "things", "stuff", "something", "someone",
+        "anyone", "anything", "everyone", "everything", "nothing", "good", "bad", "best", "worst",
+        "right", "wrong", "much", "many", "few", "lot", "lots", "kind", "kinds", "like", "likely",
+        "okay", "yeah", "yes", "actually", "basically", "literally", "probably", "definitely",
+    ]
 }
 
 // MARK: - Transcription Log
@@ -1607,21 +1849,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var streamingTextCancellable: AnyCancellable?
     private var isStreamingActive = false
 
-    // Parakeet-MLX engine (batch STT alternative). When enabled via env var
-    // VOICEFLOW_USE_PARAKEET=1, replaces Moonshine on the recording-release path.
+    // Parakeet-MLX engine (default STT). Replaces Moonshine on the recording-release
+    // path. Opt-out via VOICEFLOW_USE_PARAKEET=0 for devs comparing against the
+    // legacy Moonshine/Qwen3-ASR stack.
     var parakeetEngine = ParakeetASREngine()
     var useParakeet: Bool {
-        ProcessInfo.processInfo.environment["VOICEFLOW_USE_PARAKEET"] == "1"
+        ProcessInfo.processInfo.environment["VOICEFLOW_USE_PARAKEET"] != "0"
     }
 
     // llama-server (Bonsai) lifecycle. Spawns the PrismML llama-server fork on
     // launch with our chosen context size, monitors, and shuts down on exit.
-    // Only autostarts when the OpenAIServer LLM backend is selected; suppressible
-    // via VOICEFLOW_LLAMA_SERVER_AUTOSTART=0 for devs running their own server.
+    // Autostarts by default (Bonsai is the shipped LLM); suppressible via
+    // VOICEFLOW_LLAMA_SERVER_AUTOSTART=0 for devs running their own server.
     var llamaServer = LlamaServerManager()
     var llamaServerAutostart: Bool {
         ProcessInfo.processInfo.environment["VOICEFLOW_LLAMA_SERVER_AUTOSTART"] != "0"
-            && ProcessInfo.processInfo.environment["VOICEFLOW_LLM_BACKEND"] == "openai_server"
     }
 
     // Direct-to-field streaming state
@@ -1706,6 +1948,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hide dock icon - menu bar only
         NSApp.setActivationPolicy(.accessory)
 
+        // Apply Parakeet+Bonsai runtime defaults before any Rust pipeline init
+        // reads its environment. Each call only fills in a var if it isn't
+        // already set, so dev overrides on the shell still win.
+        applyParakeetBonsaiDefaults()
+
         // Offer to move to /Applications if running from elsewhere (e.g. Downloads)
         offerRelocationIfNeeded()
 
@@ -1713,6 +1960,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showSetupWizard()
         } else {
             proceedWithNormalLaunch()
+        }
+    }
+
+    /// Seed the runtime environment with Parakeet+Bonsai defaults. The Rust
+    /// pipeline reads these env vars in `Config::apply_env_overrides` and the
+    /// PersonaClassifier reads them via `ProcessInfo`, so they must be set
+    /// before any of those code paths runs.
+    private func applyParakeetBonsaiDefaults() {
+        let defaults: [(String, String)] = [
+            ("VOICEFLOW_LLM_BACKEND", "openai_server"),
+            ("VOICEFLOW_LLM_SERVER_ENDPOINT", "http://127.0.0.1:8080"),
+            ("VOICEFLOW_LLM_SERVER_MODEL", "default"),
+        ]
+        for (key, value) in defaults {
+            // setenv(_, _, 0) only writes if the variable is unset.
+            setenv(key, value, 0)
         }
     }
 
@@ -2138,9 +2401,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "VoiceFlow"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 780, height: 560))
-        window.minSize = NSSize(width: 680, height: 480)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = .clear
+        window.setContentSize(NSSize(width: 1080, height: 720))
+        window.minSize = NSSize(width: 920, height: 600)
         window.center()
         window.isReleasedWhenClosed = false
 
@@ -2668,7 +2936,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let appPrompt = AppProfileManager.shared.promptForApp(frontmostApp)
             let frontApp = frontmostApp?.localizedName ?? "Unknown"
             let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
-            let baseContext = formattingLevel.systemPrompt + appPrompt
+            let vocabBlock = VocabularyContext.block(for: frontmostApp, inputFieldText: inputFieldText)
+            let baseContext = formattingLevel.systemPrompt + appPrompt + vocabBlock
             let currentSpacingMode = spacingMode
 
             // Determine mid-sentence state (same logic as non-streaming path)
@@ -2727,10 +2996,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Format raw streaming transcript through LLM with token streaming.
                 // Token callback is a no-op visually — UI stays in .processing until done.
                 NSLog("[VoiceFlow] Streaming: formatting raw transcript (%d chars) via LLM (streaming)", rawTranscript.count)
+                NSLog("[VoiceFlow] LLM input: %@", rawTranscript)
                 if let formattedText = await voiceFlow.formatTextStreaming(
                     rawTranscript, context: context,
                     onToken: { _ in }
                 ) {
+                    NSLog("[VoiceFlow] LLM output: %@", formattedText)
                     // Apply snippet expansion
                     var expandedText = SnippetManager.shared.expandSnippets(in: formattedText)
 
@@ -2857,7 +3128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let appPrompt = AppProfileManager.shared.promptForApp(frontmostApp)
             let frontApp = frontmostApp?.localizedName ?? "Unknown"
             let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
-            let baseContext = formattingLevel.systemPrompt + appPrompt
+            let vocabBlock = VocabularyContext.block(for: frontmostApp, inputFieldText: inputFieldText)
+            let baseContext = formattingLevel.systemPrompt + appPrompt + vocabBlock
             let currentSpacingMode = spacingMode
 
             let isMidSentence: Bool
@@ -2910,6 +3182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 
                 NSLog("[VoiceFlow] Parakeet → LLM: formatting %d-char transcript", rawTranscript.count)
+                NSLog("[VoiceFlow] LLM input: %@", rawTranscript)
                 guard let formattedText = await voiceFlow.formatTextStreaming(
                     rawTranscript, context: context,
                     onToken: { _ in }
@@ -2921,6 +3194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     )
                     return
                 }
+                NSLog("[VoiceFlow] LLM output: %@", formattedText)
 
                 var expandedText = SnippetManager.shared.expandSnippets(in: formattedText)
                 if isEmptyField {
@@ -3022,6 +3296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
 
+                NSLog("[VoiceFlow] LLM output (audio-direct): %@", result.formattedText)
                 var spacedText = result.formattedText
 
                 // Apply spacing mode
@@ -3090,7 +3365,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Read existing text from the focused input field (must be on main thread before async)
         let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
 
-        let baseContext = formattingLevel.systemPrompt + appPrompt
+        let vocabBlock = VocabularyContext.block(for: frontmostApp, inputFieldText: inputFieldText)
+        let baseContext = formattingLevel.systemPrompt + appPrompt + vocabBlock
         let currentSpacingMode = spacingMode
         let wantsVisualContext = isVisualContextRecording
         let capture = screenshotCapture
@@ -3199,6 +3475,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             if let result = processResult {
+                NSLog("[VoiceFlow] LLM input: %@", result.rawTranscript)
+                NSLog("[VoiceFlow] LLM output: %@", result.formattedText)
                 // Meta-command: "summarize this"
                 let summarizeEnabled = UserDefaults.standard.bool(forKey: "aiFeatureSummarizeEnabled")
                 let normalizedTranscript = result.rawTranscript.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4072,6 +4350,483 @@ struct ScreenRecordingPermissionButton: View {
     }
 }
 
+// MARK: - VF Design System
+
+/// Color and shape tokens for the dark-vibrant "Liquid Glass" look.
+enum VF {
+    static let cardCorner: CGFloat = 16
+    static let pillCorner: CGFloat = 18
+
+    // Sidebar selection.
+    static let sidebarHover = Color.white.opacity(0.05)
+    static let sidebarSelected = Color.white.opacity(0.10)
+
+    // Accent gradient used for primary CTAs.
+    static let accentGradient = LinearGradient(
+        colors: [Color(red: 0.34, green: 0.46, blue: 1.0),
+                 Color(red: 0.55, green: 0.36, blue: 1.0)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    /// Specular highlight stroke for glass surfaces — brighter at top.
+    static let glassStroke = LinearGradient(
+        colors: [Color.white.opacity(0.28), Color.white.opacity(0.06)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    /// Inner top highlight — adds a subtle gleam at the top edge of cards.
+    static let glassGleam = LinearGradient(
+        colors: [Color.white.opacity(0.10), Color.white.opacity(0.0)],
+        startPoint: .top,
+        endPoint: .center
+    )
+}
+
+/// NSVisualEffectView wrapper. Gives windows a vibrant dark backdrop.
+struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .hudWindow
+    var blending: NSVisualEffectView.BlendingMode = .behindWindow
+    var emphasized: Bool = false
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = blending
+        v.state = .active
+        v.isEmphasized = emphasized
+        v.appearance = NSAppearance(named: .vibrantDark)
+        return v
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+        nsView.blendingMode = blending
+        nsView.isEmphasized = emphasized
+    }
+}
+
+/// Frosted "Liquid Glass" rounded card surface.
+/// Layers: ultraThinMaterial base + faint white tint + top-edge gleam + gradient highlight stroke.
+struct VFCard<Content: View>: View {
+    var padding: CGFloat = 18
+    var corner: CGFloat = VF.cardCorner
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .padding(padding)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .fill(VF.glassGleam)
+                        .blendMode(.plusLighter)
+                        .opacity(0.6)
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .strokeBorder(VF.glassStroke, lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.25), radius: 18, x: 0, y: 8)
+    }
+}
+
+/// Page header: large title + caption subtitle, optional trailing slot.
+struct VFPageHeader<Trailing: View>: View {
+    let title: String
+    let subtitle: String?
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 22, weight: .bold))
+                if let s = subtitle, !s.isEmpty {
+                    Text(s)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            trailing()
+        }
+    }
+}
+
+extension VFPageHeader where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+        self.trailing = { EmptyView() }
+    }
+}
+
+/// Section header within a page — caption-sized, breaks up cards.
+struct VFSectionHeader: View {
+    let title: String
+    var icon: String? = nil
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.8)
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+/// Filled pill button — primary action on a row or in a header.
+struct VFFilledPillStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(
+                Capsule()
+                    .fill(VF.accentGradient)
+                    .opacity(configuration.isPressed ? 0.85 : 1.0)
+            )
+    }
+}
+
+/// Outlined pill button — secondary action ("Open", "Install").
+struct VFOutlinePillStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(.white.opacity(0.92))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                    .background(
+                        Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.10 : 0.04))
+                    )
+            )
+    }
+}
+
+/// Small ghost pill — caption sized, used inline with body text.
+struct VFGhostPillStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(.white.opacity(0.75))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.12 : 0.06))
+            )
+    }
+}
+
+// MARK: - Dashboard primitives
+
+/// Wispr-style underline tab strip. The selected tab gets a thicker accent underline;
+/// a faint base rule extends across the full width.
+struct VFSubTabStrip<Tab: Hashable>: View {
+    @Binding var selection: Tab
+    let items: [(Tab, String)]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 28) {
+                ForEach(items, id: \.0) { tab, label in
+                    Button {
+                        selection = tab
+                    } label: {
+                        VStack(spacing: 10) {
+                            Text(label)
+                                .font(.system(size: 14, weight: selection == tab ? .semibold : .regular))
+                                .foregroundColor(selection == tab ? .white : .white.opacity(0.55))
+                            Rectangle()
+                                .fill(selection == tab ? AnyShapeStyle(VF.accentGradient) : AnyShapeStyle(Color.clear))
+                                .frame(height: 2)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+            }
+        }
+    }
+}
+
+/// Big stat tile used on the dashboard.
+/// `caption` is uppercase small text, `value` is the big number, `accessory` slot is for the gauge/illustration.
+struct VFStatTile<Accessory: View>: View {
+    let value: String
+    let caption: String
+    @ViewBuilder var accessory: () -> Accessory
+
+    init(value: String, caption: String, @ViewBuilder accessory: @escaping () -> Accessory = { EmptyView() }) {
+        self.value = value
+        self.caption = caption
+        self.accessory = accessory
+    }
+
+    var body: some View {
+        VFCard(padding: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(value)
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                Text(caption.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.9)
+                    .foregroundColor(.white.opacity(0.5))
+                Spacer(minLength: 8)
+                accessory()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+extension VFStatTile where Accessory == EmptyView {
+    init(value: String, caption: String) {
+        self.init(value: value, caption: caption, accessory: { EmptyView() })
+    }
+}
+
+/// Smile-shaped speed gauge — accent fill proportional to `value` of `range`.
+/// Renders a U-shaped arc with the tier `label` inside the cup.
+struct SpeedGaugeView: View {
+    let value: Double      // current value (e.g. wpm)
+    let range: ClosedRange<Double>
+    let label: String      // tier label ("Top", "Fast", …)
+
+    var body: some View {
+        GeometryReader { proxy in
+            let lineWidth: CGFloat = 10
+            let w = proxy.size.width
+            let h = proxy.size.height
+            let radius = max(0, min(w / 2 - lineWidth / 2, h - lineWidth / 2))
+            let center = CGPoint(x: w / 2, y: h - lineWidth / 2)
+
+            ZStack {
+                // Track — smile arc (opens upward)
+                SmileArc(progress: 1.0)
+                    .stroke(Color.white.opacity(0.08), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                // Fill arc
+                SmileArc(progress: normalized)
+                    .stroke(VF.accentGradient, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+
+                // Tier label inside the cup
+                Text(label.uppercased())
+                    .font(.system(size: 12, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundColor(.white.opacity(0.85))
+                    .position(x: center.x, y: max(lineWidth, center.y - radius * 0.45))
+            }
+        }
+    }
+
+    private var normalized: Double {
+        let span = range.upperBound - range.lowerBound
+        guard span > 0 else { return 0 }
+        return min(1.0, max(0.0, (value - range.lowerBound) / span))
+    }
+}
+
+/// Half-circle smile arc that fills from left to right.
+private struct SmileArc: Shape {
+    var progress: Double  // 0..1
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let lineWidth: CGFloat = 10
+        let radius = max(0, min(rect.width / 2 - lineWidth / 2, rect.height - lineWidth / 2))
+        let center = CGPoint(x: rect.midX, y: rect.maxY - lineWidth / 2)
+        let start = Angle.degrees(180)
+        let end = Angle.degrees(180 + 180 * progress)
+        path.addArc(center: center, radius: radius, startAngle: start, endAngle: end, clockwise: false)
+        return path
+    }
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+}
+
+/// Horizontal usage bar — gradient-filled segment with percent + caption.
+struct AppUsageBar: View {
+    let icon: String
+    let percent: Double         // 0..1
+    let percentLabel: String    // e.g. "43%"
+    let detail: String          // e.g. "10,158 work messages"
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 18)
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.06))
+                    Capsule()
+                        .fill(VF.accentGradient)
+                        .frame(width: max(28, proxy.size.width * CGFloat(min(1.0, max(0.02, percent)))))
+                    HStack {
+                        Text(percentLabel)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundColor(.white)
+                            .padding(.leading, 10)
+                        Spacer()
+                    }
+                }
+            }
+            .frame(height: 22)
+
+            Text(detail.uppercased())
+                .font(.system(size: 10, weight: .medium))
+                .tracking(0.6)
+                .foregroundColor(.white.opacity(0.6))
+                .lineLimit(1)
+        }
+    }
+}
+
+/// Activity heatmap. Each column is a week, each row a weekday.
+struct StreakHeatmap: View {
+    /// activity[date] = number of entries
+    let activity: [Date: Int]
+    let weeks: Int  // typically 26 for ~6 months
+    let calendar = Calendar.current
+
+    var body: some View {
+        let grid = buildGrid()
+        let maxVal = max(1, grid.flatMap { $0 }.map { $0.count }.max() ?? 1)
+
+        VStack(alignment: .leading, spacing: 8) {
+            // Month strip — positioned headers via ZStack
+            ZStack(alignment: .topLeading) {
+                Color.clear.frame(height: 14)
+                ForEach(monthHeaders(for: grid), id: \.0) { col, label in
+                    Text(label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.45))
+                        .offset(x: CGFloat(col) * (cellSize + spacing))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // 7 rows × N cols
+            HStack(alignment: .top, spacing: spacing) {
+                ForEach(0..<grid.count, id: \.self) { col in
+                    VStack(spacing: spacing) {
+                        ForEach(0..<7, id: \.self) { row in
+                            let cell = grid[col][row]
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(color(for: cell.count, max: maxVal))
+                                .frame(width: cellSize, height: cellSize)
+                        }
+                    }
+                }
+            }
+
+            // Legend
+            HStack(spacing: 6) {
+                Text("Less")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.45))
+                ForEach(0..<5, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(color(for: i, max: 4))
+                        .frame(width: cellSize, height: cellSize)
+                }
+                Text("More")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.45))
+                Spacer()
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private let cellSize: CGFloat = 12
+    private let spacing: CGFloat = 3
+
+    private struct Cell { let date: Date; let count: Int }
+
+    /// Build a [columns][7] grid ending today.
+    private func buildGrid() -> [[Cell]] {
+        let today = calendar.startOfDay(for: Date())
+        let weekdayOfToday = calendar.component(.weekday, from: today)  // 1=Sun..7=Sat
+        // Find the Saturday at the end of the current week (we render Sun..Sat columns).
+        let daysUntilSat = (7 - weekdayOfToday) % 7
+        let endDate = calendar.date(byAdding: .day, value: daysUntilSat, to: today) ?? today
+
+        var columns: [[Cell]] = []
+        for w in (0..<weeks).reversed() {
+            var col: [Cell] = []
+            for r in 0..<7 {
+                let dayOffset = -(w * 7) - (6 - r)
+                if let d = calendar.date(byAdding: .day, value: dayOffset, to: endDate) {
+                    let start = calendar.startOfDay(for: d)
+                    let count = d > today ? 0 : (activity[start] ?? 0)
+                    col.append(Cell(date: start, count: count))
+                }
+            }
+            columns.append(col)
+        }
+        return columns
+    }
+
+    private func color(for count: Int, max: Int) -> Color {
+        guard count > 0 else { return Color.white.opacity(0.05) }
+        let intensity = min(1.0, Double(count) / Double(max))
+        // Map intensity → accent blue → purple
+        let r = 0.34 + (0.55 - 0.34) * intensity
+        let g = 0.46 - (0.46 - 0.36) * intensity
+        let b = 1.0
+        return Color(red: r, green: g, blue: b).opacity(0.35 + 0.55 * intensity)
+    }
+
+    private func monthHeaders(for grid: [[Cell]]) -> [(Int, String)] {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM"
+        let minColGap = 3   // require at least 3 columns between labels to avoid overlap
+        var lastMonth = -1
+        var lastCol = -minColGap - 1
+        var headers: [(Int, String)] = []
+        for (col, days) in grid.enumerated() {
+            if let firstDay = days.first {
+                let m = calendar.component(.month, from: firstDay.date)
+                if m != lastMonth && (col - lastCol) >= minColGap {
+                    headers.append((col, fmt.string(from: firstDay.date)))
+                    lastMonth = m
+                    lastCol = col
+                }
+            }
+        }
+        return headers
+    }
+}
+
 // MARK: - Settings View
 
 struct SettingsHeaderView: View {
@@ -4140,6 +4895,22 @@ enum SidebarPage: String, CaseIterable, Identifiable {
     }
 }
 
+/// Logical grouping of sidebar pages, rendered as titled sections.
+struct SidebarGroup: Identifiable {
+    let id = UUID()
+    let title: String
+    let pages: [SidebarPage]
+}
+
+enum SidebarLayout {
+    static let groups: [SidebarGroup] = [
+        SidebarGroup(title: "Workspace", pages: [.home]),
+        SidebarGroup(title: "Customize", pages: [.style, .personas, .snippets]),
+        SidebarGroup(title: "Targeting", pages: [.appProfiles, .browserSites]),
+        SidebarGroup(title: "System", pages: [.models, .aiFeatures]),
+    ]
+}
+
 struct MainAppView: View {
     @EnvironmentObject var voiceFlow: VoiceFlowBridge
     @EnvironmentObject var snippetManager: SnippetManager
@@ -4159,106 +4930,136 @@ struct MainAppView: View {
 
     var body: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                // Logo header
-                HStack(spacing: 10) {
-                    if let logo = Self.cachedLogo {
-                        Image(nsImage: logo)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 28, height: 28)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    Text("VoiceFlow")
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 16)
+            ZStack {
+                VisualEffectBackground(material: .sidebar, blending: .behindWindow)
+                    .ignoresSafeArea()
 
-                // Top pages
-                VStack(spacing: 2) {
-                    ForEach(SidebarPage.allCases.filter { !$0.isBottom }) { page in
-                        SidebarItemView(page: page, isSelected: selectedPage == page)
-                            .onTapGesture { selectedPage = page }
+                VStack(spacing: 0) {
+                    // Logo header
+                    HStack(spacing: 10) {
+                        if let logo = Self.cachedLogo {
+                            Image(nsImage: logo)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 26, height: 26)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        Text("VoiceFlow")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.white)
+                        Spacer()
                     }
-                }
-                .padding(.horizontal, 8)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 18)
 
-                Spacer()
-
-                // Bottom pages
-                VStack(spacing: 2) {
-                    ForEach(SidebarPage.allCases.filter { $0.isBottom }) { page in
-                        SidebarItemView(page: page, isSelected: selectedPage == page)
-                            .onTapGesture { selectedPage = page }
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 18) {
+                            ForEach(SidebarLayout.groups) { group in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(group.title.uppercased())
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .tracking(0.8)
+                                        .foregroundColor(.white.opacity(0.45))
+                                        .padding(.horizontal, 14)
+                                        .padding(.bottom, 4)
+                                    ForEach(group.pages) { page in
+                                        SidebarItemView(page: page, isSelected: selectedPage == page)
+                                            .onTapGesture { selectedPage = page }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 12)
                     }
+
+                    Spacer(minLength: 0)
+
+                    // Bottom pages
+                    VStack(spacing: 2) {
+                        ForEach(SidebarPage.allCases.filter { $0.isBottom }) { page in
+                            SidebarItemView(page: page, isSelected: selectedPage == page)
+                                .onTapGesture { selectedPage = page }
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 12)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
             }
             // Pin a minimum height so the inner Spacer doesn't collapse the
             // VStack on certain layout passes, which was leaving the sidebar
             // visibly empty after navigating away and back.
-            .frame(minWidth: 200, minHeight: 400, maxHeight: .infinity)
-            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+            .frame(minWidth: 220, minHeight: 400, maxHeight: .infinity)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
         } detail: {
-            Group {
-                switch selectedPage {
-                case .home:
-                    HomeView()
-                        .environmentObject(transcriptionLog)
-                case .models:
-                    ModelSettingsView()
-                        .environmentObject(modelManager)
-                case .snippets:
-                    SnippetsSettingsView()
-                        .environmentObject(snippetManager)
-                case .style:
-                    StyleSettingsView()
-                case .personas:
-                    PersonasSettingsView()
-                case .appProfiles:
-                    AppProfilesSettingsView()
-                case .browserSites:
-                    BrowserSiteRulesView()
-                case .aiFeatures:
-                    AIFeaturesSettingsView()
-                case .settings:
-                    GeneralSettingsView()
-                        .environmentObject(voiceFlow)
+            ZStack {
+                VisualEffectBackground(material: .hudWindow, blending: .behindWindow)
+                    .ignoresSafeArea()
+
+                Group {
+                    switch selectedPage {
+                    case .home:
+                        HomeView()
+                            .environmentObject(transcriptionLog)
+                    case .models:
+                        ModelSettingsView()
+                            .environmentObject(modelManager)
+                    case .snippets:
+                        SnippetsSettingsView()
+                            .environmentObject(snippetManager)
+                    case .style:
+                        StyleSettingsView()
+                    case .personas:
+                        PersonasSettingsView()
+                    case .appProfiles:
+                        AppProfilesSettingsView()
+                    case .browserSites:
+                        BrowserSiteRulesView()
+                    case .aiFeatures:
+                        AIFeaturesSettingsView()
+                    case .settings:
+                        GeneralSettingsView()
+                            .environmentObject(voiceFlow)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 780, height: 560)
+        .frame(width: 1080, height: 720)
+        .preferredColorScheme(.dark)
     }
 }
 
 struct SidebarItemView: View {
     let page: SidebarPage
     let isSelected: Bool
+    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: page.icon)
-                .font(.system(size: 14))
+                .font(.system(size: 13, weight: .regular))
                 .frame(width: 20)
-                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .foregroundColor(isSelected ? .white : .white.opacity(0.55))
             Text(page.rawValue)
                 .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                .foregroundColor(isSelected ? .primary : .secondary)
+                .foregroundColor(isSelected ? .white : .white.opacity(0.75))
             Spacer()
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    isSelected
+                        ? VF.sidebarSelected
+                        : (isHovering ? VF.sidebarHover : Color.clear)
+                )
         )
         .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
     }
 }
 
@@ -4278,90 +5079,380 @@ struct SettingsView: View {
 
 struct HomeView: View {
     @EnvironmentObject var transcriptionLog: TranscriptionLog
+    @ObservedObject private var correctionManager = CorrectionManager.shared
+
+    enum HomeTab { case overview, activity }
+    @State private var tab: HomeTab = .overview
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Welcome header
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Welcome back")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Your voice-to-text activity")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Insights")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.bottom, 2)
+
+                VFSubTabStrip(
+                    selection: $tab,
+                    items: [(.overview, "Your Usage"), (.activity, "Recent Activity")]
+                )
+
+                switch tab {
+                case .overview: overview
+                case .activity: activityList
                 }
-                .padding(.bottom, 4)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 22)
+        }
+    }
 
-                // Stats row
-                HStack(spacing: 16) {
-                    StatCardView(
-                        title: "Streak",
-                        value: "\(transcriptionLog.streakDays)",
-                        unit: transcriptionLog.streakDays == 1 ? "day" : "days",
-                        icon: "flame",
-                        color: .orange
+    // MARK: Overview tab
+
+    @ViewBuilder
+    private var overview: some View {
+        VStack(spacing: 16) {
+            // Row 1: three hero stat tiles
+            HStack(alignment: .top, spacing: 16) {
+                VFStatTile(value: "\(transcriptionLog.averageWPM)", caption: "Words per minute") {
+                    SpeedGaugeView(
+                        value: Double(transcriptionLog.averageWPM),
+                        range: 60...260,
+                        label: speedLabel
                     )
-                    StatCardView(
-                        title: "Words",
-                        value: formatNumber(transcriptionLog.totalWords),
-                        unit: "total",
-                        icon: "text.word.spacing",
-                        color: .blue
-                    )
-                    StatCardView(
-                        title: "Speed",
-                        value: "\(transcriptionLog.averageWPM)",
-                        unit: "wpm",
-                        icon: "gauge.medium",
-                        color: .green
-                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 70)
                 }
 
-                // Transcription history
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Recent Activity")
-                        .font(.headline)
-
-                    if transcriptionLog.entries.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "waveform")
-                                .font(.system(size: 32))
-                                .foregroundColor(.secondary.opacity(0.5))
-                            Text("No transcriptions yet")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            Text("Press ⌥ Space to start dictating")
-                                .font(.caption)
-                                .foregroundColor(.secondary.opacity(0.7))
+                VFStatTile(value: "\(fixesCount)", caption: "Fixes made by VoiceFlow") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Text("\(learnedCount)")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.85))
+                            Text("learned corrections")
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.55))
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.35))
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                    } else {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(transcriptionLog.entriesByDay, id: \.0) { dayLabel, dayEntries in
-                                // Day header
-                                Text(dayLabel)
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.secondary)
-                                    .padding(.top, 12)
-                                    .padding(.bottom, 6)
+                        HStack(spacing: 6) {
+                            Text("\(dictionaryCount)")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.85))
+                            Text("dictionary items used")
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.55))
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 9))
+                                .foregroundColor(.white.opacity(0.35))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-                                ForEach(dayEntries) { entry in
-                                    TranscriptionRowView(entry: entry)
+                VFStatTile(value: formatNumber(transcriptionLog.totalWords), caption: "Total words dictated") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if booksWritten > 0 {
+                            Text("You've written \(booksWritten) complete book\(booksWritten == 1 ? "" : "s")!")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.7))
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text("Keep going — a novel is ~50,000 words.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.7))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        // Mock device-share toggle (Desktop only for now)
+                        HStack(spacing: 0) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "laptopcomputer")
+                                    .font(.system(size: 11))
+                                Text("Desktop")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Capsule().fill(VF.accentGradient))
+
+                            HStack(spacing: 6) {
+                                Image(systemName: "iphone")
+                                    .font(.system(size: 11))
+                                Text("Mobile")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundColor(.white.opacity(0.55))
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Capsule().fill(Color.white.opacity(0.05)))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(minHeight: 200)
+
+            // Row 2: two wider cards — app usage + streak heatmap
+            HStack(alignment: .top, spacing: 16) {
+                VFCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Desktop usage")
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text("TOTAL APPS USED | \(appUsageList.count)")
+                                .font(.system(size: 10, weight: .semibold))
+                                .tracking(0.6)
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+
+                        if appUsageList.isEmpty {
+                            Text("No app usage data yet — start dictating and your top apps will appear here.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                                .padding(.vertical, 16)
+                        } else {
+                            VStack(spacing: 10) {
+                                ForEach(appUsageList.prefix(6), id: \.app) { row in
+                                    AppUsageBar(
+                                        icon: iconFor(category: row.category),
+                                        percent: row.share,
+                                        percentLabel: "\(Int((row.share * 100).rounded()))%",
+                                        detail: "\(formatNumber(row.count)) \(row.app)"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                VFCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("\(transcriptionLog.streakDays) day streak")
+                                .font(.system(size: 17, weight: .bold))
+                                .foregroundColor(.white)
+                            Spacer()
+                            Text("LONGEST | \(longestStreak) DAYS")
+                                .font(.system(size: 10, weight: .semibold))
+                                .tracking(0.6)
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+
+                        StreakHeatmap(activity: dailyActivity, weeks: 24)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    // MARK: Activity tab
+
+    @ViewBuilder
+    private var activityList: some View {
+        if transcriptionLog.entries.isEmpty {
+            VFCard(padding: 32) {
+                VStack(spacing: 10) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 32))
+                        .foregroundColor(.white.opacity(0.35))
+                    Text("No transcriptions yet")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.7))
+                    Text("Press ⌥ Space to start dictating")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.45))
+                }
+                .frame(maxWidth: .infinity)
+            }
+        } else {
+            VStack(spacing: 16) {
+                // Stats banner at top — total dictations / words / time saved
+                HStack(spacing: 12) {
+                    miniStat(value: "\(transcriptionLog.entries.count)", label: "Dictations", icon: "waveform")
+                    miniStat(value: formatNumber(transcriptionLog.totalWords), label: "Words", icon: "text.alignleft")
+                    miniStat(value: timeSavedString, label: "Saved vs typing", icon: "clock.arrow.circlepath", tint: .green)
+                }
+
+                // Day groups
+                ForEach(transcriptionLog.entriesByDay, id: \.0) { dayLabel, dayEntries in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(dayLabel)
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(0.8)
+                                .foregroundColor(.white.opacity(0.55))
+                            Spacer()
+                            Text(daySummary(dayEntries))
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white.opacity(0.45))
+                        }
+                        .padding(.horizontal, 4)
+
+                        VFCard(padding: 4) {
+                            VStack(spacing: 0) {
+                                ForEach(Array(dayEntries.enumerated()), id: \.element.id) { idx, entry in
+                                    TranscriptionRowView(entry: entry, isLast: idx == dayEntries.count - 1)
                                 }
                             }
                         }
                     }
                 }
             }
-            .padding()
+        }
+    }
+
+    /// Mini stat chip used in the Recent Activity banner.
+    @ViewBuilder
+    private func miniStat(value: String, label: String, icon: String, tint: Color = .accentColor) -> some View {
+        VFCard(padding: 14) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(tint.opacity(0.18))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(tint)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(value)
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                    Text(label.uppercased())
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.6)
+                        .foregroundColor(.white.opacity(0.55))
+                }
+                Spacer()
+            }
+        }
+    }
+
+    /// Estimated time saved versus typing at 40 wpm.
+    private var timeSavedString: String {
+        let typingWPM: Double = 40
+        let dictateWPM = max(60.0, Double(transcriptionLog.averageWPM))
+        let words = Double(transcriptionLog.totalWords)
+        let savedMin = words * (1.0/typingWPM - 1.0/dictateWPM)
+        return formatDuration(minutes: max(0, savedMin))
+    }
+
+    private func formatDuration(minutes: Double) -> String {
+        let totalMin = Int(minutes.rounded())
+        if totalMin >= 60 {
+            let h = totalMin / 60
+            let m = totalMin % 60
+            return m == 0 ? "\(h)h" : "\(h)h \(m)m"
+        }
+        return "\(totalMin)m"
+    }
+
+    /// "X dictations · Y words" shown next to each day header.
+    private func daySummary(_ entries: [TranscriptionEntry]) -> String {
+        let dictations = entries.count
+        let words = entries.reduce(0) { $0 + $1.formattedText.split(separator: " ").count }
+        return "\(dictations) dictation\(dictations == 1 ? "" : "s") · \(formatNumber(words)) word\(words == 1 ? "" : "s")"
+    }
+
+    // MARK: Derived data
+
+    private struct AppUsageRow { let app: String; let count: Int; let share: Double; let category: String }
+
+    /// Sorted app usage with share-of-total.
+    private var appUsageList: [AppUsageRow] {
+        let entries = transcriptionLog.entries
+        guard !entries.isEmpty else { return [] }
+        var counts: [String: Int] = [:]
+        for e in entries where !e.targetApp.isEmpty {
+            counts[e.targetApp, default: 0] += 1
+        }
+        let total = counts.values.reduce(0, +)
+        guard total > 0 else { return [] }
+        return counts
+            .sorted { $0.value > $1.value }
+            .map { AppUsageRow(app: $0.key, count: $0.value, share: Double($0.value) / Double(total), category: appCategory(name: $0.key)) }
+    }
+
+    /// Per-day entry counts for the heatmap.
+    private var dailyActivity: [Date: Int] {
+        let cal = Calendar.current
+        var counts: [Date: Int] = [:]
+        for e in transcriptionLog.entries {
+            let day = cal.startOfDay(for: e.timestamp)
+            counts[day, default: 0] += 1
+        }
+        return counts
+    }
+
+    private var fixesCount: Int {
+        transcriptionLog.entries.filter { $0.editedText != nil }.count
+            + correctionManager.patterns.count
+    }
+    private var learnedCount: Int {
+        transcriptionLog.entries.filter { $0.editedText != nil }.count
+    }
+    private var dictionaryCount: Int { correctionManager.patterns.count }
+
+    private var booksWritten: Int { transcriptionLog.totalWords / 50_000 }
+
+    private var speedLabel: String {
+        switch transcriptionLog.averageWPM {
+        case 200...: return "Top"
+        case 130..<200: return "Fast"
+        case 80..<130: return "Steady"
+        default: return "Warming"
+        }
+    }
+
+    /// Approximate longest streak by walking dailyActivity backward.
+    private var longestStreak: Int {
+        let cal = Calendar.current
+        let days = Set(dailyActivity.keys.map { cal.startOfDay(for: $0) })
+        guard let earliest = days.min() else { return 0 }
+        let today = cal.startOfDay(for: Date())
+        var longest = 0
+        var current = 0
+        var d = earliest
+        while d <= today {
+            if days.contains(d) { current += 1; longest = max(longest, current) }
+            else { current = 0 }
+            guard let next = cal.date(byAdding: .day, value: 1, to: d) else { break }
+            d = next
+        }
+        return longest
+    }
+
+    private func appCategory(name: String) -> String {
+        let lower = name.lowercased()
+        if lower.contains("mail") || lower.contains("outlook") { return "email" }
+        if lower.contains("slack") || lower.contains("discord") || lower.contains("teams") || lower.contains("messages") { return "chat" }
+        if lower.contains("code") || lower.contains("xcode") || lower.contains("cursor") || lower.contains("term") { return "code" }
+        if lower.contains("safari") || lower.contains("chrome") || lower.contains("firefox") || lower.contains("arc") { return "web" }
+        if lower.contains("notion") || lower.contains("doc") || lower.contains("notes") || lower.contains("obsidian") { return "doc" }
+        return "default"
+    }
+
+    private func iconFor(category: String) -> String {
+        switch category {
+        case "email": return "envelope.fill"
+        case "chat": return "bubble.left.and.bubble.right.fill"
+        case "code": return "chevron.left.forwardslash.chevron.right"
+        case "web": return "globe"
+        case "doc": return "doc.fill"
+        default: return "app.fill"
         }
     }
 
     private func formatNumber(_ n: Int) -> String {
-        if n >= 1000 {
+        if n >= 1_000_000 {
+            return String(format: "%.1fM", Double(n) / 1_000_000.0)
+        }
+        if n >= 1_000 {
             let k = Double(n) / 1000.0
             return String(format: "%.1fk", k)
         }
@@ -4377,94 +5468,178 @@ struct StatCardView: View {
     let color: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 12))
-                    .foregroundColor(color)
-                Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+        VFCard(padding: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(color.opacity(0.18))
+                            .frame(width: 24, height: 24)
+                        Image(systemName: icon)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(color)
+                    }
+                    Text(title)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(value)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                    Text(unit)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.5))
+                }
             }
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value)
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                Text(unit)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(NSColor.controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-        )
     }
 }
 
 struct TranscriptionRowView: View {
     let entry: TranscriptionEntry
+    var isLast: Bool = false
     @State private var copied = false
+    @State private var isHovering = false
+
+    private var wordCount: Int { entry.formattedText.split(separator: " ").count }
+
+    /// Total ms is process latency, not speech duration. Fall back to estimating
+    /// from word count at the user's display rate.
+    private var displayedDuration: String? {
+        guard entry.totalMs > 100 else { return nil }
+        let sec = Double(entry.totalMs) / 1000.0
+        if sec >= 60 { return String(format: "%.1fm", sec / 60) }
+        return String(format: "%.1fs", sec)
+    }
+
+    private var category: String {
+        let lower = entry.targetApp.lowercased()
+        if lower.contains("mail") || lower.contains("outlook") { return "email" }
+        if lower.contains("slack") || lower.contains("discord") || lower.contains("teams") || lower.contains("messages") || lower.contains("imessage") { return "chat" }
+        if lower.contains("code") || lower.contains("xcode") || lower.contains("cursor") || lower.contains("term") || lower.contains("cmux") || lower.contains("iterm") { return "code" }
+        if lower.contains("safari") || lower.contains("chrome") || lower.contains("firefox") || lower.contains("arc") { return "web" }
+        if lower.contains("notion") || lower.contains("doc") || lower.contains("notes") || lower.contains("obsidian") { return "doc" }
+        return "default"
+    }
+    private var categoryColor: Color {
+        switch category {
+        case "email": return .blue
+        case "chat": return .purple
+        case "code": return .green
+        case "web": return .orange
+        case "doc": return .pink
+        default: return .accentColor
+        }
+    }
+    private var categoryIcon: String {
+        switch category {
+        case "email": return "envelope.fill"
+        case "chat": return "bubble.left.and.bubble.right.fill"
+        case "code": return "chevron.left.forwardslash.chevron.right"
+        case "web": return "globe"
+        case "doc": return "doc.fill"
+        default: return "waveform"
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
+        HStack(alignment: .top, spacing: 14) {
+            // App icon tile
+            ZStack {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(categoryColor.opacity(0.18))
+                    .frame(width: 34, height: 34)
+                Image(systemName: categoryIcon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(categoryColor)
+            }
+            .padding(.top, 2)
+
+            // Body
+            VStack(alignment: .leading, spacing: 5) {
                 Text(entry.formattedText)
                     .font(.system(size: 13))
-                    .lineLimit(2)
-                Spacer()
-                if entry.editedText != nil {
-                    Text("Learned")
-                        .font(.caption2)
-                        .fontWeight(.medium)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Color.green.opacity(0.15))
-                        .foregroundColor(.green)
-                        .clipShape(Capsule())
-                }
-                Button(action: {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(entry.formattedText, forType: .string)
-                    copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        copied = false
+                    .foregroundColor(.white.opacity(0.92))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    if !entry.targetApp.isEmpty {
+                        Text(entry.targetApp)
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundColor(.white.opacity(0.7))
                     }
-                }) {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 11))
-                        .foregroundColor(copied ? .green : .secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Copy to clipboard")
-                Text(timeString(entry.timestamp))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            HStack(spacing: 8) {
-                if !entry.targetApp.isEmpty {
-                    Label(entry.targetApp, systemImage: "app")
+                    metaDot
+                    Text("\(wordCount) word\(wordCount == 1 ? "" : "s")")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.5))
+                    if let dur = displayedDuration {
+                        metaDot
+                        Text(dur)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    if entry.editedText != nil {
+                        metaDot
+                        Text("Learned")
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.18))
+                            .foregroundColor(.green)
+                            .clipShape(Capsule())
+                    }
                 }
-                Text("\(entry.totalMs)ms")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            // Trailing — copy on hover + time
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(timeString(entry.timestamp))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.55))
+                if isHovering {
+                    Button(action: copyText) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11))
+                            .foregroundColor(copied ? .green : .white.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy to clipboard")
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isHovering ? Color.white.opacity(0.04) : Color.clear)
+        )
+        .overlay(alignment: .bottom) {
+            if !isLast {
+                Rectangle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(height: 1)
+                    .padding(.horizontal, 12)
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 4)
-        .overlay(
-            Rectangle()
-                .fill(Color.secondary.opacity(0.1))
-                .frame(height: 1),
-            alignment: .bottom
-        )
+        .onHover { isHovering = $0 }
+    }
+
+    private var metaDot: some View {
+        Circle().fill(Color.white.opacity(0.25)).frame(width: 2, height: 2)
+    }
+
+    private func copyText() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.formattedText, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
     }
 
     private func timeString(_ date: Date) -> String {
@@ -4509,238 +5684,158 @@ struct StyleSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Page header
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Style & Formatting")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Control how VoiceFlow formats your dictations")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.bottom, 4)
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(
+                    title: "Style & Formatting",
+                    subtitle: "Control how VoiceFlow formats your dictations"
+                )
 
                 // Formatting Level
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(FormattingLevel.allCases, id: \.self) { level in
-                            HStack(spacing: 10) {
-                                Image(systemName: formattingLevel == level ? "largecircle.fill.circle" : "circle")
-                                    .foregroundColor(formattingLevel == level ? .accentColor : .secondary)
-                                    .font(.system(size: 16))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(level.displayName)
-                                        .font(.system(size: 13, weight: .medium))
-                                    Text(level.description)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 6)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(formattingLevel == level ? Color.accentColor.opacity(0.08) : Color.clear)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                formattingLevel = level
-                                UserDefaults.standard.set(level.rawValue, forKey: "formattingLevel")
-                            }
+                cardSection(title: "Formatting Level", icon: "textformat") {
+                    ForEach(FormattingLevel.allCases, id: \.self) { level in
+                        radioRow(
+                            isSelected: formattingLevel == level,
+                            title: level.displayName,
+                            subtitle: level.description
+                        ) {
+                            formattingLevel = level
+                            UserDefaults.standard.set(level.rawValue, forKey: "formattingLevel")
                         }
                     }
-                    .padding(.vertical, 2)
-                } label: {
-                    Label("Formatting Level", systemImage: "textformat")
-                        .font(.headline)
                 }
 
                 // Spacing Mode
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(SpacingMode.allCases, id: \.self) { mode in
-                            HStack(spacing: 10) {
-                                Image(systemName: spacingMode == mode ? "largecircle.fill.circle" : "circle")
-                                    .foregroundColor(spacingMode == mode ? .accentColor : .secondary)
-                                    .font(.system(size: 16))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(mode.displayName)
-                                        .font(.system(size: 13, weight: .medium))
-                                    Text(mode.description)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 6)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(spacingMode == mode ? Color.accentColor.opacity(0.08) : Color.clear)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                spacingMode = mode
-                                UserDefaults.standard.set(mode.rawValue, forKey: "spacingMode")
-                            }
+                cardSection(title: "Spacing", icon: "arrow.left.and.right.text.vertical") {
+                    ForEach(SpacingMode.allCases, id: \.self) { mode in
+                        radioRow(
+                            isSelected: spacingMode == mode,
+                            title: mode.displayName,
+                            subtitle: mode.description
+                        ) {
+                            spacingMode = mode
+                            UserDefaults.standard.set(mode.rawValue, forKey: "spacingMode")
                         }
                     }
-                    .padding(.vertical, 2)
-                } label: {
-                    Label("Spacing", systemImage: "arrow.left.and.right.text.vertical")
-                        .font(.headline)
                 }
 
                 // Punctuation Options
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(PunctuationOption.allCases, id: \.self) { option in
-                            Toggle(isOn: Binding(
-                                get: { punctuationToggles[option] ?? option.defaultEnabled },
-                                set: { newValue in
-                                    punctuationToggles[option] = newValue
-                                    UserDefaults.standard.set(newValue, forKey: "punctuation_\(option.rawValue)")
-                                }
-                            )) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.displayName)
-                                        .font(.system(size: 13, weight: .medium))
-                                    Text(option.description)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                cardSection(title: "Punctuation", icon: "textformat.abc.dottedunderline") {
+                    ForEach(PunctuationOption.allCases, id: \.self) { option in
+                        Toggle(isOn: Binding(
+                            get: { punctuationToggles[option] ?? option.defaultEnabled },
+                            set: { newValue in
+                                punctuationToggles[option] = newValue
+                                UserDefaults.standard.set(newValue, forKey: "punctuation_\(option.rawValue)")
                             }
-                            .toggleStyle(.switch)
-                            .padding(.vertical, 2)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Punctuation", systemImage: "textformat.abc.dottedunderline")
-                        .font(.headline)
-                }
-
-                // Smart Context section header
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Smart Context")
-                        .font(.headline)
-                    Text("Context signals that feed into the LLM for better accuracy")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.top, 4)
-
-                // Visual Context
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "keyboard")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                            Text("Hold **Control + Option + Space** to dictate with screen context.")
-                                .font(.system(size: 13))
-                        }
-                        Text("Captures a screenshot and uses the Qwen3.5 multimodal model to incorporate on-screen terms, names, and context into your dictation. Requires Screen Recording permission.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        if !ScreenshotCapture.hasPermission() {
-                            Button("Grant Screen Recording Permission") {
-                                ScreenshotCapture.requestPermission()
-                            }
-                            .font(.caption)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Visual Context", systemImage: "eye")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                }
-
-                // App Profiles
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle(isOn: $appProfilesEnabled) {
+                        )) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Per-App Formatting")
+                                Text(option.displayName)
                                     .font(.system(size: 13, weight: .medium))
-                                Text("Adapt dictation style for email, Slack, code editors, and more.")
+                                    .foregroundColor(.white.opacity(0.9))
+                                Text(option.description)
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.white.opacity(0.55))
                             }
                         }
                         .toggleStyle(.switch)
+                        .padding(.vertical, 2)
+                    }
+                }
 
-                        if !profileManager.profiles.isEmpty {
-                            Divider()
+                VFSectionHeader(title: "Smart Context")
+                    .padding(.top, 6)
 
-                            HStack {
-                                Text("\(profileManager.profiles.count) app\(profileManager.profiles.count == 1 ? "" : "s") detected")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Button(action: {
-                                    for profile in profileManager.profiles {
-                                        profileManager.deleteProfile(profile)
-                                    }
-                                }) {
-                                    Text("Clear All")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
+                // Visual Context
+                cardSection(title: "Visual Context", icon: "eye", titleWeight: .semibold) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "keyboard")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        Text("Hold **Control + Option + Space** to dictate with screen context.")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.85))
+                    }
+                    Text("Captures a screenshot and uses the Qwen3.5 multimodal model to incorporate on-screen terms, names, and context into your dictation. Requires Screen Recording permission.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
 
-                            VStack(spacing: 2) {
-                                ForEach(Array(profileManager.profiles.sorted(by: { $0.displayName < $1.displayName }).enumerated()), id: \.element.id) { index, profile in
-                                    HStack(spacing: 10) {
-                                        Text(profile.displayName)
-                                            .font(.system(size: 12, weight: .medium))
-                                        Spacer()
-                                        Text(appProfileCategoryLabel(profile.category))
-                                            .font(.caption2)
-                                            .fontWeight(.medium)
-                                            .padding(.horizontal, 7)
-                                            .padding(.vertical, 3)
-                                            .background(appProfileCategoryColor(profile.category).opacity(0.12))
-                                            .foregroundColor(appProfileCategoryColor(profile.category))
-                                            .clipShape(Capsule())
-                                        Image(systemName: "chevron.right")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundColor(.secondary.opacity(0.4))
-                                    }
-                                    .padding(.vertical, 7)
-                                    .padding(.horizontal, 8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(index % 2 == 0 ? Color(NSColor.controlBackgroundColor).opacity(0.5) : Color.clear)
-                                    )
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        editingProfile = profile
-                                    }
-                                }
-                            }
-                        } else {
-                            HStack(spacing: 6) {
-                                Image(systemName: "app.dashed")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("No apps detected yet. Dictate in any app and it'll appear here.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 4)
+                    if !ScreenshotCapture.hasPermission() {
+                        Button("Grant Screen Recording Permission") {
+                            ScreenshotCapture.requestPermission()
+                        }
+                        .buttonStyle(VFOutlinePillStyle())
+                    }
+                }
+
+                // App Profiles
+                cardSection(title: "App Profiles", icon: "app.badge", titleWeight: .semibold) {
+                    Toggle(isOn: $appProfilesEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Per-App Formatting")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("Adapt dictation style for email, Slack, code editors, and more.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
                         }
                     }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("App Profiles", systemImage: "app.badge")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
+                    .toggleStyle(.switch)
+
+                    if !profileManager.profiles.isEmpty {
+                        Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                        HStack {
+                            Text("\(profileManager.profiles.count) app\(profileManager.profiles.count == 1 ? "" : "s") detected")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                            Spacer()
+                            Button("Clear All") {
+                                for profile in profileManager.profiles {
+                                    profileManager.deleteProfile(profile)
+                                }
+                            }
+                            .buttonStyle(VFGhostPillStyle())
+                        }
+
+                        VStack(spacing: 4) {
+                            ForEach(profileManager.profiles.sorted(by: { $0.displayName < $1.displayName })) { profile in
+                                HStack(spacing: 10) {
+                                    Text(profile.displayName)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.9))
+                                    Spacer()
+                                    Text(appProfileCategoryLabel(profile.category))
+                                        .font(.caption2)
+                                        .fontWeight(.medium)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(appProfileCategoryColor(profile.category).opacity(0.18))
+                                        .foregroundColor(appProfileCategoryColor(profile.category))
+                                        .clipShape(Capsule())
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                                .padding(.vertical, 7)
+                                .padding(.horizontal, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color.white.opacity(0.03))
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture { editingProfile = profile }
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "app.dashed")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.45))
+                            Text("No apps detected yet. Dictate in any app and it'll appear here.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
                 .sheet(item: $editingProfile) { profile in
                     AppProfileEditView(profile: profile) { updated in
@@ -4749,109 +5844,146 @@ struct StyleSettingsView: View {
                 }
 
                 // Correction History
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Add word corrections to automatically fix common transcription errors.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                cardSection(title: "Correction History", icon: "arrow.triangle.2.circlepath", titleWeight: .semibold) {
+                    Text("Add word corrections to automatically fix common transcription errors.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
 
-                        // Manual quick-add form
-                        HStack(spacing: 8) {
-                            TextField("Wrong word", text: $newCorrectionOriginal)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12, design: .monospaced))
-                            Image(systemName: "arrow.right")
-                                .foregroundColor(.secondary)
-                            TextField("Right word", text: $newCorrectionCorrected)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12, design: .monospaced))
-                            Button("Add") {
-                                guard !newCorrectionOriginal.isEmpty && !newCorrectionCorrected.isEmpty else { return }
-                                correctionManager.addManualCorrection(
-                                    original: newCorrectionOriginal,
-                                    corrected: newCorrectionCorrected
-                                )
-                                newCorrectionOriginal = ""
-                                newCorrectionCorrected = ""
-                            }
-                            .disabled(newCorrectionOriginal.isEmpty || newCorrectionCorrected.isEmpty)
+                    HStack(spacing: 8) {
+                        TextField("Wrong word", text: $newCorrectionOriginal)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                        Image(systemName: "arrow.right")
+                            .foregroundColor(.white.opacity(0.4))
+                        TextField("Right word", text: $newCorrectionCorrected)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                        Button("Add") {
+                            guard !newCorrectionOriginal.isEmpty && !newCorrectionCorrected.isEmpty else { return }
+                            correctionManager.addManualCorrection(
+                                original: newCorrectionOriginal,
+                                corrected: newCorrectionCorrected
+                            )
+                            newCorrectionOriginal = ""
+                            newCorrectionCorrected = ""
                         }
-
-                        if !correctionManager.patterns.isEmpty {
-                            Divider()
-
-                            HStack {
-                                Text("\(correctionManager.patterns.count) correction\(correctionManager.patterns.count == 1 ? "" : "s")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Button(action: {
-                                    correctionManager.clearAll()
-                                }) {
-                                    Text("Clear All")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            VStack(spacing: 0) {
-                                ForEach(Array(correctionManager.patterns.suffix(10).reversed().enumerated()), id: \.element.id) { index, pattern in
-                                    HStack(spacing: 0) {
-                                        Text(pattern.original)
-                                            .font(.system(size: 12, design: .monospaced))
-                                            .foregroundColor(.secondary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        Image(systemName: "arrow.right")
-                                            .font(.system(size: 9, weight: .bold))
-                                            .foregroundColor(.accentColor.opacity(0.6))
-                                            .frame(width: 24)
-                                        Text(pattern.corrected)
-                                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                            .foregroundColor(.primary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        Button(action: {
-                                            withAnimation(.easeOut(duration: 0.2)) {
-                                                correctionManager.deletePattern(id: pattern.id)
-                                            }
-                                        }) {
-                                            Image(systemName: "xmark")
-                                                .font(.system(size: 9, weight: .semibold))
-                                                .foregroundColor(.secondary.opacity(0.4))
-                                                .frame(width: 20, height: 20)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                    .padding(.vertical, 6)
-                                    .padding(.horizontal, 8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .fill(index % 2 == 0 ? Color(NSColor.controlBackgroundColor).opacity(0.5) : Color.clear)
-                                    )
-                                }
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        } else {
-                            HStack(spacing: 6) {
-                                Image(systemName: "sparkles")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("No corrections yet. Add one above to fix common transcription errors.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 4)
-                        }
+                        .buttonStyle(VFFilledPillStyle())
+                        .disabled(newCorrectionOriginal.isEmpty || newCorrectionCorrected.isEmpty)
                     }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Correction History", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
+
+                    if !correctionManager.patterns.isEmpty {
+                        Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                        HStack {
+                            Text("\(correctionManager.patterns.count) correction\(correctionManager.patterns.count == 1 ? "" : "s")")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                            Spacer()
+                            Button("Clear All") { correctionManager.clearAll() }
+                                .buttonStyle(VFGhostPillStyle())
+                        }
+                        VStack(spacing: 4) {
+                            ForEach(Array(correctionManager.patterns.suffix(10).reversed()), id: \.id) { pattern in
+                                HStack(spacing: 0) {
+                                    Text(pattern.original)
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.5))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Image(systemName: "arrow.right")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(.accentColor.opacity(0.6))
+                                        .frame(width: 24)
+                                    Text(pattern.corrected)
+                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.9))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Button(action: {
+                                        withAnimation(.easeOut(duration: 0.2)) {
+                                            correctionManager.deletePattern(id: pattern.id)
+                                        }
+                                    }) {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 9, weight: .semibold))
+                                            .foregroundColor(.white.opacity(0.4))
+                                            .frame(width: 20, height: 20)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.vertical, 7)
+                                .padding(.horizontal, 10)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.white.opacity(0.03))
+                                )
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.45))
+                            Text("No corrections yet. Add one above to fix common transcription errors.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
             }
-            .padding()
+            .padding(24)
         }
+    }
+
+    /// A titled translucent card section. The title shows above the card body.
+    @ViewBuilder
+    private func cardSection<C: View>(
+        title: String,
+        icon: String,
+        titleWeight: Font.Weight = .semibold,
+        @ViewBuilder content: @escaping () -> C
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                Text(title)
+                    .font(.system(size: 13, weight: titleWeight))
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .padding(.leading, 2)
+
+            VFCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    content()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func radioRow(isSelected: Bool, title: String, subtitle: String, onSelect: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                .foregroundColor(isSelected ? .accentColor : .white.opacity(0.35))
+                .font(.system(size: 16))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.white.opacity(0.9))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.55))
+            }
+            Spacer()
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
     }
 
     private func appProfileCategoryLabel(_ category: String) -> String {
@@ -4881,49 +6013,52 @@ struct AIFeaturesSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("AI Features")
-                    .font(.title2)
-                    .fontWeight(.bold)
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(
+                    title: "AI Features",
+                    subtitle: "Voice-activated AI commands that go beyond dictation."
+                )
 
-                Text("Voice-activated AI commands that go beyond dictation.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "text.badge.star")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.55))
+                        Text("Summarize This")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                    .padding(.leading, 2)
 
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle(isOn: $summarizeEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Summarize This")
-                                    .font(.system(size: 13, weight: .medium))
-                                Text("Say \"summarize this\" while in a text field to append a bullet-point summary of the field's content.")
+                    VFCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Toggle(isOn: $summarizeEnabled) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Enable command")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.9))
+                                    Text("Say \"summarize this\" while in a text field to append a bullet-point summary of the field's content.")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.55))
+                                }
+                            }
+                            .toggleStyle(.switch)
+
+                            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+
+                            HStack(spacing: 6) {
+                                Image(systemName: "info.circle")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(.white.opacity(0.45))
+                                Text("When enabled, saying \"summarize this\" triggers summarization instead of being typed as dictation.")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.55))
                             }
                         }
-                        .toggleStyle(.switch)
-
-                        Divider()
-
-                        HStack(spacing: 6) {
-                            Image(systemName: "info.circle")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text("When enabled, saying \"summarize this\" triggers summarization instead of being typed as dictation.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
                     }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Summarize This", systemImage: "text.badge.star")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
                 }
-
-                Spacer()
             }
-            .padding(20)
+            .padding(24)
         }
     }
 }
@@ -4936,26 +6071,27 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Hotkey Section
-                GroupBox {
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(title: "Settings", subtitle: "App-wide preferences and system access")
+
+                cardSection(title: "Hotkey", icon: "keyboard") {
                     HStack {
                         Label("Recording Shortcut", systemImage: "command")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.85))
                         Spacer()
                         Text("⌥ Space")
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(Color.secondary.opacity(0.15))
-                            .cornerRadius(6)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule().fill(Color.white.opacity(0.08))
+                            )
+                            .foregroundColor(.white.opacity(0.9))
                     }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Hotkey", systemImage: "keyboard")
-                        .font(.headline)
                 }
 
-                // Startup Section
-                GroupBox {
+                cardSection(title: "Startup", icon: "power") {
                     Toggle("Launch VoiceFlow at login", isOn: $launchAtLogin)
                         .onChange(of: launchAtLogin) { newValue in
                             if newValue {
@@ -4964,156 +6100,134 @@ struct GeneralSettingsView: View {
                                 try? SMAppService.mainApp.unregister()
                             }
                         }
-                        .padding(.vertical, 4)
-                } label: {
-                    Label("Startup", systemImage: "power")
-                        .font(.headline)
+                        .toggleStyle(.switch)
                 }
 
-                // Status Section
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Label("Pipeline", systemImage: "cpu")
-                            Spacer()
-                            if voiceFlow.isInitialized {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                    Text("Ready")
-                                        .foregroundColor(.green)
-                                }
-                            } else {
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                    Text("Initializing...")
-                                        .foregroundColor(.secondary)
-                                }
+                cardSection(title: "Status", icon: "info.circle") {
+                    HStack {
+                        Label("Pipeline", systemImage: "cpu")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.85))
+                        Spacer()
+                        if voiceFlow.isInitialized {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Ready")
+                                    .foregroundColor(.green)
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                        } else {
+                            HStack(spacing: 6) {
+                                ProgressView().scaleEffect(0.6)
+                                Text("Initializing…")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.white.opacity(0.55))
                             }
                         }
                     }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Status", systemImage: "info.circle")
-                        .font(.headline)
                 }
 
-                // Last Processing Section
                 if let result = voiceFlow.lastResult {
-                    GroupBox {
-                        VStack(spacing: 8) {
-                            HStack {
-                                Text("Transcription")
-                                Spacer()
-                                Text("\(result.transcriptionMs)ms")
-                                    .monospacedDigit()
-                                    .foregroundColor(.secondary)
-                            }
-                            HStack {
-                                Text("LLM Formatting")
-                                Spacer()
-                                Text("\(result.llmMs)ms")
-                                    .monospacedDigit()
-                                    .foregroundColor(.secondary)
-                            }
-                            Divider()
-                            HStack {
-                                Text("Total")
-                                    .fontWeight(.medium)
-                                Spacer()
-                                Text("\(result.totalMs)ms")
-                                    .monospacedDigit()
-                                    .fontWeight(.medium)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    } label: {
-                        Label("Last Processing", systemImage: "clock")
-                            .font(.headline)
+                    cardSection(title: "Last Processing", icon: "clock") {
+                        statRow(label: "Transcription", value: "\(result.transcriptionMs)ms")
+                        statRow(label: "LLM Formatting", value: "\(result.llmMs)ms")
+                        Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                        statRow(label: "Total", value: "\(result.totalMs)ms", emphasized: true)
                     }
                 }
 
-                // Permissions Section
-                GroupBox {
-                    VStack(spacing: 12) {
-                        HStack {
-                            HStack(spacing: 8) {
-                                Image(systemName: "hand.raised.fill")
-                                    .foregroundColor(.blue)
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Accessibility")
-                                    Text("Required for auto-paste")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Spacer()
-                            AccessibilityPermissionButton()
-                        }
-
-                        Divider()
-
-                        HStack {
-                            HStack(spacing: 8) {
-                                Image(systemName: "mic.fill")
-                                    .foregroundColor(.red)
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Microphone")
-                                    Text("Required for recording")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Spacer()
-                            MicrophonePermissionButton()
-                        }
-
-                        Divider()
-
-                        HStack {
-                            HStack(spacing: 8) {
-                                Image(systemName: "rectangle.dashed.badge.record")
-                                    .foregroundColor(.purple)
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Screen Recording")
-                                    Text("Required for visual context")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Spacer()
-                            ScreenRecordingPermissionButton()
-                        }
+                cardSection(title: "Permissions", icon: "lock.shield") {
+                    permissionRow(icon: "hand.raised.fill", iconColor: .blue,
+                                  title: "Accessibility", subtitle: "Required for auto-paste") {
+                        AccessibilityPermissionButton()
                     }
-                    .padding(.vertical, 4)
-                } label: {
-                    Label("Permissions", systemImage: "lock.shield")
-                        .font(.headline)
+                    Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                    permissionRow(icon: "mic.fill", iconColor: .red,
+                                  title: "Microphone", subtitle: "Required for recording") {
+                        MicrophonePermissionButton()
+                    }
+                    Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                    permissionRow(icon: "rectangle.dashed.badge.record", iconColor: .purple,
+                                  title: "Screen Recording", subtitle: "Required for visual context") {
+                        ScreenRecordingPermissionButton()
+                    }
                 }
 
-                Spacer(minLength: 16)
-
-                // Action Buttons
                 HStack {
                     Button(action: restartApp) {
                         Label("Restart", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(VFOutlinePillStyle())
 
                     Spacer()
 
-                    Button(action: { NSApp.terminate(nil) }) {
-                        Text("Quit VoiceFlow")
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
+                    Button("Quit VoiceFlow") { NSApp.terminate(nil) }
+                        .buttonStyle(VFOutlinePillStyle())
+                        .tint(.red)
+                }
+                .padding(.top, 4)
+            }
+            .padding(24)
+        }
+    }
+
+    @ViewBuilder
+    private func cardSection<C: View>(title: String, icon: String, @ViewBuilder content: @escaping () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .padding(.leading, 2)
+
+            VFCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    content()
                 }
             }
-            .padding()
+        }
+    }
+
+    @ViewBuilder
+    private func statRow(label: String, value: String, emphasized: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13, weight: emphasized ? .semibold : .regular))
+                .foregroundColor(.white.opacity(emphasized ? 0.95 : 0.8))
+            Spacer()
+            Text(value)
+                .monospacedDigit()
+                .font(.system(size: 13, weight: emphasized ? .semibold : .regular))
+                .foregroundColor(.white.opacity(emphasized ? 0.95 : 0.6))
+        }
+    }
+
+    @ViewBuilder
+    private func permissionRow<Trailing: View>(icon: String, iconColor: Color, title: String, subtitle: String, @ViewBuilder trailing: () -> Trailing) -> some View {
+        HStack {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(iconColor.opacity(0.18)).frame(width: 28, height: 28)
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(iconColor)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
+                }
+            }
+            Spacer()
+            trailing()
         }
     }
 
@@ -5146,49 +6260,52 @@ struct SnippetsSettingsView: View {
     @State private var editingSnippet: VoiceSnippet? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Voice Snippets")
-                    .font(.headline)
-                Spacer()
-                Button(action: { showingAddSheet = true }) {
-                    Label("Add", systemImage: "plus")
-                }
-            }
-
-            Text("Say a trigger phrase and it will expand to the full text.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            if snippetManager.snippets.isEmpty {
-                VStack(spacing: 8) {
-                    Spacer()
-                    Image(systemName: "text.badge.plus")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    Text("No snippets yet")
-                        .foregroundColor(.secondary)
-                    Text("Click + to add your first snippet")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-            } else {
-                List {
-                    ForEach(snippetManager.snippets) { snippet in
-                        SnippetRowView(snippet: snippet)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                editingSnippet = snippet
-                            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(
+                    title: "Voice Snippets",
+                    subtitle: "Say a trigger phrase and it will expand to the full text."
+                ) {
+                    Button {
+                        showingAddSheet = true
+                    } label: {
+                        Label("Add Snippet", systemImage: "plus")
                     }
-                    .onDelete(perform: snippetManager.deleteSnippets)
+                    .buttonStyle(VFFilledPillStyle())
                 }
-                .listStyle(.bordered)
+
+                if snippetManager.snippets.isEmpty {
+                    VFCard(padding: 40) {
+                        VStack(spacing: 10) {
+                            Image(systemName: "text.badge.plus")
+                                .font(.system(size: 32))
+                                .foregroundColor(.white.opacity(0.35))
+                            Text("No snippets yet")
+                                .foregroundColor(.white.opacity(0.7))
+                            Text("Click + Add Snippet to create your first one")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.45))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    VFCard(padding: 6) {
+                        VStack(spacing: 4) {
+                            ForEach(snippetManager.snippets) { snippet in
+                                SnippetRowView(snippet: snippet, onDelete: {
+                                    if let idx = snippetManager.snippets.firstIndex(where: { $0.id == snippet.id }) {
+                                        snippetManager.deleteSnippets(at: IndexSet(integer: idx))
+                                    }
+                                })
+                                .contentShape(Rectangle())
+                                .onTapGesture { editingSnippet = snippet }
+                            }
+                        }
+                    }
+                }
             }
+            .padding(24)
         }
-        .padding()
         .sheet(isPresented: $showingAddSheet) {
             SnippetEditView(mode: .add) { trigger, expansion in
                 snippetManager.addSnippet(trigger: trigger, expansion: expansion)
@@ -5207,23 +6324,44 @@ struct SnippetsSettingsView: View {
 
 struct SnippetRowView: View {
     let snippet: VoiceSnippet
+    var onDelete: (() -> Void)? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("\"\(snippet.trigger)\"")
-                    .fontWeight(.medium)
-                Spacer()
-                Image(systemName: "arrow.right")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(VF.accentGradient)
+                    .frame(width: 32, height: 32)
+                Image(systemName: "text.cursor")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
             }
-            Text(snippet.expansion.prefix(50) + (snippet.expansion.count > 50 ? "..." : ""))
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .lineLimit(1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\"\(snippet.trigger)\"")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                Text(snippet.expansion.prefix(60) + (snippet.expansion.count > 60 ? "…" : ""))
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.55))
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.3))
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.03))
+        )
+        .contextMenu {
+            if let onDelete {
+                Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
+            }
+        }
     }
 }
 
@@ -5312,29 +6450,31 @@ struct AppProfilesSettingsView: View {
     private let classifier = PersonaClassifier()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("App Profiles")
-                        .font(.headline)
-                    Spacer()
-                    Button {
-                        Task { await runLLMClassify() }
-                    } label: {
-                        Label("Classify Unmapped (LLM)", systemImage: "brain")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(
+                    title: "App Profiles",
+                    subtitle: "Customize formatting per app, or tie an app to a persona."
+                ) {
+                    HStack(spacing: 8) {
+                        Button {
+                            Task { await runLLMClassify() }
+                        } label: {
+                            Label("Classify (LLM)", systemImage: "brain")
+                        }
+                        .buttonStyle(VFOutlinePillStyle())
+                        .disabled(isClassifying)
+                        .help("Classify unmapped apps via the local LLM (≥90% confidence)")
+
+                        Button {
+                            lastAutoMapCount = profileManager.autoMapInstalledApps()
+                        } label: {
+                            Label("Auto-Detect", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(VFFilledPillStyle())
                     }
-                    .disabled(isClassifying)
-                    .help("Use the local LLM to classify apps that don't have a persona yet (≥90% confidence required)")
-                    Button {
-                        lastAutoMapCount = profileManager.autoMapInstalledApps()
-                    } label: {
-                        Label("Auto-Detect", systemImage: "wand.and.stars")
-                    }
-                    .help("Scan installed apps and assign personas based on common bundle IDs")
                 }
-                Text("Apps are auto-detected when you dictate. Customize formatting per app, or tie an app to a Persona.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+
                 if let n = lastAutoMapCount {
                     Text(n == 0
                          ? "Auto-detect: no new mappings (everything already covered)."
@@ -5345,50 +6485,41 @@ struct AppProfilesSettingsView: View {
                 if isClassifying {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.6)
-                        Text(classifyProgress).font(.caption).foregroundColor(.secondary)
+                        Text(classifyProgress).font(.caption).foregroundColor(.white.opacity(0.55))
                     }
                 }
                 if let result = classifyResult, !isClassifying {
                     Text(result).font(.caption).foregroundColor(.accentColor)
                 }
-            }
-            .padding()
 
-            Divider()
-
-            if profileManager.profiles.isEmpty {
-                VStack(spacing: 8) {
-                    Spacer()
-                    Image(systemName: "app.badge")
-                        .font(.system(size: 40))
-                        .foregroundColor(.secondary)
-                    Text("No apps detected yet").foregroundColor(.secondary)
-                    Text("Start dictating and they'll appear here")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-            } else {
-                List {
-                    ForEach(profileManager.profiles.sorted(by: { $0.displayName < $1.displayName })) { profile in
-                        AppProfileRowView(profile: profile)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                editingProfile = profile
-                            }
+                if profileManager.profiles.isEmpty {
+                    VFCard(padding: 40) {
+                        VStack(spacing: 10) {
+                            Image(systemName: "app.badge")
+                                .font(.system(size: 32))
+                                .foregroundColor(.white.opacity(0.35))
+                            Text("No apps detected yet")
+                                .foregroundColor(.white.opacity(0.7))
+                            Text("Start dictating and they'll appear here")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.45))
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .onDelete { offsets in
-                        let sorted = profileManager.profiles.sorted(by: { $0.displayName < $1.displayName })
-                        for offset in offsets {
-                            profileManager.deleteProfile(sorted[offset])
+                } else {
+                    VFCard(padding: 6) {
+                        VStack(spacing: 4) {
+                            ForEach(profileManager.profiles.sorted(by: { $0.displayName < $1.displayName })) { profile in
+                                AppProfileRowView(profile: profile)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { editingProfile = profile }
+                            }
                         }
                     }
                 }
-                .listStyle(.inset)
             }
+            .padding(24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $editingProfile) { profile in
             AppProfileEditView(profile: profile) { updated in
                 profileManager.updateProfile(updated)
@@ -5442,27 +6573,45 @@ struct AppProfileRowView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(profile.displayName)
-                    .fontWeight(.medium)
-                Spacer()
-                Text(badgeText)
-                    .font(.caption)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(badgeColor.opacity(0.2))
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(badgeColor.opacity(0.18))
+                    .frame(width: 32, height: 32)
+                Image(systemName: "app")
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(badgeColor)
-                    .clipShape(Capsule())
             }
-            if let custom = profile.customPrompt, !custom.isEmpty, profile.personaId == nil {
-                Text(String(custom.prefix(60)) + (custom.count > 60 ? "..." : ""))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profile.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                if let custom = profile.customPrompt, !custom.isEmpty, profile.personaId == nil {
+                    Text(String(custom.prefix(60)) + (custom.count > 60 ? "…" : ""))
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
+                        .lineLimit(1)
+                }
             }
+            Spacer()
+            Text(badgeText)
+                .font(.caption2)
+                .fontWeight(.medium)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(badgeColor.opacity(0.18))
+                .foregroundColor(badgeColor)
+                .clipShape(Capsule())
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white.opacity(0.3))
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 9)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.03))
+        )
     }
 }
 
@@ -5570,66 +6719,91 @@ struct BrowserSiteRulesView: View {
     @State private var showingNew = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Fixed header (outside the scrolling list so it never scrolls away)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Browser Site Rules")
-                        .font(.headline)
-                    Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(
+                    title: "Browser Site Rules",
+                    subtitle: "Apply a persona based on the active browser tab's hostname."
+                ) {
                     Button {
                         showingNew = true
                     } label: {
                         Label("New Rule", systemImage: "plus")
                     }
+                    .buttonStyle(VFFilledPillStyle())
                 }
-                Text("When you dictate while a browser is in the foreground, VoiceFlow reads the active tab's URL and applies a persona based on these rules. Use \"*.example.com\" for subdomain wildcards. First matching rule wins (exact host beats wildcard). First use of each browser triggers a macOS Automation permission prompt — grant it.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding()
 
-            Divider()
+                VFCard {
+                    Text("VoiceFlow reads the active tab's URL while dictating and applies a persona by these rules. Use **\"*.example.com\"** for subdomain wildcards. First matching rule wins (exact host beats wildcard). First use of each browser triggers a macOS Automation permission prompt — grant it.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.65))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-            // Scrolling list — owns its own height, never gets squashed by parent.
-            if manager.rules.isEmpty {
-                Spacer()
-                Text("No rules yet")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity)
-                Spacer()
-            } else {
-                List {
-                    ForEach(manager.rules) { rule in
-                        let personaName = personaManager.persona(byId: rule.personaId)?.name ?? "(missing persona)"
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(rule.hostnamePattern).font(.system(.body, design: .monospaced))
-                                Text(personaName).font(.caption).foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            if rule.isBuiltIn {
-                                Text("Built-in").font(.caption2)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Color.secondary.opacity(0.2))
-                                    .clipShape(Capsule())
+                if manager.rules.isEmpty {
+                    VFCard(padding: 40) {
+                        VStack(spacing: 10) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 32))
+                                .foregroundColor(.white.opacity(0.35))
+                            Text("No rules yet")
+                                .foregroundColor(.white.opacity(0.7))
+                            Text("Click + New Rule to map a hostname to a persona")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.45))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    VFCard(padding: 6) {
+                        VStack(spacing: 4) {
+                            ForEach(manager.rules) { rule in
+                                let personaName = personaManager.persona(byId: rule.personaId)?.name ?? "(missing persona)"
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(Color.blue.opacity(0.18))
+                                            .frame(width: 32, height: 32)
+                                        Image(systemName: "globe")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.blue)
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(rule.hostnamePattern)
+                                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                            .foregroundColor(.white.opacity(0.9))
+                                        Text(personaName)
+                                            .font(.caption)
+                                            .foregroundColor(.white.opacity(0.55))
+                                    }
+                                    Spacer()
+                                    if rule.isBuiltIn {
+                                        Text("Built-in")
+                                            .font(.caption2)
+                                            .padding(.horizontal, 8).padding(.vertical, 3)
+                                            .background(Color.white.opacity(0.1))
+                                            .foregroundColor(.white.opacity(0.7))
+                                            .clipShape(Capsule())
+                                    }
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                                .padding(.vertical, 9)
+                                .padding(.horizontal, 12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color.white.opacity(0.03))
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture { editingRule = rule }
                             }
                         }
-                        .padding(.vertical, 2)
-                        .contentShape(Rectangle())
-                        .onTapGesture { editingRule = rule }
-                    }
-                    .onDelete { offsets in
-                        for offset in offsets {
-                            manager.delete(manager.rules[offset])
-                        }
                     }
                 }
-                .listStyle(.inset)
             }
+            .padding(24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $editingRule) { rule in
             BrowserSiteRuleEditView(rule: rule) { updated in
                 manager.upsert(updated)
@@ -5720,66 +6894,87 @@ struct PersonasSettingsView: View {
     @State private var showingNew = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Personas")
-                        .font(.headline)
-                    Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(
+                    title: "Personas",
+                    subtitle: "Reusable LLM context fragments. Tie an app to a persona in App Profiles."
+                ) {
                     Button {
                         showingNew = true
                     } label: {
-                        Label("New", systemImage: "plus")
+                        Label("New Persona", systemImage: "plus")
                     }
+                    .buttonStyle(VFFilledPillStyle())
                 }
-                Text("Personas are reusable LLM context fragments. Tie an app to a persona in App Profiles.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .padding()
 
-            Divider()
-
-            if personaManager.personas.isEmpty {
-                Spacer()
-                Text("No personas yet").foregroundColor(.secondary).frame(maxWidth: .infinity)
-                Spacer()
-            } else {
-                List {
-                    ForEach(personaManager.personas) { persona in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(persona.name).fontWeight(.medium)
-                                if persona.isBuiltIn {
-                                    Text("Built-in")
-                                        .font(.caption2)
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
-                                        .background(Color.secondary.opacity(0.2))
-                                        .clipShape(Capsule())
-                                }
-                                Spacer()
-                            }
-                            Text(String(persona.prompt.prefix(120)) + (persona.prompt.count > 120 ? "..." : ""))
+                if personaManager.personas.isEmpty {
+                    VFCard(padding: 40) {
+                        VStack(spacing: 10) {
+                            Image(systemName: "person.crop.circle")
+                                .font(.system(size: 32))
+                                .foregroundColor(.white.opacity(0.35))
+                            Text("No personas yet")
+                                .foregroundColor(.white.opacity(0.7))
+                            Text("Click + New Persona to create one")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(2)
+                                .foregroundColor(.white.opacity(0.45))
                         }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            editingPersona = persona
-                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .onDelete { offsets in
-                        for offset in offsets {
-                            personaManager.delete(personaManager.personas[offset])
+                } else {
+                    VFCard(padding: 6) {
+                        VStack(spacing: 4) {
+                            ForEach(personaManager.personas) { persona in
+                                HStack(alignment: .top, spacing: 12) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(VF.accentGradient)
+                                            .frame(width: 32, height: 32)
+                                        Image(systemName: "person.fill")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.white)
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            Text(persona.name)
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundColor(.white.opacity(0.9))
+                                            if persona.isBuiltIn {
+                                                Text("Built-in")
+                                                    .font(.caption2)
+                                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                                    .background(Color.white.opacity(0.1))
+                                                    .foregroundColor(.white.opacity(0.7))
+                                                    .clipShape(Capsule())
+                                            }
+                                        }
+                                        Text(String(persona.prompt.prefix(120)) + (persona.prompt.count > 120 ? "…" : ""))
+                                            .font(.caption)
+                                            .foregroundColor(.white.opacity(0.55))
+                                            .lineLimit(2)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.3))
+                                        .padding(.top, 10)
+                                }
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color.white.opacity(0.03))
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture { editingPersona = persona }
+                            }
                         }
                     }
                 }
-                .listStyle(.inset)
             }
+            .padding(24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $editingPersona) { persona in
             PersonaEditView(persona: persona) { updated in
                 personaManager.upsert(updated)
@@ -5808,9 +7003,11 @@ struct PersonaEditView: View {
     @Environment(\.dismiss) var dismiss
     @State private var name: String = ""
     @State private var prompt: String = ""
+    @State private var vocabulary: [String] = []
+    @State private var newTerm: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text(persona.name.isEmpty ? "New Persona" : "Edit \(persona.name)")
                 .font(.headline)
 
@@ -5827,8 +7024,17 @@ struct PersonaEditView: View {
                     .foregroundColor(.secondary)
                 TextEditor(text: $prompt)
                     .font(.body)
-                    .frame(minHeight: 220)
+                    .frame(minHeight: 160)
                     .border(Color.secondary.opacity(0.3), width: 1)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Vocabulary").font(.caption).foregroundColor(.secondary)
+                Text("Terms the LLM should prefer when transcription is phonetically plausible. Press return or comma to add.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+                VocabularyChipEditor(terms: $vocabulary, newTerm: $newTerm)
             }
 
             HStack {
@@ -5839,6 +7045,7 @@ struct PersonaEditView: View {
                     var updated = persona
                     updated.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     updated.prompt = prompt
+                    updated.vocabulary = vocabulary
                     onSave(updated)
                     dismiss()
                 }
@@ -5848,11 +7055,83 @@ struct PersonaEditView: View {
             }
         }
         .padding()
-        .frame(width: 540, height: 460)
+        .frame(width: 560, height: 560)
         .onAppear {
             name = persona.name
             prompt = persona.prompt
+            vocabulary = persona.vocabulary
         }
+    }
+}
+
+/// Tag-style chip editor for a persona's vocabulary list.
+struct VocabularyChipEditor: View {
+    @Binding var terms: [String]
+    @Binding var newTerm: String
+
+    private let columns = [GridItem(.adaptive(minimum: 80), spacing: 6)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Input row
+            HStack(spacing: 8) {
+                TextField("Add a term (e.g. Postgres)", text: $newTerm)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(commit)
+                    .onChange(of: newTerm) { val in
+                        if val.hasSuffix(",") || val.hasSuffix("\n") {
+                            commit()
+                        }
+                    }
+                Button("Add") { commit() }
+                    .disabled(newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            // Chips
+            if terms.isEmpty {
+                Text("No vocabulary yet.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+                        ForEach(terms, id: \.self) { term in
+                            HStack(spacing: 4) {
+                                Text(term)
+                                    .font(.system(size: 12, weight: .medium))
+                                Button(action: { remove(term) }) {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                            .foregroundColor(.primary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(maxHeight: 120)
+            }
+        }
+    }
+
+    private func commit() {
+        let cleaned = newTerm
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ","))
+        guard !cleaned.isEmpty else { newTerm = ""; return }
+        if !terms.contains(where: { $0.caseInsensitiveCompare(cleaned) == .orderedSame }) {
+            terms.append(cleaned)
+        }
+        newTerm = ""
+    }
+
+    private func remove(_ term: String) {
+        terms.removeAll { $0 == term }
     }
 }
 
@@ -6603,35 +7882,27 @@ struct ModelSettingsView: View {
     @StateObject private var monitor = ServiceMonitor()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Models").font(.headline)
-                    Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VFPageHeader(
+                    title: "Models",
+                    subtitle: "Parakeet TDT 0.6B v2 (STT) + Bonsai-8B Q1_0 (LLM). Both run on-device on Apple Silicon."
+                ) {
                     Button {
                         monitor.refresh()
                         setup.refreshInstallState()
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
+                    .buttonStyle(VFOutlinePillStyle())
                 }
-                Text("Parakeet TDT 0.6B v2 (STT) + Bonsai-8B Q1_0 (LLM). Both run on-device on Apple Silicon.")
-                    .font(.caption).foregroundColor(.secondary)
-            }
-            .padding()
 
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    modelsCard
-                    servicesCard
-                    setupCard
-                }
-                .padding()
+                modelsCard
+                servicesCard
+                setupCard
             }
+            .padding(24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             setup.refreshInstallState()
             monitor.start()
@@ -6642,86 +7913,112 @@ struct ModelSettingsView: View {
     }
 
     private var modelsCard: some View {
-        GroupBox(label: Label("Installed Models", systemImage: "cpu").fontWeight(.medium)) {
-            VStack(alignment: .leading, spacing: 12) {
-                ModelStatusRow(
-                    icon: "waveform",
-                    title: "Parakeet TDT 0.6B v2",
-                    subtitle: "NVIDIA — speech-to-text via parakeet-mlx (MLX-accelerated)",
-                    size: fileSizeText(SetupHelper.parakeetCachePath, fallback: "~1.2 GB"),
-                    installed: setup.parakeetInstalled,
-                    location: SetupHelper.parakeetCachePath.path
-                )
-                Divider()
-                ModelStatusRow(
-                    icon: "brain",
-                    title: "Bonsai-8B Q1_0",
-                    subtitle: "PrismML — 1.125-bit GGUF, served via local llama.cpp",
-                    size: fileSizeText(SetupHelper.bonsaiPath, fallback: "~1.1 GB"),
-                    installed: setup.bonsaiInstalled,
-                    location: SetupHelper.bonsaiPath.path
-                )
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                Text("Installed Models")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
             }
-            .padding(.vertical, 4)
+            .padding(.leading, 2)
+
+            VFCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    ModelStatusRow(
+                        icon: "waveform",
+                        title: "Parakeet TDT 0.6B v2",
+                        subtitle: "NVIDIA — speech-to-text via parakeet-mlx (MLX-accelerated)",
+                        size: fileSizeText(SetupHelper.parakeetCachePath, fallback: "~1.2 GB"),
+                        installed: setup.parakeetInstalled,
+                        location: SetupHelper.parakeetCachePath.path
+                    )
+                    Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                    ModelStatusRow(
+                        icon: "brain",
+                        title: "Bonsai-8B Q1_0",
+                        subtitle: "PrismML — 1.125-bit GGUF, served via local llama.cpp",
+                        size: fileSizeText(SetupHelper.bonsaiPath, fallback: "~1.1 GB"),
+                        installed: setup.bonsaiInstalled,
+                        location: SetupHelper.bonsaiPath.path
+                    )
+                }
+            }
         }
     }
 
     private var servicesCard: some View {
-        GroupBox(label: Label("Services", systemImage: "bolt.horizontal.fill").fontWeight(.medium)) {
-            VStack(alignment: .leading, spacing: 12) {
-                ServiceStatusRow(service: monitor.parakeet,
-                                 endpointLabel: "/tmp/voiceflow_parakeet_daemon.sock",
-                                 requestLabel: "transcriptions")
-                Divider()
-                ServiceStatusRow(service: monitor.llamaServer,
-                                 endpointLabel: monitor.llamaServer.endpoint ?? "",
-                                 requestLabel: "completions")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.horizontal.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                Text("Services")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
             }
-            .padding(.vertical, 4)
+            .padding(.leading, 2)
+
+            VFCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    ServiceStatusRow(service: monitor.parakeet,
+                                     endpointLabel: "/tmp/voiceflow_parakeet_daemon.sock",
+                                     requestLabel: "transcriptions")
+                    Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+                    ServiceStatusRow(service: monitor.llamaServer,
+                                     endpointLabel: monitor.llamaServer.endpoint ?? "",
+                                     requestLabel: "completions")
+                }
+            }
         }
     }
 
     private var setupCard: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+        VFCard {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     if setup.isFullyInstalled {
                         Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                        Text("Both models installed and ready.").font(.callout)
+                        Text("Both models installed and ready.")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.85))
                         Spacer()
                         Button {
                             Task { await setup.runSetup() }
                         } label: {
                             Label("Re-verify", systemImage: "arrow.clockwise")
                         }
+                        .buttonStyle(VFOutlinePillStyle())
                     } else {
                         Button {
                             Task { await setup.runSetup() }
                         } label: {
                             Label(setupButtonLabel, systemImage: "arrow.down.circle.fill")
-                                .frame(minWidth: 140)
                         }
-                        .controlSize(.large)
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(VFFilledPillStyle())
                         .disabled(isInProgress)
                         Spacer()
-                        Text("Total download: ~2.3 GB. One-time.").font(.caption).foregroundColor(.secondary)
+                        Text("Total download: ~2.3 GB. One-time.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.55))
                     }
                 }
 
                 if setup.phase != .idle {
                     if let frac = setup.progressFraction, !setup.isFullyInstalled {
-                        ProgressView(value: frac).progressViewStyle(.linear)
+                        ProgressView(value: frac).progressViewStyle(.linear).tint(.accentColor)
                     } else if isInProgress {
                         ProgressView()
                     }
-                    Text(setup.phaseLabel).font(.caption).foregroundColor(.secondary)
+                    Text(setup.phaseLabel)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
                 }
                 if case .failed(let msg) = setup.phase {
                     Text(msg).font(.caption).foregroundColor(.red)
                 }
             }
-            .padding(.vertical, 4)
         }
     }
 
@@ -6771,23 +8068,27 @@ struct ServiceStatusRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Circle()
-                .fill(service.isAlive ? Color.green : Color.secondary.opacity(0.4))
-                .frame(width: 10, height: 10)
-                .padding(.top, 5)
+                .fill(service.isAlive ? Color.green : Color.white.opacity(0.25))
+                .frame(width: 9, height: 9)
+                .padding(.top, 6)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Text(service.name).fontWeight(.medium)
+                    Text(service.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.9))
                     if service.isAlive, let pid = service.pid {
                         Text("PID \(pid)")
                             .font(.caption2)
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.15))
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Color.white.opacity(0.08))
+                            .foregroundColor(.white.opacity(0.75))
                             .clipShape(Capsule())
                     } else {
                         Text("not running")
                             .font(.caption2)
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.15))
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Color.white.opacity(0.08))
+                            .foregroundColor(.white.opacity(0.55))
                             .clipShape(Capsule())
                     }
                     Spacer()
@@ -6795,7 +8096,7 @@ struct ServiceStatusRow: View {
                 if !endpointLabel.isEmpty {
                     Text(endpointLabel)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.45))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -6818,8 +8119,12 @@ struct StatChip: View {
     let value: String
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(label).font(.caption2).foregroundColor(.secondary)
-            Text(value).font(.system(size: 12, weight: .medium, design: .monospaced))
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.5))
+            Text(value)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.85))
         }
     }
 }
@@ -6835,13 +8140,19 @@ struct ModelStatusRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
-                .foregroundColor(.accentColor)
-                .frame(width: 28)
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(installed ? VF.accentGradient : LinearGradient(colors: [Color.white.opacity(0.1), Color.white.opacity(0.1)], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 34, height: 34)
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(title).fontWeight(.medium)
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.9))
                     if installed {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
@@ -6849,18 +8160,23 @@ struct ModelStatusRow: View {
                     } else {
                         Text("not installed")
                             .font(.caption2)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.2))
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Color.white.opacity(0.08))
+                            .foregroundColor(.white.opacity(0.55))
                             .clipShape(Capsule())
                     }
                     Spacer()
-                    Text(size).font(.caption).foregroundColor(.secondary)
+                    Text(size)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
                 }
-                Text(subtitle).font(.caption).foregroundColor(.secondary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.55))
                 if installed {
                     Text(location)
                         .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.white.opacity(0.35))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }

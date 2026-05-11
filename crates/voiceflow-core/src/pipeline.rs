@@ -966,13 +966,15 @@ impl Pipeline {
             );
         }
 
-        // Build prompt (audio_direct template, no transcript placeholder needed)
+        // Build prompt (audio_direct template, no transcript placeholder needed).
+        // Personal dictionary is injected as a [PERSONAL_DICTIONARY] block so
+        // the prompt's Spelling Resolution section can match against it.
         let prompt_template = self.config.get_prompt_for_context(Some("audio_direct"));
         let prompt = if !self.config.personal_dictionary.is_empty() {
             let dict_str = self.config.personal_dictionary.join(", ");
             prompt_template.replace(
                 "{personal_dictionary}",
-                &format!("\nPersonal vocabulary: {}", dict_str),
+                &format!("\n[PERSONAL_DICTIONARY]\n{}\n", dict_str),
             )
         } else {
             prompt_template.replace("{personal_dictionary}", "")
