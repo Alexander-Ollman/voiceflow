@@ -228,9 +228,15 @@ final class VoiceFlowBridge: ObservableObject {
     /// Format text through the Rust LLM pipeline with real-time token streaming.
     /// Each token is delivered to `onToken` on the main actor as it's generated.
     /// Returns the fully post-processed final text (same as `formatText()`).
+    ///
+    /// Pass `cancellation` to enable mid-stream abort — when cancelled, the
+    /// SSE loop terminates on the next token and llama-server frees its slot.
+    /// This is essential for live re-formatting where new Parakeet partials
+    /// supersede in-flight LLM streams.
     func formatTextStreaming(
         _ text: String,
         context: String?,
+        cancellation: LLMStreamCancellation? = nil,
         onToken: @escaping @MainActor (String) -> Void
     ) async -> String? {
         guard let handle = handle else { return nil }
@@ -238,7 +244,7 @@ final class VoiceFlowBridge: ObservableObject {
         let result: VoiceFlowResult = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 // TokenReceiver bridges the C callback to Swift's main actor
-                let receiver = TokenReceiver(onToken: onToken)
+                let receiver = TokenReceiver(onToken: onToken, cancellation: cancellation)
                 let retainedReceiver = Unmanaged.passRetained(receiver)
                 let userdata = retainedReceiver.toOpaque()
 
@@ -246,8 +252,7 @@ final class VoiceFlowBridge: ObservableObject {
                     guard let tokenPtr = tokenPtr, let ud = ud else { return true }
                     let token = String(cString: tokenPtr)
                     let receiver = Unmanaged<TokenReceiver>.fromOpaque(ud).takeUnretainedValue()
-                    receiver.receive(token)
-                    return true
+                    return receiver.receive(token)
                 }
 
                 let ffiResult = text.withCString { textPtr in
@@ -300,8 +305,12 @@ final class VoiceFlowBridge: ObservableObject {
                 }
             }
 
-            // Start Qwen3-ASR daemon if needed (consolidated mode or external STT, but NOT audio-direct)
-            let needsDaemon = !audioDirect && (consolidatedMode || externalStt)
+            // Start Qwen3-ASR daemon if needed (consolidated mode or external STT, but NOT audio-direct).
+            // Skip entirely when Parakeet is the active Swift-side STT — Parakeet handles transcription
+            // through its own daemon (parakeet_asr_daemon); the Rust pipeline only does LLM formatting,
+            // so the qwen daemon would just idle on ~750MB of RAM loading a model we never call.
+            let parakeetActive = ProcessInfo.processInfo.environment["VOICEFLOW_USE_PARAKEET"] != "0"
+            let needsDaemon = !audioDirect && !parakeetActive && (consolidatedMode || externalStt)
             if needsDaemon {
                 self.asrEngine = Qwen3ASREngine()
 
@@ -574,23 +583,53 @@ final class VoiceFlowBridge: ObservableObject {
     }
 }
 
+/// Cancellation handle for a `formatTextStreaming` call. The caller can
+/// `cancel()` at any time; the next token from llama-server triggers a `false`
+/// return from the C callback, which the SSE reader in voiceflow-core checks
+/// to break its read loop. The HTTP body closes, llama-server frees the slot.
+///
+/// Used to abort an in-flight Bonsai stream when a fresher Parakeet partial
+/// arrives during live re-formatting — otherwise the single llama-server slot
+/// would backlog with stale generations.
+final class LLMStreamCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+}
+
 /// Bridges C token callbacks (on background thread) to Swift's MainActor.
 /// Retained via Unmanaged during the FFI call lifetime.
 private final class TokenReceiver: @unchecked Sendable {
     private let onToken: @MainActor (String) -> Void
+    private let cancellation: LLMStreamCancellation?
 
-    init(onToken: @escaping @MainActor (String) -> Void) {
+    init(onToken: @escaping @MainActor (String) -> Void,
+         cancellation: LLMStreamCancellation? = nil) {
         self.onToken = onToken
+        self.cancellation = cancellation
     }
 
-    func receive(_ token: String) {
+    /// Returns `false` if the caller has cancelled, telling the C side to
+    /// break the SSE loop and close the connection.
+    func receive(_ token: String) -> Bool {
+        if cancellation?.isCancelled == true { return false }
         let callback = self.onToken
         DispatchQueue.main.async {
-            // We're on main thread now, safe to call @MainActor closure
-            // Use assumeIsolated to satisfy the compiler
             MainActor.assumeIsolated {
                 callback(token)
             }
         }
+        return true
     }
 }
