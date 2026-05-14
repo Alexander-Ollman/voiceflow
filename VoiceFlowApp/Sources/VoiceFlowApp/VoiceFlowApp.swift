@@ -1857,6 +1857,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.environment["VOICEFLOW_USE_PARAKEET"] != "0"
     }
 
+    // Live partial transcription via the parakeet daemon's stream_* protocol.
+    // Display-only — final transcript still comes from batch parakeetEngine.transcribe()
+    // because parakeet-tdt-0.6b-v2 is offline-trained (streaming WER degrades at short chunks).
+    var parakeetStreamingEngine = ParakeetStreamingEngine()
+    private enum ActiveStreamingEngine { case none, moonshine, parakeet }
+    private var activeStreamingEngine: ActiveStreamingEngine = .none
+
+    // Accumulates LLM tokens during a streaming format call so the expanded
+    // overlay can render them as they arrive (see stopRecordingAndPaste).
+    private var streamingFormattedText: String = ""
+
+    // Live LLM re-formatting state — refresh-mode with queue + anti-flicker.
+    //
+    // Approach: every time Parakeet's $partialText (finalized + draft)
+    // updates, send the FULL partial-so-far to Bonsai. Bonsai sees a
+    // complete-looking sentence each time, so it formats cleanly (the
+    // earlier "fragment delta" approach made Bonsai mis-capitalize and
+    // mis-punctuate each tiny piece). If a newer partial arrives while
+    // Bonsai is still generating, record latestPartial; when the current
+    // stream completes, kick off again for the latest. No mid-stream
+    // cancellation — we always let a generation finish so its tokens
+    // aren't wasted.
+    //
+    // Anti-flicker: popup shows max-by-length(stableText, tentativeText).
+    // While a new generation streams in, the popup keeps showing the
+    // PRIOR completed format until the new tokens exceed it in length.
+    // Text only ever grows — no "reset to empty" between cycles.
+    //
+    //   liveFormatCancellation: in-flight stream's abort handle (used on
+    //     release so the batch final-pass doesn't queue behind us).
+    //   liveFormatBusy: a Bonsai stream is currently generating.
+    //   latestPartial: most recent Parakeet partial seen by the sink.
+    //   lastFormattedSnapshot: snapshot we sent to Bonsai for the last/
+    //     in-flight run (dedupe — skip if latest hasn't changed).
+    //   stableText: last completed Bonsai output (the "settled" view).
+    //   tentativeText: in-flight Bonsai output as it streams in.
+    //   liveFormatContext: cached at recording start. Identical bytes go
+    //     to llama-server every request so its prefix-cache hits after
+    //     the first prefill (pre-warmed at recording start).
+    private var liveFormatCancellation: LLMStreamCancellation?
+    private var liveFormatBusy: Bool = false
+    private var latestPartial: String = ""
+    private var lastFormattedSnapshot: String = ""
+    private var stableText: String = ""
+    private var tentativeText: String = ""
+    private var liveFormatContext: String = ""
+
     // llama-server (Bonsai) lifecycle. Spawns the PrismML llama-server fork on
     // launch with our chosen context size, monitors, and shuts down on exit.
     // Autostarts by default (Bonsai is the shipped LLM); suppressible via
@@ -1913,11 +1960,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // User preference for streaming transcription (Beta)
-    var streamingEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "streamingEnabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "streamingEnabled") }
-    }
+    // Streaming is force-disabled in 2.0.1+ — the live overlay was a flawed
+    // UX (Parakeet's streaming WER drifts mid-utterance while Bonsai chases
+    // a moving target, so the popup showed retracted/wrong text). The
+    // implementation code (ParakeetStreamingEngine, live re-format helpers)
+    // is kept in the codebase but unreachable via the always-false getter,
+    // so it can be re-enabled later once we swap in a streaming-native STT.
+    var streamingEnabled: Bool { false }
 
     var streamingModelSize: MoonshineStreamingEngine.StreamingModelSize {
         get {
@@ -2767,6 +2816,212 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Build the LLM formatting context once, using whatever's currently
+    /// focused. Cached at recording start so every live re-format pass uses
+    /// the same context (the user is holding a hotkey, the focus doesn't
+    /// shift during recording, and AX cursor lookups are expensive enough
+    /// to want to skip per-chunk). Mirrors the context-assembly logic in
+    /// stopRecordingAndPaste — kept inline rather than extracted to avoid
+    /// regressing the well-tested release path.
+    private func buildLiveFormatContext() -> String {
+        let frontmostApp = NSWorkspace.shared.frontmostApplication
+        let _ = frontmostApp.flatMap { AppProfileManager.shared.ensureProfile(for: $0) }
+        let appPrompt = AppProfileManager.shared.promptForApp(frontmostApp)
+        let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
+        let vocabBlock = VocabularyContext.block(for: frontmostApp, inputFieldText: inputFieldText)
+
+        let terminalBundleIds: Set<String> = [
+            "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty",
+            "dev.warp.Warp-Stable", "io.alacritty", "com.github.wez.wezterm", "net.kovidgoyal.kitty",
+        ]
+        let isTerminal = terminalBundleIds.contains(frontmostApp?.bundleIdentifier ?? "")
+        let isMidSentence: Bool
+        if isTerminal {
+            let lastOutput = self.lastPastedText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            isMidSentence = lastOutput.last != nil && !".?!".contains(String(lastOutput.last!))
+        } else if let inputText = inputFieldText, !inputText.isEmpty {
+            let lastChar = inputText.trimmingCharacters(in: .whitespacesAndNewlines).last
+            isMidSentence = lastChar != nil && !".?!".contains(String(lastChar!))
+        } else {
+            isMidSentence = false
+        }
+        let isEmptyField = inputFieldText == nil || (inputFieldText?.isEmpty ?? true)
+
+        var context = formattingLevel.systemPrompt + appPrompt + vocabBlock
+        if let inputText = inputFieldText, !inputText.isEmpty {
+            context += """
+
+            [INPUT CONTEXT]
+            Text already in the input field (before the cursor):
+            \(inputText)
+            You are CONTINUING from this text. Rules:
+            - Do NOT repeat or rewrite any of the existing text.
+            - If the existing text ends mid-sentence (no final . ? ! or newline), your output must seamlessly continue the sentence. Do NOT capitalize your first word (unless it is "I" or a proper noun). Do NOT add a period at the end unless the thought is truly complete.
+            - If the existing text ends with sentence-ending punctuation (. ? !) or a newline, start a new sentence with a capital letter.
+            - Your output should read as a natural continuation — as if the existing text and your output were written together.
+            """
+        }
+        if isMidSentence {
+            context += "\n[MID_SENTENCE_CONTINUATION]"
+        }
+        if isEmptyField {
+            context += """
+
+            [EMPTY_FIELD]
+            The input field is empty. This may be a form field (name, email, address, zip code, etc.).
+            Do NOT add a trailing period unless the user's speech clearly forms a complete sentence.
+            For short entries (names, single words, codes, numbers), output them WITHOUT trailing punctuation.
+            """
+        }
+        let correctionHint = CorrectionManager.shared.correctionContext(for: "")
+        if !correctionHint.isEmpty {
+            context += correctionHint
+        }
+        return context
+    }
+
+    /// Cancel any in-flight live LLM stream. Safe to call multiple times.
+    /// Used on release so the batch final-pass doesn't queue behind us.
+    private func cancelLiveFormat() {
+        NSLog("[LiveFormat] cancel — stable='%@' tentative='%@' (busy=%@, latest=%d)",
+              stableText as CVarArg,
+              tentativeText as CVarArg,
+              liveFormatBusy ? "yes" : "no",
+              latestPartial.count)
+        liveFormatCancellation?.cancel()
+        liveFormatCancellation = nil
+        liveFormatBusy = false
+        latestPartial = ""
+        lastFormattedSnapshot = ""
+        stableText = ""
+        tentativeText = ""
+    }
+
+    /// Update the popup. Anti-flicker rule: show whichever of stable/
+    /// tentative is LONGER. Stable is the last completed Bonsai output;
+    /// tentative is the current in-flight one. While tentative is growing
+    /// from 0 toward stable's length, the user keeps seeing stable. Once
+    /// tentative passes stable's length (i.e., new content surpasses the
+    /// previous format), we switch to tentative. Text only ever grows.
+    private func renderLivePopup() {
+        let displayed = tentativeText.count >= stableText.count ? tentativeText : stableText
+        overlayState.state = .streaming(displayed)
+    }
+
+    /// New Parakeet partial arrived. Record it and kick off Bonsai if we
+    /// aren't already generating; otherwise the snapshot-on-completion
+    /// path picks it up automatically.
+    private func onParakeetPartialUpdate(_ partial: String) {
+        guard isStreamingActive,
+              activeStreamingEngine == .parakeet else { return }
+        let trimmed = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        latestPartial = trimmed
+        NSLog("[LiveFormat] parakeet partial: %d chars (busy=%@) '%@'",
+              trimmed.count, liveFormatBusy ? "yes" : "no",
+              trimmed.prefix(80) as CVarArg)
+        if !liveFormatBusy {
+            kickOffNextRefresh()
+        }
+    }
+
+    /// Submit the latest partial to Bonsai for a full re-format. Tokens
+    /// stream into tentativeText; popup uses renderLivePopup() to choose
+    /// between stable/tentative. On completion, tentative gets promoted
+    /// to stable; if a newer partial arrived during the stream, fire
+    /// again immediately.
+    private func kickOffNextRefresh() {
+        guard isStreamingActive,
+              activeStreamingEngine == .parakeet else { return }
+        guard !latestPartial.isEmpty else { return }
+        let snapshot = latestPartial
+        // Dedupe: no point re-running on the same input.
+        guard snapshot != lastFormattedSnapshot else { return }
+        lastFormattedSnapshot = snapshot
+        liveFormatBusy = true
+        tentativeText = ""
+        let cancellation = LLMStreamCancellation()
+        liveFormatCancellation = cancellation
+        let ctx = liveFormatContext
+
+        NSLog("[LiveFormat] Bonsai REQUEST snapshot=%d chars '%@' ctxLen=%d (stable=%d chars)",
+              snapshot.count, snapshot.prefix(80) as CVarArg,
+              ctx.count, stableText.count)
+
+        let chunkStart = Date()
+        let bridge = voiceFlow
+        Task { [weak self] in
+            var tokenCount = 0
+            _ = await bridge.formatTextStreaming(
+                snapshot,
+                context: ctx,
+                cancellation: cancellation,
+                onToken: { [weak self] token in
+                    guard let self = self,
+                          self.isStreamingActive,
+                          self.activeStreamingEngine == .parakeet else { return }
+                    tokenCount += 1
+                    self.tentativeText += token
+                    self.renderLivePopup()
+                }
+            )
+            let elapsed = Date().timeIntervalSince(chunkStart) * 1000
+            await MainActor.run {
+                guard let self = self else { return }
+                NSLog("[LiveFormat] Bonsai RESPONSE tokens=%d elapsed=%.0fms tentative='%@'",
+                      tokenCount, elapsed,
+                      self.tentativeText.prefix(120) as CVarArg)
+                // Atomic swap: only promote tentative→stable if we got
+                // any tokens; otherwise (cancelled, error) keep stable.
+                if !self.tentativeText.isEmpty {
+                    self.stableText = self.tentativeText
+                }
+                self.tentativeText = ""
+                self.liveFormatBusy = false
+                self.renderLivePopup()
+                // Queue: if Parakeet pushed a newer partial during the
+                // stream, fire again for the latest. Single-flight loop —
+                // never more than one Bonsai request in flight at a time.
+                if self.isStreamingActive,
+                   self.activeStreamingEngine == .parakeet,
+                   self.latestPartial != self.lastFormattedSnapshot {
+                    NSLog("[LiveFormat] queue advance — latest=%d snapshot=%d",
+                          self.latestPartial.count, self.lastFormattedSnapshot.count)
+                    self.kickOffNextRefresh()
+                }
+            }
+        }
+    }
+
+    /// Pre-fill llama-server's prefix cache with the live-format context
+    /// so the first real request doesn't pay 4-5s of cold prefill. The
+    /// dummy user message is irrelevant; what matters is that the context
+    /// tokens (identical to every subsequent real request) end up cached.
+    /// Cancel after the first token — we only care about prefill, not
+    /// output. Fire-and-forget.
+    private func preWarmBonsaiCache() {
+        let ctx = liveFormatContext
+        guard !ctx.isEmpty else { return }
+        let bridge = voiceFlow
+        let cancellation = LLMStreamCancellation()
+        NSLog("[LiveFormat] pre-warming Bonsai cache (ctxLen=%d)", ctx.count)
+        let start = Date()
+        Task {
+            _ = await bridge.formatTextStreaming(
+                ".",
+                context: ctx,
+                cancellation: cancellation,
+                onToken: { _ in
+                    // Prefill is done by the time the first token arrives;
+                    // we can bail. Strong capture so the flag survives.
+                    cancellation.cancel()
+                }
+            )
+            let elapsed = Date().timeIntervalSince(start) * 1000
+            NSLog("[LiveFormat] pre-warm complete in %.0fms", elapsed)
+        }
+    }
+
     private func startRecording() {
         guard !isRecording else { return }
 
@@ -2775,79 +3030,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isRecording = true
             recordingMenuItem?.title = "Recording... (release ⌥ Space)"
 
-            // If streaming is enabled and model is loaded, start streaming session
-            // (not applicable in audio-direct mode — audio goes directly to Gemma 4 on stop)
-            if streamingEnabled && moonshineEngine.isLoaded && !voiceFlow.isAudioDirect {
+            // If streaming is enabled and an engine is ready, start a streaming
+            // session. Skipped in audio-direct mode (audio goes straight to
+            // the multimodal LLM on stop). Engine selection:
+            //   - useParakeet: live partials come from parakeet_asr_daemon's
+            //     stream_* protocol; final transcript still uses batch transcribe.
+            //   - !useParakeet: legacy Moonshine streaming engine.
+            let parakeetStreamingReady = useParakeet
+                && streamingEnabled
+                && parakeetEngine.state == .ready
+                && !voiceFlow.isAudioDirect
+            let moonshineStreamingReady = !useParakeet
+                && streamingEnabled
+                && moonshineEngine.isLoaded
+                && !voiceFlow.isAudioDirect
+
+            if parakeetStreamingReady || moonshineStreamingReady {
                 do {
-                    // Capture cursor position and target app before starting session
-                    dictationStartPosition = CursorContext.getCursorPosition()
+                    // Streaming always uses the overlay (waveform card). Direct
+                    // typing into the focused field is disabled — Parakeet's
+                    // finalized-token commit boundary lags short utterances and
+                    // the draft-revision churn looks broken when typed live.
+                    // On release, batch transcribe → Bonsai → paste into the
+                    // focused field, same as the non-streaming flow.
+                    dictationStartPosition = nil
                     dictationInsertedLength = 0
                     lastStreamedText = ""
                     dictationTargetApp = NSWorkspace.shared.frontmostApplication
-                    directTypingActive = (dictationStartPosition != nil)
+                    directTypingActive = false
 
-                    NSLog("[VoiceFlow] Direct typing: %@, cursor position: %@",
-                          directTypingActive ? "active" : "inactive",
-                          dictationStartPosition.map { String($0) } ?? "nil")
+                    let audioSink: ([Float]) -> Void
 
-                    try moonshineEngine.beginSession()
-                    isStreamingActive = true
-
-                    // Wire audio chunks to streaming engine
-                    // Audio chunks arrive from the audio tap thread — dispatch to main actor
-                    let engine = moonshineEngine
-                    audioRecorder.onAudioChunk = { chunk in
-                        Task { @MainActor in
-                            engine.feedAudioChunk(chunk)
+                    if parakeetStreamingReady {
+                        try parakeetStreamingEngine.beginSession()
+                        activeStreamingEngine = .parakeet
+                        let engine = parakeetStreamingEngine
+                        audioSink = { chunk in
+                            Task { @MainActor in
+                                engine.feedAudioChunk(chunk)
+                            }
                         }
+                        // Cache the formatting context once for the whole
+                        // recording. Identical bytes go to llama-server on
+                        // every refresh — its prefix-cache hits after the
+                        // pre-warm below, dropping subsequent prefill from
+                        // ~4s to ~200ms.
+                        liveFormatContext = buildLiveFormatContext()
+                        liveFormatCancellation = nil
+                        liveFormatBusy = false
+                        latestPartial = ""
+                        lastFormattedSnapshot = ""
+                        stableText = ""
+                        tentativeText = ""
+                        NSLog("[LiveFormat] session start — base ctx %d chars, prompt-tail='%@'",
+                              liveFormatContext.count,
+                              liveFormatContext.suffix(200) as CVarArg)
+                        // Fire-and-forget warmup: prefill happens while the
+                        // user is still pressing the hotkey/saying their
+                        // first words, so the first real partial doesn't
+                        // pay cold-prefill latency.
+                        preWarmBonsaiCache()
+                        NSLog("[VoiceFlow] Streaming session started (Parakeet)")
+                    } else {
+                        try moonshineEngine.beginSession()
+                        activeStreamingEngine = .moonshine
+                        let engine = moonshineEngine
+                        audioSink = { chunk in
+                            Task { @MainActor in
+                                engine.feedAudioChunk(chunk)
+                            }
+                        }
+                        NSLog("[VoiceFlow] Streaming session started (Moonshine)")
                     }
 
-                    // Subscribe to partial text updates
-                    streamingTextCancellable = moonshineEngine.$partialText
-                        .receive(on: DispatchQueue.main)
-                        .sink { [weak self] text in
-                            guard let self = self, self.isStreamingActive else { return }
-                            let displayText = CorrectionManager.shared.applyStoredCorrections(text)
+                    isStreamingActive = true
+                    audioRecorder.onAudioChunk = audioSink
 
-                            // Safety: verify focus hasn't changed
-                            if self.directTypingActive {
-                                if NSWorkspace.shared.frontmostApplication?.processIdentifier
-                                    != self.dictationTargetApp?.processIdentifier {
-                                    NSLog("[VoiceFlow] Focus changed during dictation, falling back to overlay")
-                                    self.directTypingActive = false
-                                    self.showOverlay(state: .streaming(displayText))
-                                }
+                    // Parakeet branch: every Parakeet partial (finalized+draft)
+                    // triggers a Bonsai refresh on the FULL transcript so far.
+                    // Refresh-mode + queue keeps Bonsai seeing a complete-
+                    // looking sentence (no fragment artifacts), and the
+                    // anti-flicker render rule prevents reset-to-empty
+                    // between cycles. Sinking $partialText (not
+                    // $finalizedText) guarantees popup motion even when
+                    // Parakeet's right-context never settles.
+                    // Moonshine branch: legacy behavior — Moonshine's partial
+                    // text IS the display (no LLM in-loop during recording).
+                    if parakeetStreamingReady {
+                        streamingTextCancellable = parakeetStreamingEngine.$partialText
+                            .receive(on: DispatchQueue.main)
+                            .sink { [weak self] partial in
+                                guard let self = self, self.isStreamingActive else { return }
+                                self.onParakeetPartialUpdate(partial)
                             }
-
-                            if self.directTypingActive {
-                                let (deleteCount, insertText) = Self.computeStreamingDiff(
-                                    previous: self.lastStreamedText, current: displayText)
-                                if deleteCount > 0 {
-                                    self.deleteBackward(count: deleteCount)
-                                    self.dictationInsertedLength -= deleteCount
-                                }
-                                if !insertText.isEmpty {
-                                    self.typeUnicodeText(insertText)
-                                    self.dictationInsertedLength += insertText.count
-                                }
-                                self.lastStreamedText = displayText
-                            } else {
+                    } else {
+                        streamingTextCancellable = moonshineEngine.$partialText
+                            .receive(on: DispatchQueue.main)
+                            .sink { [weak self] text in
+                                guard let self = self, self.isStreamingActive else { return }
+                                let displayText = CorrectionManager.shared.applyStoredCorrections(text)
                                 self.overlayState.state = .streaming(displayText)
                             }
-                        }
+                    }
 
-                    // Show recording pill when direct typing (text goes to field),
-                    // or streaming overlay when falling back
-                    showOverlay(state: directTypingActive ? .recording : .streaming(""))
+                    showOverlay(state: .streaming(""))
                 } catch {
                     NSLog("[VoiceFlow] Streaming session failed to start, falling back to normal: %@", error.localizedDescription)
                     isStreamingActive = false
+                    activeStreamingEngine = .none
                     directTypingActive = false
                     audioRecorder.onAudioChunk = nil
                     showOverlay(state: .recording)
                 }
             } else {
                 isStreamingActive = false
+                activeStreamingEngine = .none
                 directTypingActive = false
                 showOverlay(state: .recording)
             }
@@ -2895,6 +3192,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         streamingTextCancellable = nil
         audioRecorder.onAudioChunk = nil
 
+        // Cancel any in-flight live Bonsai re-format. Its output is throwaway
+        // anyway — the final paste comes from the batch transcribe+format
+        // below — and freeing the llama-server slot lets that final pass
+        // start immediately instead of queueing behind a stale generation.
+        cancelLiveFormat()
+
         let wasStreaming = isStreamingActive
         let wasDirectTyping = directTypingActive
         let insertedLength = dictationInsertedLength
@@ -2912,19 +3215,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isRecording = false
         recordingMenuItem?.title = "Hold ⌥ Space to Record"
 
-        // Streaming path: get raw transcript from engine, then format deterministically
+        // Streaming path: get raw transcript from engine, then format deterministically.
+        // Parakeet streaming output is display-only — final transcript comes from
+        // a batch transcribe of the full audio buffer (offline WER ~6%). Moonshine
+        // streaming output IS the final transcript (no separate batch path).
         if wasStreaming {
-            let rawTranscript = moonshineEngine.endSession()
-
-            guard !rawTranscript.isEmpty else {
-                if wasDirectTyping && insertedLength > 0 {
-                    // Clean up any partial text that was typed
-                    deleteBackward(count: insertedLength)
-                }
-                hideOverlay()
-                showNotification(title: "No Speech", body: "No speech was detected")
-                return
-            }
+            let endedEngine = activeStreamingEngine
+            activeStreamingEngine = .none
 
             // Streaming-release: tokens come back too fast on a fast LLM for the
             // word-by-word bar to be readable, so just show the simple processing
@@ -2958,6 +3255,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             Task {
+                // Obtain the raw transcript.
+                //   Parakeet: streaming output is display-only; re-transcribe
+                //   the full audio buffer in batch mode for offline-quality output.
+                //   Moonshine: the streamed output IS the final transcript.
+                let rawTranscript: String
+                let sttEngineId: String
+                switch endedEngine {
+                case .parakeet:
+                    parakeetStreamingEngine.endSession()
+                    rawTranscript = (await parakeetEngine.transcribe(audio: audio)) ?? ""
+                    sttEngineId = "parakeet-streaming"
+                case .moonshine:
+                    rawTranscript = moonshineEngine.endSession()
+                    sttEngineId = "moonshine-streaming"
+                case .none:
+                    rawTranscript = ""
+                    sttEngineId = "streaming"
+                }
+                NSLog("[LiveFormat] release — sttEngine=%@ rawTranscript='%@' (%d chars)",
+                      sttEngineId, rawTranscript as CVarArg, rawTranscript.count)
+
+                guard !rawTranscript.isEmpty else {
+                    if wasDirectTyping && insertedLength > 0 {
+                        self.deleteBackward(count: insertedLength)
+                    }
+                    self.hideOverlay()
+                    self.showNotification(title: "No Speech", body: "No speech was detected")
+                    return
+                }
+
                 var context = baseContext
                 if let inputText = inputFieldText, !inputText.isEmpty {
                     context += """
@@ -2993,13 +3320,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     context += correctionHint
                 }
 
-                // Format raw streaming transcript through LLM with token streaming.
-                // Token callback is a no-op visually — UI stays in .processing until done.
+                // Format raw transcript through LLM with token streaming.
+                // showOverlay (not bare state assignment) resizes the NSPanel
+                // from the .processing pill (200×70) to the .formatting card
+                // (420×tall); without it, the streaming text renders inside
+                // the small pill frame and looks like one chunk on completion.
                 NSLog("[VoiceFlow] Streaming: formatting raw transcript (%d chars) via LLM (streaming)", rawTranscript.count)
                 NSLog("[VoiceFlow] LLM input: %@", rawTranscript)
+                self.streamingFormattedText = ""
+                self.showOverlay(state: .formatting(""))
                 if let formattedText = await voiceFlow.formatTextStreaming(
                     rawTranscript, context: context,
-                    onToken: { _ in }
+                    onToken: { [weak self] token in
+                        guard let self = self else { return }
+                        self.streamingFormattedText += token
+                        // Panel is already sized; just update the text state.
+                        self.overlayState.state = .formatting(self.streamingFormattedText)
+                    }
                 ) {
                     NSLog("[VoiceFlow] LLM output: %@", formattedText)
                     // Apply snippet expansion
@@ -3065,9 +3402,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let logEntry = TranscriptionEntry(
                         rawTranscript: rawTranscript,
                         formattedText: spacedText.trimmingCharacters(in: .whitespaces),
-                        modelId: "moonshine-streaming",
-                        sttEngine: "moonshine-streaming",
-                        transcriptionMs: 0,  // streaming — no separate STT phase
+                        modelId: sttEngineId,
+                        sttEngine: sttEngineId,
+                        transcriptionMs: 0,
                         llmMs: 0,
                         totalMs: 0,
                         targetApp: frontApp
