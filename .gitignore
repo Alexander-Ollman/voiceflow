@@ -32,3 +32,4 @@ config/local.toml
 # Tool / scratch
 .claude/
 test_llama/
+.vercel
