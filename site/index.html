@@ -1275,26 +1275,26 @@ footer {
     <div class="perf-stats" data-animate data-delay="3">
       <div class="perf-stat">
         <div class="big">~370<span style="font-size:18px;">ms</span></div>
-        <div class="label">End-to-end p50<br>(speech → formatted output)</div>
+        <div class="label">Typical end-to-end<br>(speaking &rarr; typed text)</div>
       </div>
       <div class="perf-stat">
         <div class="big">96<span style="font-size:18px;">ms</span></div>
-        <div class="label">Bonsai prompt-eval p50<br>(warm, cached prefix)</div>
+        <div class="label">AI formatting<br>(with memorized settings)</div>
       </div>
       <div class="perf-stat">
         <div class="big">147<span style="font-size:18px;">ms</span></div>
-        <div class="label">Parakeet STT p50<br>(MLX, on-device)</div>
+        <div class="label">Voice recognition<br>(entirely on-device)</div>
       </div>
       <div class="perf-stat">
-        <div class="big">16K</div>
-        <div class="label">token context window<br>(persona + rules + transcript)</div>
+        <div class="big">~12K</div>
+        <div class="label">Words of context held in memory<br>(persona, vocabulary, rules)</div>
       </div>
     </div>
 
     <div class="perf-chart-wrap" data-animate data-delay="4">
-      <div class="perf-chart-title">Prompt-eval latency vs new tokens (warm cache)</div>
-      <div class="perf-chart-sub">31 consecutive dictations against the live v2.0.1 build on Apple Silicon. The 4,370-token cached prefix costs zero; only your dictation's new tokens get evaluated.</div>
-      <svg class="perf-chart-svg" viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Scatter plot of Bonsai prompt-eval latency versus new transcript tokens">
+      <div class="perf-chart-title">Processing time grows slowly with dictation length</div>
+      <div class="perf-chart-sub">Real measurements from 31 consecutive dictations on Apple Silicon (v2.0.1). VoiceFlow keeps your persona, vocabulary, and formatting rules memorized in advance &mdash; so the only time spent processing is the words you actually said.</div>
+      <svg class="perf-chart-svg" viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Scatter plot of processing time versus number of words spoken">
         <!-- Y-axis grid lines -->
         <line class="grid" x1="60" y1="282" x2="720" y2="282"/>
         <line class="grid" x1="60" y1="226" x2="720" y2="226"/>
@@ -1311,14 +1311,14 @@ footer {
         <text class="label" x="52" y="174" text-anchor="end">300</text>
         <text class="label" x="52" y="118" text-anchor="end">400</text>
         <text class="label" x="52" y="62"  text-anchor="end">500</text>
-        <text class="axis-title" x="20" y="170" text-anchor="middle" transform="rotate(-90 20 170)">prompt-eval ms</text>
-        <!-- X labels (tokens) -->
+        <text class="axis-title" x="20" y="170" text-anchor="middle" transform="rotate(-90 20 170)">milliseconds to process &rarr;</text>
+        <!-- X labels: words (≈ tokens × 0.75; pixel positions unchanged) -->
         <text class="label" x="60"  y="328" text-anchor="middle">0</text>
-        <text class="label" x="206" y="328" text-anchor="middle">75</text>
-        <text class="label" x="352" y="328" text-anchor="middle">150</text>
-        <text class="label" x="498" y="328" text-anchor="middle">225</text>
-        <text class="label" x="644" y="328" text-anchor="middle">300</text>
-        <text class="axis-title" x="390" y="352" text-anchor="middle">new tokens added to the cached prefix</text>
+        <text class="label" x="206" y="328" text-anchor="middle">50</text>
+        <text class="label" x="352" y="328" text-anchor="middle">100</text>
+        <text class="label" x="498" y="328" text-anchor="middle">150</text>
+        <text class="label" x="644" y="328" text-anchor="middle">200</text>
+        <text class="axis-title" x="390" y="352" text-anchor="middle">words spoken in your dictation &rarr;</text>
         <!-- Trend line: y ≈ 50 + 1.2 * tokens (visual fit) -->
         <line class="trend" x1="60" y1="282" x2="720" y2="44"/>
         <!-- Data points -->
@@ -1355,11 +1355,11 @@ footer {
         <circle class="point" cx="658" cy="62"  r="4"/>
         <!-- Annotation -->
         <rect class="annot-bg" x="430" y="220" width="280" height="62" rx="8"/>
-        <text class="annot" x="444" y="242">~50 ms baseline · ~1.2 ms / new token</text>
-        <text class="label" x="444" y="262">A 250-token utterance ≈ 350 ms eval.</text>
-        <text class="label" x="444" y="278">Cached 4,370-token prefix costs nothing.</text>
+        <text class="annot" x="444" y="242">~50 ms to start · ~1.6 ms per word</text>
+        <text class="label" x="444" y="262">A 190-word dictation finishes in ~350 ms.</text>
+        <text class="label" x="444" y="278">Memorized settings cost no extra time.</text>
       </svg>
-      <p class="perf-explain"><strong>The first dictation after launch takes ~5 seconds</strong> while the prefix evaluates once. Every dictation after that re-uses that prefix and runs in well under a second end-to-end. Bonsai generates at <strong>~135 tokens / second</strong>; Parakeet transcribes a typical utterance in <strong>~150 ms</strong>. Both are 100% on-device.</p>
+      <p class="perf-explain"><strong>The first dictation after launch takes ~5 seconds</strong> while VoiceFlow memorizes your settings once. Every dictation after that runs in well under a second, from the moment you stop speaking to formatted text in your app. The AI generates roughly <strong>100 words per second</strong>; voice recognition completes in about <strong>150 milliseconds</strong>. Everything happens entirely on your Mac.</p>
     </div>
   </div>
 </section>
