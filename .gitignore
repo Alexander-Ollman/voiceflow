@@ -33,3 +33,4 @@ config/local.toml
 .claude/
 test_llama/
 .vercel
+.env*.local
