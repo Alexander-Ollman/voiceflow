@@ -870,40 +870,33 @@ footer {
   padding: 120px 0;
   background: var(--bg);
 }
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 32px;
+.settings-hero {
   margin-top: 56px;
-}
-.settings-tile {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg);
 }
-.settings-tile-img {
+.settings-hero-img {
   width: 100%;
   display: block;
   background: var(--bg-alt);
-  aspect-ratio: 16 / 10;
-  object-fit: cover;
-  object-position: top center;
 }
-.settings-tile-body {
-  padding: 24px 28px 28px;
+.settings-hero-body {
+  padding: 32px 40px 36px;
+  border-top: 1px solid var(--border);
 }
-.settings-tile h3 {
-  font-size: 18px;
+.settings-hero-body h3 {
+  font-size: 20px;
   font-weight: 700;
   color: var(--text);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
-.settings-tile p {
-  font-size: 14px;
+.settings-hero-body p {
+  font-size: 15px;
   color: var(--text-2);
-  line-height: 1.6;
+  line-height: 1.65;
 }
 
 /* ============================================================
@@ -912,7 +905,7 @@ footer {
 @media (max-width: 900px) {
   .metrics-grid { grid-template-columns: repeat(2, 1fr); gap: 24px; }
   .perf-stats   { grid-template-columns: repeat(2, 1fr); gap: 16px; }
-  .settings-grid { grid-template-columns: 1fr; gap: 24px; }
+  .settings-hero-body { padding: 24px 24px 28px; }
   .features-grid { grid-template-columns: 1fr; }
   .showcase-layout { grid-template-columns: 1fr; gap: 48px; }
   .showcase-layout.reverse { direction: ltr; }
@@ -1451,23 +1444,14 @@ footer {
       <svg viewBox="0 0 16 16" fill="currentColor"><path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"/></svg>
       Redesigned in v2.0
     </div>
-    <h2 class="section-title" data-animate data-delay="1">Every setting, every persona,<br>at a glance</h2>
-    <p class="section-subtitle" data-animate data-delay="2">VoiceFlow v2.0 ships a complete settings rebuild on a new "Liquid Glass" design system, paired with the Parakeet + Bonsai model defaults. A dashboard tracks your dictation activity, app usage, and streaks. Personas now carry vocabulary lists you edit with a chip-style tag picker, biasing the LLM's spelling on the words and proper nouns you actually use.</p>
+    <h2 class="section-title" data-animate data-delay="1">Every dictation, every&nbsp;day,<br>at a glance</h2>
+    <p class="section-subtitle" data-animate data-delay="2">VoiceFlow v2.0 ships a complete settings rebuild on a new "Liquid Glass" design system, paired with the Parakeet + Bonsai model defaults. The new Insights dashboard tracks your dictation pace, the apps you dictate into most, and your daily activity streak. Personas carry editable vocabulary lists that bias the LLM toward your domain terms &mdash; everything is computed and stored on-device.</p>
 
-    <div class="settings-grid">
-      <div class="settings-tile" data-animate data-delay="3">
-        <img src="img/settings-dashboard.png" alt="VoiceFlow dashboard with speed gauge, app usage bars, and activity heatmap" class="settings-tile-img">
-        <div class="settings-tile-body">
-          <h3>Dashboard with activity & speed</h3>
-          <p>A smile-shaped speed gauge labels your dictation pace as <em>Steady</em>, <em>Fast</em>, or <em>Top</em>. Per-app bars show where you dictate most. A GitHub-style heatmap tracks streaks. Plus an estimate of time saved vs typing at 40 wpm.</p>
-        </div>
-      </div>
-      <div class="settings-tile" data-animate data-delay="4">
-        <img src="img/settings-personas.png" alt="Persona editor with a tag-style vocabulary chip list" class="settings-tile-img">
-        <div class="settings-tile-body">
-          <h3>Personas with vocabulary lists</h3>
-          <p>Every persona carries a list of terms VoiceFlow biases the LLM toward. Built-in personas come seeded — Software Engineer ships with <code>kubectl</code>, <code>Postgres</code>, <code>Terraform</code>, <code>gRPC</code> and more. Add your own with one click.</p>
-        </div>
+    <div class="settings-hero" data-animate data-delay="3">
+      <img src="img/settings-dashboard.png" alt="VoiceFlow Insights dashboard showing words-per-minute, total words dictated, app usage breakdown, and a multi-week activity streak" class="settings-hero-img">
+      <div class="settings-hero-body">
+        <h3>Insights, personas, and full control</h3>
+        <p>A smile-shaped speed gauge labels your dictation pace as <em>Steady</em>, <em>Fast</em>, or <em>Top</em>. Per-app bars show where you dictate most. A streak heatmap tracks every active day. Built-in personas come seeded with domain vocabulary &mdash; Software Engineer ships with <code>kubectl</code>, <code>Postgres</code>, <code>Terraform</code>, <code>gRPC</code> and more, and you can add your own with one click. Every number is computed locally; nothing syncs anywhere.</p>
       </div>
     </div>
   </div>
