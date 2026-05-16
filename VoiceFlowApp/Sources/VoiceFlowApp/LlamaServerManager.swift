@@ -116,6 +116,15 @@ final class LlamaServerManager: ObservableObject {
             "-ngl", "99",
             "-c", String(Self.contextSize),
             "--no-mmproj",
+            // Q8_0 KV cache: halves the per-token KV memory cost relative to
+            // FP16 with no measurable quality drop on non-reasoning chat
+            // models. At 16K context that's ~1.1 GB of headroom recovered.
+            //   FP16:  16384 tok × 144 KB = 2.3 GB
+            //   Q8_0:  16384 tok ×  72 KB = 1.15 GB
+            // The cached prompt prefix (~4,370 tokens) still sits warm; only
+            // the storage format of each cached K/V vector changes.
+            "--cache-type-k", "q8_0",
+            "--cache-type-v", "q8_0",
         ]
 
         // Truncate the log file at startup so the request counter starts fresh.
