@@ -53,7 +53,12 @@ swift package resolve
 
 # Step 4: Build Swift app
 echo "Step 4: Building Swift app..."
-MOONSHINE_LIB_DIR="$SCRIPT_DIR/.build/artifacts/moonshine-swift/Moonshine/Moonshine.xcframework/macos-arm64_x86_64"
+MOONSHINE_LIB_DIR="$SCRIPT_DIR/.build/arm64-apple-macosx/release"
+# Fall back to the xcframework path if the release-config copy isn't there yet
+# (first build of a clean checkout).
+if [ ! -f "$MOONSHINE_LIB_DIR/libmoonshine.a" ]; then
+    MOONSHINE_LIB_DIR="$SCRIPT_DIR/.build/artifacts/moonshine-swift/Moonshine/Moonshine.xcframework/macos-arm64_x86_64"
+fi
 swift build -c release \
     -Xlinker -L"$PROJECT_ROOT/target/release" \
     -Xlinker -lvoiceflow_ffi \
@@ -155,9 +160,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <key>CFBundleDisplayName</key>
     <string>VoiceFlow</string>
     <key>CFBundleVersion</key>
-    <string>2.0.1</string>
+    <string>2.0.2</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.1</string>
+    <string>2.0.2</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
