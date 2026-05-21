@@ -9,9 +9,77 @@ import Combine
 import ServiceManagement
 import VoiceFlowFFI
 
+/// Runs critical environment checks BEFORE the SwiftUI runtime instantiates
+/// AppDelegate (and therefore before VoiceFlowBridge / Rust FFI / Metal init).
+///
+/// If a hard prerequisite fails, we show a user-facing alert and `exit(1)`
+/// rather than letting libvoiceflow crash deep inside Metal — which is what
+/// happened on macOS 14: the llama.cpp Metal kernels we ship require API
+/// features (Metal 3.2) that don't exist on macOS 14, so the dylib SIGSEGVs
+/// during model load with no actionable message for the user.
+///
+/// LSMinimumSystemVersion in Info.plist is also set to 15.0, which means
+/// macOS itself refuses to launch the app on older OSes with its own dialog.
+/// This check is the belt to that suspenders — covers edge cases (sideloads,
+/// Info.plist tampering, future-proofing for new requirements) and gives a
+/// more specific message ("you're on 14.5, need 15+, here's why").
+enum PreflightCheck {
+    static func runOrExit() {
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        if os.majorVersion < 15 {
+            let running = "\(os.majorVersion).\(os.minorVersion)\(os.patchVersion > 0 ? ".\(os.patchVersion)" : "")"
+            showFatalAlert(
+                title: "macOS 15 (Sequoia) or later required",
+                message: """
+                VoiceFlow uses Apple's Metal 3.2 compute features for on-device speech recognition and language modeling. Those features are only available on macOS 15 and later.
+
+                Your Mac is running macOS \(running).
+
+                To use VoiceFlow:
+                1. Open System Settings → General → Software Update
+                2. Install macOS 15 (Sequoia) or later
+                3. Re-open VoiceFlow
+
+                If your Mac model does not support macOS 15, VoiceFlow cannot run on it.
+                """,
+                allowQuitOnly: true
+            )
+        }
+    }
+
+    /// Show a blocking modal then exit. Sets the activation policy to .regular
+    /// temporarily so the alert is visible — the app is normally an
+    /// LSUIElement (menu-bar-only) and would otherwise present the alert
+    /// off-screen with no dock icon to surface it.
+    private static func showFatalAlert(title: String, message: String, allowQuitOnly: Bool) -> Never {
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .critical
+        if !allowQuitOnly {
+            alert.addButton(withTitle: "Continue Anyway")
+        }
+        alert.addButton(withTitle: "Quit")
+        _ = alert.runModal()
+        exit(1)
+    }
+}
+
 @main
 struct VoiceFlowApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    init() {
+        // Run BEFORE @NSApplicationDelegateAdaptor instantiates AppDelegate
+        // — AppDelegate has `var voiceFlow = VoiceFlowBridge()` as a stored
+        // property that would eagerly load the Rust FFI dylib. On macOS 14
+        // that crashes inside Metal before any user-facing UI can show.
+        // Doing the check here gives us a chance to display a clean alert
+        // and exit cleanly.
+        PreflightCheck.runOrExit()
+    }
 
     var body: some Scene {
         Settings {
@@ -1825,6 +1893,99 @@ struct CursorContext {
 
         return result == .success
     }
+
+    /// Snapshot of the focused field's current state.
+    /// `cursor` is the byte offset of the caret within `text`. `selectionLength` is
+    /// the length of any active selection (0 if cursor is a point).
+    struct FieldSnapshot {
+        let text: String
+        let cursor: Int
+        let selectionLength: Int
+    }
+
+    /// Read the full focused field's contents along with cursor position.
+    ///
+    /// Tries `kAXValueAttribute` first (works for native text fields). If that
+    /// fails, falls back to concatenating a pre-cursor read with a post-cursor
+    /// read via `kAXStringForRangeParameterizedAttribute` (covers some
+    /// half-cooperative AX implementations).
+    ///
+    /// Returns nil when the focused element exposes neither path — that's the
+    /// signal to escalate to browser bridge / shadow buffer / OCR.
+    static func getFieldContents(maxLength: Int = 4000) -> FieldSnapshot? {
+        guard AXIsProcessTrusted() else { return nil }
+
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        let focusedError = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedRef
+        )
+        guard focusedError == .success, let focusedRef = focusedRef else { return nil }
+        let element = focusedRef as! AXUIElement
+
+        // Cursor position + selection length
+        var rangeRef: CFTypeRef?
+        let rangeError = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rangeRef
+        )
+        var cursor = 0
+        var selectionLength = 0
+        if rangeError == .success, let rangeRef = rangeRef {
+            var range = CFRange(location: 0, length: 0)
+            if AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) {
+                cursor = range.location
+                selectionLength = range.length
+            }
+        }
+
+        // Path 1: read whole field via kAXValueAttribute
+        var valueRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
+           let text = valueRef as? String {
+            let trimmed: String
+            if text.count <= maxLength {
+                trimmed = text
+            } else {
+                // Center the window on the cursor when truncating
+                let half = maxLength / 2
+                let lower = max(0, cursor - half)
+                let upper = min(text.count, lower + maxLength)
+                let start = text.index(text.startIndex, offsetBy: lower)
+                let end = text.index(text.startIndex, offsetBy: upper)
+                trimmed = String(text[start..<end])
+            }
+            return FieldSnapshot(text: trimmed, cursor: cursor, selectionLength: selectionLength)
+        }
+
+        // Path 2: read via character count + parameterized range
+        var lengthRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXNumberOfCharactersAttribute as CFString,
+            &lengthRef
+        ) == .success,
+              let total = (lengthRef as? Int)
+        else { return nil }
+
+        let readLength = min(total, maxLength)
+        var readRange = CFRange(location: 0, length: readLength)
+        guard let rangeParam = AXValueCreate(.cfRange, &readRange) else { return nil }
+
+        var textRef: CFTypeRef?
+        let textError = AXUIElementCopyParameterizedAttributeValue(
+            element,
+            kAXStringForRangeParameterizedAttribute as CFString,
+            rangeParam,
+            &textRef
+        )
+        guard textError == .success, let text = textRef as? String else { return nil }
+
+        return FieldSnapshot(text: text, cursor: cursor, selectionLength: selectionLength)
+    }
 }
 
 // MARK: - App Delegate
@@ -1931,6 +2092,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var lastPastedText: String?
     private var isRecording = false
+    /// Phase 8: set true when AudioGain detected a whisper-level input and
+    /// boosted the buffer before STT. Read by buildLiveFormatContext to add
+    /// the [LOW_VOLUME] hint to the LLM prompt.
+    private var whisperModeFired = false
     private var recordingMenuItem: NSMenuItem?
     private var formattingMenuItems: [FormattingLevel: NSMenuItem] = [:]
     private var spacingMenuItems: [SpacingMode: NSMenuItem] = [:]
@@ -2804,6 +2969,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         )
+
+        // Option + Shift + Space: cycle formatting level (verbatim ↔ polish slider).
+        // Tap, don't hold. The release is a no-op.
+        hotkeyManager.register(
+            id: 3,
+            keyCode: UInt32(kVK_Space),
+            modifiers: UInt32(optionKey | shiftKey),
+            onPress: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.cycleFormattingLevel()
+                }
+            },
+            onRelease: {}
+        )
+    }
+
+    /// Cycle through FormattingLevel cases and show a quick toast confirming
+    /// the new setting. Phase 3 of the AI features rollout — direct counter
+    /// to Wispr Flow's over-edit complaint.
+    @MainActor
+    private func cycleFormattingLevel() {
+        let all = FormattingLevel.allCases
+        let current = formattingLevel
+        let nextIdx = (all.firstIndex(of: current).map { $0 + 1 } ?? 0) % all.count
+        let next = all[nextIdx]
+        UserDefaults.standard.set(next.rawValue, forKey: "formattingLevel")
+        // Sync menu item state
+        for (level, item) in formattingMenuItems {
+            item.state = (level == next) ? .on : .off
+        }
+        RetroactiveToast.shared.show(
+            "Formatting: \(next.displayName)",
+            source: .empty
+        )
+        NSLog("[VoiceFlow] Formatting level → %@", next.displayName)
     }
 
     // MARK: - Recording Control
@@ -2814,6 +3014,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             startRecording()
         }
+    }
+
+    /// Compose a [SCREEN VOCABULARY] block from the focused window's visible
+    /// text. Phase 5 — auto-learn dictionary. Helps Parakeet mishears
+    /// resolve to the correct on-screen term ("post grass" → "Postgres").
+    private func screenVocabBlock() -> String {
+        let words = ScreenVocabExtractor.extract(limit: 24)
+        guard !words.isEmpty else { return "" }
+        return "\n[SCREEN VOCABULARY]\n\(words.joined(separator: ", "))\nThese terms appear on the user's screen right now. Prefer them when a transcribed word is phonetically plausible for one of them.\n"
+    }
+
+    /// Compose a [RECIPIENT CONTEXT] block from the browser-active compose
+    /// surface, if any. Phase 4 — recipient-aware tone. Returns "" when not
+    /// in a browser or no recognized compose surface is open.
+    private func recipientContextBlock(for app: NSRunningApplication?) -> String {
+        guard let bundleId = app?.bundleIdentifier,
+              BrowserContext.isBrowser(bundleId: bundleId),
+              let hint = BrowserContext.currentRecipientHint(forBundleId: bundleId)
+        else { return "" }
+        let channel = hint.channel ?? "browser"
+        let role = hint.role ?? "audience"
+        return "\n[RECIPIENT CONTEXT]\nThe user is writing to: \(hint.target) (\(role) on \(channel)).\nMatch tone and formality to this audience. Treat names as known, not as terms to define.\n"
     }
 
     /// Build the LLM formatting context once, using whatever's currently
@@ -2827,6 +3049,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let _ = frontmostApp.flatMap { AppProfileManager.shared.ensureProfile(for: $0) }
         let appPrompt = AppProfileManager.shared.promptForApp(frontmostApp)
+        let recipientBlock = recipientContextBlock(for: frontmostApp)
         let inputFieldText = CursorContext.getTextBeforeCursor(maxLength: 500)
         let vocabBlock = VocabularyContext.block(for: frontmostApp, inputFieldText: inputFieldText)
 
@@ -2847,7 +3070,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let isEmptyField = inputFieldText == nil || (inputFieldText?.isEmpty ?? true)
 
-        var context = formattingLevel.systemPrompt + appPrompt + vocabBlock
+        let screenVocabHint = screenVocabBlock()
+        let lowVolumeHint = whisperModeFired ? "\n[LOW_VOLUME]\nThe user is speaking quietly. The transcript may have higher uncertainty than usual — favor preserving what was clearly said over filling in uncertain words.\n" : ""
+        var context = formattingLevel.systemPrompt + appPrompt + recipientBlock + screenVocabHint + lowVolumeHint + vocabBlock
         if let inputText = inputFieldText, !inputText.isEmpty {
             context += """
 
@@ -3211,7 +3436,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dictationStartPosition = nil
         dictationTargetApp = nil
 
-        let audio = audioRecorder.stopRecording()
+        let rawAudio = audioRecorder.stopRecording()
+        // Phase 8 — whisper-volume detection. If the user spoke quietly, boost
+        // the signal before STT so the model isn't fighting the noise floor.
+        let gainResult = AudioGain.boostIfWhispered(rawAudio)
+        let audio = gainResult.samples
+        self.whisperModeFired = gainResult.wasBoosted
+        if gainResult.wasBoosted {
+            NSLog("[VoiceFlow] Whisper-volume mode: RMS %.4f, applied gain %.2fx",
+                  gainResult.originalRMS, gainResult.appliedGain)
+        }
         isRecording = false
         recordingMenuItem?.title = "Hold ⌥ Space to Record"
 
@@ -3318,6 +3552,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let correctionHint = CorrectionManager.shared.correctionContext(for: "")
                 if !correctionHint.isEmpty {
                     context += correctionHint
+                }
+
+                // AI: try to handle the utterance as a retroactive correction
+                // BEFORE invoking the regular LLM formatter. If the user said
+                // "I meant pears, not bananas" referring to text already in the
+                // field, we apply a structured edit and skip the verbatim paste.
+                if await self.interceptRetroactiveCorrection(rawTranscript: rawTranscript, voiceFlow: voiceFlow) {
+                    await MainActor.run { self.hideOverlay() }
+                    return
                 }
 
                 // Format raw transcript through LLM with token streaming.
@@ -3441,6 +3684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                     )
                     self.lastPastedText = spacedText
+                    self.recordPasteToShadowBuffer(spacedText)
                 } else {
                     await MainActor.run { hideOverlay() }
                     showNotification(title: "Formatting Failed", body: voiceFlow.lastError ?? "Unknown error")
@@ -3605,6 +3849,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                 )
                 self.lastPastedText = spacedText
+                self.recordPasteToShadowBuffer(spacedText)
             }
             return
         }
@@ -3679,6 +3924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                 )
                 self.lastPastedText = spacedText
+                self.recordPasteToShadowBuffer(spacedText)
             }
             return
         }
@@ -3955,6 +4201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 // Track last pasted text for terminal continuation detection
                 self.lastPastedText = spacedText
+                self.recordPasteToShadowBuffer(spacedText)
             } else {
                 await MainActor.run {
                     hideOverlay()

@@ -160,15 +160,15 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <key>CFBundleDisplayName</key>
     <string>VoiceFlow</string>
     <key>CFBundleVersion</key>
-    <string>2.0.2</string>
+    <string>2.0.3</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.2</string>
+    <string>2.0.3</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>

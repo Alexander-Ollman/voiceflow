@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "VoiceFlowApp",
     platforms: [
-        .macOS(.v13)
+        .macOS("15.0")
     ],
     products: [
         .executable(name: "VoiceFlowApp", targets: ["VoiceFlowApp"])

@@ -3,16 +3,12 @@ import CoreGraphics
 import ScreenCaptureKit
 
 /// Captures the active window as a compressed JPEG for VLM analysis.
-/// Uses ScreenCaptureKit (macOS 14+) with CGWindowListCreateImage fallback (macOS 13).
+/// Uses ScreenCaptureKit (now always — the app's deployment target is macOS 15+).
 final class ScreenshotCapture {
 
     /// Capture the frontmost window as JPEG data (resized to fit 1280x720, quality 0.7).
     func captureActiveWindow() async throws -> Data {
-        if #available(macOS 14.0, *) {
-            return try await captureWithScreenCaptureKit()
-        } else {
-            return try captureWithCGWindowList()
-        }
+        return try await captureWithScreenCaptureKit()
     }
 
     /// Check if screen recording permission is granted.
@@ -25,9 +21,8 @@ final class ScreenshotCapture {
         CGRequestScreenCaptureAccess()
     }
 
-    // MARK: - ScreenCaptureKit (macOS 14+)
+    // MARK: - ScreenCaptureKit
 
-    @available(macOS 14.0, *)
     private func captureWithScreenCaptureKit() async throws -> Data {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
@@ -59,54 +54,6 @@ final class ScreenshotCapture {
         return try compressToJPEG(cgImage)
     }
 
-    // MARK: - CGWindowList fallback (macOS 13)
-
-    private func captureWithCGWindowList() throws -> Data {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
-            throw ScreenshotError.noActiveWindow
-        }
-
-        let pid = frontApp.processIdentifier
-
-        guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements],
-            kCGNullWindowID
-        ) as? [[CFString: Any]] else {
-            throw ScreenshotError.noActiveWindow
-        }
-
-        // Find the frontmost window belonging to the active app
-        var targetWindowID: CGWindowID?
-        for windowInfo in windowList {
-            guard let ownerPID = windowInfo[kCGWindowOwnerPID] as? Int32,
-                  ownerPID == pid,
-                  let layer = windowInfo[kCGWindowLayer] as? Int,
-                  layer == 0
-            else { continue }
-
-            if let windowID = windowInfo[kCGWindowNumber] as? CGWindowID {
-                targetWindowID = windowID
-                break
-            }
-        }
-
-        guard let windowID = targetWindowID else {
-            throw ScreenshotError.noActiveWindow
-        }
-
-        guard let cgImage = CGWindowListCreateImage(
-            .null,
-            .optionIncludingWindow,
-            windowID,
-            [.boundsIgnoreFraming, .bestResolution]
-        ) else {
-            throw ScreenshotError.captureFailed
-        }
-
-        let resized = resizeImage(cgImage, maxWidth: 1280, maxHeight: 720)
-        return try compressToJPEG(resized)
-    }
-
     // MARK: - Private Helpers
 
     private func compressToJPEG(_ cgImage: CGImage) throws -> Data {
@@ -123,39 +70,6 @@ final class ScreenshotCapture {
             throw ScreenshotError.compressionFailed
         }
         return jpegData
-    }
-
-    private func resizeImage(_ image: CGImage, maxWidth: Int, maxHeight: Int) -> CGImage {
-        let width = image.width
-        let height = image.height
-
-        if width <= maxWidth && height <= maxHeight {
-            return image
-        }
-
-        let widthRatio = CGFloat(maxWidth) / CGFloat(width)
-        let heightRatio = CGFloat(maxHeight) / CGFloat(height)
-        let scale = min(widthRatio, heightRatio)
-
-        let newWidth = Int(CGFloat(width) * scale)
-        let newHeight = Int(CGFloat(height) * scale)
-
-        guard let context = CGContext(
-            data: nil,
-            width: newWidth,
-            height: newHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return image
-        }
-
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
-
-        return context.makeImage() ?? image
     }
 }
 
