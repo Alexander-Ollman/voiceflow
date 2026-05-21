@@ -6,11 +6,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="VoiceFlow"
 APP_BUNDLE="$SCRIPT_DIR/build/$APP_NAME.app"
-DMG_NAME="VoiceFlow-Installer"
+DMG_NAME="VoiceFlow"
 DMG_DIR="$SCRIPT_DIR/dist"
 DMG_PATH="$DMG_DIR/$DMG_NAME.dmg"
 VOLUME_NAME="VoiceFlow"
 STAGING_DIR="$SCRIPT_DIR/build/dmg-staging"
+SIGN_IDENTITY="Developer ID Application: Era Laboratories Inc. (JVSQ3LCY64)"
 
 echo "Creating VoiceFlow DMG installer..."
 
@@ -89,22 +90,49 @@ rm -f "$DMG_DIR/temp.dmg"
 # Cleanup
 rm -rf "$STAGING_DIR"
 
-# Get file size
+# Step 6: Sign the DMG with the same Developer ID cert that signed the .app inside.
+# The inner .app is already signed + notarized + stapled by build.sh, but the DMG
+# container itself needs its own signature for Gatekeeper to validate the download
+# without complaint. Without this the user sees "VoiceFlow.dmg is damaged" on
+# some download paths.
+if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
+    echo "Step 6: Signing DMG..."
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+    codesign --verify --verbose=2 "$DMG_PATH"
+    echo "  DMG signed."
+
+    # Step 7: Notarize the DMG. Apple scans the container (the inner .app is
+    # already accepted from build.sh's notarization, so this is fast — usually
+    # under a minute since Apple's already seen the .app's hash).
+    KEYCHAIN_PROFILE="${NOTARIZE_KEYCHAIN_PROFILE:-}"
+    if [ -n "$KEYCHAIN_PROFILE" ]; then
+        echo "Step 7: Notarizing DMG with keychain profile '$KEYCHAIN_PROFILE'..."
+        xcrun notarytool submit "$DMG_PATH" \
+            --keychain-profile "$KEYCHAIN_PROFILE" \
+            --wait
+        echo "Step 8: Stapling notarization ticket to DMG..."
+        xcrun stapler staple "$DMG_PATH"
+        xcrun stapler validate "$DMG_PATH"
+        echo "  DMG notarized and stapled."
+    else
+        echo "Step 7: Skipping DMG notarization (set NOTARIZE_KEYCHAIN_PROFILE to enable)"
+    fi
+else
+    echo "Step 6: Skipping DMG signing (Developer ID cert not in keychain)"
+fi
+
+# Get final size
 DMG_SIZE=$(du -h "$DMG_PATH" | awk '{print $1}')
 
 echo ""
 echo "========================================="
-echo "DMG installer created successfully!"
+echo "VoiceFlow DMG ready"
 echo "========================================="
 echo ""
 echo "Location: $DMG_PATH"
-echo "Size: $DMG_SIZE"
+echo "Size:     $DMG_SIZE"
 echo ""
-echo "To distribute:"
-echo "1. Upload $DMG_PATH to your website"
-echo "2. Users download, open DMG, drag VoiceFlow to Applications"
-echo ""
-echo "Note: For distribution outside the App Store, consider:"
-echo "- Code signing with a Developer ID certificate"
-echo "- Notarization with Apple"
+echo "Verify locally:"
+echo "  spctl -a -t open --context context:primary-signature -vv \"$DMG_PATH\""
+echo "  xcrun stapler validate \"$DMG_PATH\""
 echo ""
