@@ -115,34 +115,33 @@ final class SetupHelper: ObservableObject {
         try? FileManager.default.removeItem(at: tmp)
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let delegate = DownloadProgressDelegate { [weak self] done, total in
-                Task { @MainActor in
-                    self?.phase = .downloadingBonsai(bytesDone: done, bytesTotal: max(total, Self.bonsaiApproxBytes))
+            // IMPORTANT: do NOT pass a completion handler to downloadTask(with:).
+            // Apple docs: "If you create a download task with a completion handler,
+            // neither the URLSessionTaskDelegate nor URLSessionDownloadTaskDelegate
+            // methods of your session delegate are called for that task." That bug
+            // froze the progress bar at 0/1099 MB in v2.0.4 and earlier — the
+            // download was actually running but didWriteData was silently muted.
+            // Delegate-only: progress fires, file move happens in didFinishDownloadingTo,
+            // failures surface via didCompleteWithError.
+            let delegate = DownloadProgressDelegate(
+                destination: dest,
+                onProgress: { [weak self] done, total in
+                    Task { @MainActor in
+                        self?.phase = .downloadingBonsai(
+                            bytesDone: done,
+                            bytesTotal: max(total, Self.bonsaiApproxBytes)
+                        )
+                    }
+                },
+                onComplete: { result in
+                    continuation.resume(with: result)
                 }
-            } onComplete: { result in
-                continuation.resume(with: result)
-            }
+            )
 
             let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
             var req = URLRequest(url: Self.bonsaiURL)
             req.timeoutInterval = 60
-            let task = session.downloadTask(with: req) { url, _, error in
-                if let error = error {
-                    delegate.onComplete(.failure(error))
-                    return
-                }
-                guard let url = url else {
-                    delegate.onComplete(.failure(SetupError.downloadFailed("No file returned")))
-                    return
-                }
-                do {
-                    try? FileManager.default.removeItem(at: dest)
-                    try FileManager.default.moveItem(at: url, to: dest)
-                    delegate.onComplete(.success(()))
-                } catch {
-                    delegate.onComplete(.failure(error))
-                }
-            }
+            let task = session.downloadTask(with: req)
             self.bonsaiDownloadTask = task
             task.resume()
         }
@@ -255,16 +254,23 @@ enum SetupError: Error, LocalizedError {
     }
 }
 
-/// URLSession delegate that surfaces byte-level download progress.
+/// URLSession delegate that surfaces byte-level download progress AND owns
+/// the final move-to-destination step. Delegate-only — no completion handler
+/// on the underlying downloadTask, otherwise didWriteData/didFinishDownloadingTo
+/// stay silent (Apple's docs: passing a completion handler suppresses the
+/// delegate's progress callbacks for that task).
 final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let destination: URL
     let onProgress: (Int64, Int64) -> Void
     let onComplete: (Result<Void, Error>) -> Void
     private var hasCompleted = false
 
     init(
+        destination: URL,
         onProgress: @escaping (Int64, Int64) -> Void,
         onComplete: @escaping (Result<Void, Error>) -> Void
     ) {
+        self.destination = destination
         self.onProgress = onProgress
         self.onComplete = onComplete
     }
@@ -284,8 +290,18 @@ final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unc
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
-        // The download-task completion handler runs after this; it owns moving the file
-        // and calling onComplete. We just no-op here to keep the file alive briefly.
+        // location is a temp URL that gets deleted shortly after this method
+        // returns, so the move has to be synchronous here.
+        guard !hasCompleted else { return }
+        do {
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: location, to: destination)
+            hasCompleted = true
+            onComplete(.success(()))
+        } catch {
+            hasCompleted = true
+            onComplete(.failure(error))
+        }
     }
 
     func urlSession(
@@ -298,7 +314,6 @@ final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unc
             hasCompleted = true
             onComplete(.failure(error))
         }
-        // Successful completion is signaled from the downloadTask completion handler
-        // in SetupHelper.downloadBonsai().
+        // Success was already signaled from didFinishDownloadingTo.
     }
 }
