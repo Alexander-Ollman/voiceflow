@@ -1991,6 +1991,28 @@ struct CursorContext {
 // MARK: - App Delegate
 
 @MainActor
+/// Captures the state needed to "undo and revise" the user's last paste:
+/// the text we just inserted, how many characters wide it was, which app
+/// owns it, and when the paste happened. The edit hotkey (⌥⇧Space) only
+/// fires if there's a valid context and we're still in the same app and
+/// within the 10-second window.
+///
+/// Reused across edit chains — when the user applies an edit, the resulting
+/// text becomes the NEW edit context so they can stack revisions.
+struct EditContext {
+    let pastedText: String
+    let insertedLength: Int
+    let targetApp: NSRunningApplication?
+    let timestamp: Date
+
+    /// Edit window: 10 seconds from paste. After that, hitting the edit
+    /// hotkey is a no-op (with a notification).
+    var isValid: Bool {
+        Date().timeIntervalSince(timestamp) < 10.0
+    }
+}
+
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var voiceFlow = VoiceFlowBridge()
@@ -2004,6 +2026,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioLevelCancellable: AnyCancellable?
     private var screenshotCapture = ScreenshotCapture()
     private var isVisualContextRecording = false
+
+    // Voice-edit state. editContext is captured after every successful paste;
+    // isEditMode flips while the user holds ⌥⇧Space to record their edit
+    // instruction. The instruction is transcribed by Parakeet, the original
+    // + instruction is sent to llama-server directly (bypassing the Rust
+    // formatting pipeline so the LLM only sees the edit prompt, not the
+    // 4,370-token persona prefix), and the response replaces the prior paste.
+    private var editContext: EditContext?
+    private var isEditMode: Bool = false
 
     // Moonshine streaming engine (Beta)
     var moonshineEngine = MoonshineStreamingEngine()
@@ -2970,12 +3001,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
-        // Option + Shift + Space: cycle formatting level (verbatim ↔ polish slider).
-        // Tap, don't hold. The release is a no-op.
+        // Option + Shift + Space: hold to record a voice INSTRUCTION that
+        // edits whatever VoiceFlow just pasted into the focused field.
+        // Requires editContext to be valid (last paste was < 10s ago and
+        // in the same app). If the window expired or the app changed, we
+        // show a notification instead of recording.
         hotkeyManager.register(
             id: 3,
             keyCode: UInt32(kVK_Space),
             modifiers: UInt32(optionKey | shiftKey),
+            onPress: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.startEditRecording()
+                }
+            },
+            onRelease: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.stopEditAndApply()
+                }
+            }
+        )
+
+        // Control + Option + Shift + Space: cycle formatting level (was on
+        // ⌥⇧Space; moved to make room for the edit hotkey). Tap, don't hold.
+        hotkeyManager.register(
+            id: 4,
+            keyCode: UInt32(kVK_Space),
+            modifiers: UInt32(controlKey | optionKey | shiftKey),
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.cycleFormattingLevel()
@@ -3684,6 +3736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                     )
                     self.lastPastedText = spacedText
+                    self.captureEditContext(for: spacedText)
                     self.recordPasteToShadowBuffer(spacedText)
                 } else {
                     await MainActor.run { hideOverlay() }
@@ -3849,6 +3902,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                 )
                 self.lastPastedText = spacedText
+                self.captureEditContext(for: spacedText)
                 self.recordPasteToShadowBuffer(spacedText)
             }
             return
@@ -3924,6 +3978,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                 )
                 self.lastPastedText = spacedText
+                self.captureEditContext(for: spacedText)
                 self.recordPasteToShadowBuffer(spacedText)
             }
             return
@@ -4201,6 +4256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 // Track last pasted text for terminal continuation detection
                 self.lastPastedText = spacedText
+                self.captureEditContext(for: spacedText)
                 self.recordPasteToShadowBuffer(spacedText)
             } else {
                 await MainActor.run {
@@ -4519,6 +4575,238 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             hideOverlay()
             showAIResult(command: .continueWriting, text: continuation.trimmingCharacters(in: .whitespacesAndNewlines), targetApp: targetApp)
+        }
+    }
+
+    // MARK: - Voice edit (post-paste revision)
+
+    /// Capture an EditContext immediately after a successful paste so the
+    /// edit hotkey has something to work with for the next 10 seconds.
+    /// Called from every place we set lastPastedText.
+    func captureEditContext(for text: String) {
+        editContext = EditContext(
+            pastedText: text,
+            insertedLength: text.count,
+            targetApp: NSWorkspace.shared.frontmostApplication,
+            timestamp: Date()
+        )
+    }
+
+    /// Hold-to-record path for the edit hotkey (⌥⇧Space). Validates the
+    /// window + app match BEFORE starting audio capture so the user gets
+    /// immediate feedback when there's nothing to edit.
+    private func startEditRecording() {
+        guard !isRecording else { return }
+        guard let context = editContext, context.isValid else {
+            NSLog("[VoiceFlow] Edit hotkey pressed but no valid edit context")
+            showNotification(
+                title: "Nothing to edit",
+                body: "Hold ⌥⇧Space within 10 seconds of a paste to revise it."
+            )
+            return
+        }
+        guard let target = context.targetApp,
+              let current = NSWorkspace.shared.frontmostApplication,
+              target.processIdentifier == current.processIdentifier else {
+            NSLog("[VoiceFlow] Edit hotkey pressed in a different app from the paste")
+            showNotification(
+                title: "Edit aborted",
+                body: "You switched apps since the last paste."
+            )
+            return
+        }
+
+        do {
+            try audioRecorder.startRecording()
+            isRecording = true
+            isEditMode = true
+            recordingMenuItem?.title = "Recording edit... (release ⌥⇧Space)"
+            showOverlay(state: .recording)
+
+            audioLevelCancellable = audioRecorder.$audioLevel
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] level in
+                    self?.overlayState.audioLevel = level
+                }
+            NSLog("[VoiceFlow] Edit recording started (target=%@)",
+                  target.localizedName ?? "?")
+        } catch {
+            isEditMode = false
+            NSLog("[VoiceFlow] Edit recording failed to start: %@",
+                  error.localizedDescription)
+            showAlert(title: "Recording Error", message: error.localizedDescription)
+        }
+    }
+
+    /// Hold-release path for the edit hotkey. Transcribes the spoken
+    /// instruction via Parakeet, sends [original, instruction] to
+    /// llama-server with the edit-specific system prompt, deletes the
+    /// prior paste, pastes the revised text, and refreshes editContext so
+    /// the user can stack further edits.
+    private func stopEditAndApply() {
+        guard isRecording, isEditMode, let context = editContext else { return }
+
+        audioLevelCancellable?.cancel()
+        audioLevelCancellable = nil
+
+        let audio = audioRecorder.stopRecording()
+        isRecording = false
+        isEditMode = false
+        recordingMenuItem?.title = "Hold ⌥ Space to Record"
+
+        showOverlay(state: .processing)
+
+        Task { @MainActor in
+            // 1. Transcribe spoken instruction via batch Parakeet (same path
+            //    the main dictation uses for the post-release transcript).
+            let instructionRaw = (await parakeetEngine.transcribe(audio: audio)) ?? ""
+            let instruction = instructionRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !instruction.isEmpty else {
+                hideOverlay()
+                showNotification(title: "No edit instruction",
+                                 body: "I didn't catch any speech.")
+                return
+            }
+            NSLog("[VoiceFlow] Edit instruction: %@", instruction)
+            NSLog("[VoiceFlow] Editing prior text (%d chars): %@",
+                  context.pastedText.count, context.pastedText)
+
+            // 2. Send to llama-server directly with a minimal edit prompt.
+            //    Goes around the Rust pipeline so the 4,370-token formatting
+            //    prefix doesn't leak its rules into a simple edit task.
+            self.streamingFormattedText = ""
+            self.showOverlay(state: .formatting(""))
+            guard let edited = await self.applyEdit(
+                original: context.pastedText,
+                instruction: instruction
+            ), !edited.isEmpty else {
+                hideOverlay()
+                showNotification(title: "Edit failed",
+                                 body: "The LLM did not return a revised text.")
+                return
+            }
+            NSLog("[VoiceFlow] Edited text: %@", edited)
+
+            // 3. Confirm we're still in the same app. If the user switched
+            //    apps during the brief recording + LLM round-trip, abort
+            //    rather than risk destroying text in the wrong place.
+            guard let target = context.targetApp,
+                  let current = NSWorkspace.shared.frontmostApplication,
+                  target.processIdentifier == current.processIdentifier else {
+                hideOverlay()
+                showNotification(title: "Edit aborted",
+                                 body: "App focus changed during the edit.")
+                return
+            }
+
+            // 4. Delete the prior paste + insert the revised text. We use
+            //    backspace + clipboard-paste rather than AX selectRange so
+            //    this works in every text field (web, native, terminal).
+            self.deleteBackward(count: context.insertedLength)
+            try? await Task.sleep(nanoseconds: 80_000_000)  // 80ms for delete to settle
+            self.pasteEditedText(edited)
+
+            // 5. Reset editContext to the NEW text so chaining works
+            //    ("change 3pm to 4pm" → "actually make it 5pm").
+            self.captureEditContext(for: edited)
+            self.lastPastedText = edited
+
+            self.hideOverlay()
+        }
+    }
+
+    /// Send [original, instruction] to llama-server's OpenAI-compatible
+    /// endpoint with a minimal edit prompt and return the revised text.
+    /// Non-streaming — edit responses are short (usually under the original's
+    /// length) so streaming buys no UX win and complicates the wire format.
+    private func applyEdit(original: String, instruction: String) async -> String? {
+        guard let url = URL(string: "http://127.0.0.1:8080/v1/chat/completions") else {
+            return nil
+        }
+
+        let systemPrompt = """
+        You are an editor. The user dictated some text earlier, you produced \
+        a formatted version, and now they want to revise it. Apply the user's \
+        instruction to the prior text and return ONLY the revised text — no \
+        explanation, no commentary, no quotation marks, no preamble. Preserve \
+        the original formatting, punctuation, and tone unless the instruction \
+        explicitly changes them.
+        """
+        let userMessage = """
+        Prior text:
+        \(original)
+
+        Instruction:
+        \(instruction)
+        """
+
+        let body: [String: Any] = [
+            "model": "default",
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userMessage],
+            ],
+            "max_tokens": 1024,
+            "temperature": 0.1,
+            "stream": false,
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            NSLog("[VoiceFlow] applyEdit JSON serialize error: %@",
+                  error.localizedDescription)
+            return nil
+        }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            guard
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let choices = json["choices"] as? [[String: Any]],
+                let first = choices.first,
+                let message = first["message"] as? [String: Any],
+                let content = message["content"] as? String
+            else {
+                NSLog("[VoiceFlow] applyEdit: unexpected response shape")
+                return nil
+            }
+            // Strip wrapping quotes if Bonsai added them despite the prompt
+            // telling it not to.
+            var trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.count > 2,
+               (trimmed.first == "\"" && trimmed.last == "\"") ||
+               (trimmed.first == "\u{201C}" && trimmed.last == "\u{201D}") {
+                trimmed = String(trimmed.dropFirst().dropLast())
+            }
+            return trimmed
+        } catch {
+            NSLog("[VoiceFlow] applyEdit network error: %@",
+                  error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// Put `text` on the pasteboard and trigger Cmd+V. Mirrors the existing
+    /// post-paste-cleanup behavior — save+restore the user's prior clipboard
+    /// so we don't clobber whatever they had copied.
+    private func pasteEditedText(_ text: String) {
+        let pb = NSPasteboard.general
+        let saved = pb.string(forType: .string)
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        simulatePaste()
+        // Restore the user's clipboard after the paste settles.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            if let saved = saved {
+                pb.setString(saved, forType: .string)
+            }
         }
     }
 
