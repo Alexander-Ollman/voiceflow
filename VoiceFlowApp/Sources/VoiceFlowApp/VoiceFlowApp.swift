@@ -5952,6 +5952,7 @@ struct SettingsView: View {
 struct HomeView: View {
     @EnvironmentObject var transcriptionLog: TranscriptionLog
     @ObservedObject private var correctionManager = CorrectionManager.shared
+    @ObservedObject private var suggestionManager = SuggestionManager.shared
 
     enum HomeTab { case overview, activity }
     @State private var tab: HomeTab = .overview
@@ -6119,6 +6120,89 @@ struct HomeView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+
+            // Row 3: Bonsai-suggested shortcuts based on dictation history.
+            // Lazy-on-view: refreshIfStale checks the 24h cache and kicks
+            // off analyzeHistory() in the background only when needed.
+            suggestionsCard
+        }
+        .onAppear {
+            suggestionManager.refreshIfStale()
+        }
+    }
+
+    // MARK: Suggested Shortcuts card
+
+    @ViewBuilder
+    private var suggestionsCard: some View {
+        VFCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Suggested shortcuts")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundColor(.white)
+                        Text("Bonsai found these patterns in your dictation history. All analysis runs on-device.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.55))
+                    }
+                    Spacer()
+                    Button {
+                        suggestionManager.forceRefresh()
+                    } label: {
+                        if suggestionManager.isAnalyzing {
+                            HStack(spacing: 6) {
+                                ProgressView().scaleEffect(0.55).frame(width: 12, height: 12)
+                                Text("Analyzing")
+                            }
+                        } else {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                Text("Refresh")
+                            }
+                        }
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(suggestionManager.isAnalyzing ? 0.5 : 0.85))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(Color.white.opacity(0.06)))
+                    .buttonStyle(.plain)
+                    .disabled(suggestionManager.isAnalyzing)
+                }
+
+                if let err = suggestionManager.lastError, suggestionManager.suggestions.isEmpty {
+                    Text(err)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.55))
+                        .padding(.vertical, 8)
+                } else if suggestionManager.suggestions.isEmpty {
+                    if suggestionManager.isAnalyzing {
+                        HStack(spacing: 10) {
+                            ProgressView().scaleEffect(0.7)
+                            Text("Reading your history…")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        .padding(.vertical, 12)
+                    } else {
+                        Text("No repeated patterns detected yet. Keep dictating and we'll surface candidates here.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.55))
+                            .padding(.vertical, 8)
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(suggestionManager.suggestions) { suggestion in
+                            SuggestionRow(
+                                suggestion: suggestion,
+                                onAccept: { suggestionManager.accept(suggestion) },
+                                onDismiss: { suggestionManager.dismiss(suggestion) }
+                            )
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -6518,6 +6602,78 @@ struct TranscriptionRowView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: date)
+    }
+}
+
+// MARK: - Suggestion Row (Insights dashboard)
+
+/// One Bonsai-proposed snippet shortcut, rendered as an inline card with
+/// trigger / expansion preview / occurrence count / reason and two
+/// actions. Used by HomeView.suggestionsCard.
+struct SuggestionRow: View {
+    let suggestion: Suggestion
+    let onAccept: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("\u{201C}\(suggestion.trigger)\u{201D}")
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white)
+                        if suggestion.occurrences > 0 {
+                            Text("\(suggestion.occurrences)\u{00D7}")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.7))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(Color.white.opacity(0.08)))
+                        }
+                    }
+                    Text("\u{2192} \(expansionPreview)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !suggestion.reason.isEmpty {
+                        Text(suggestion.reason)
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.5))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 12)
+                VStack(spacing: 6) {
+                    Button(action: onAccept) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark")
+                            Text("Add")
+                        }
+                        .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(VF.accentGradient))
+                    .buttonStyle(.plain)
+
+                    Button(action: onDismiss) {
+                        Text("Dismiss")
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+    }
+
+    private var expansionPreview: String {
+        let trimmed = suggestion.expansion.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 120 { return trimmed }
+        return String(trimmed.prefix(117)) + "\u{2026}"
     }
 }
 
