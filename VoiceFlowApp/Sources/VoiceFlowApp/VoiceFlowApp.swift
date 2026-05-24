@@ -2401,6 +2401,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await parakeetEngine.loadModel()
                 if case .ready = parakeetEngine.state {
                     NSLog("[VoiceFlow] Parakeet model ready: %@", parakeetEngine.modelId)
+                    // Chase the load with a throwaway inference. Loading the
+                    // model into the daemon puts weights in RAM but DOESN'T
+                    // JIT the Metal kernels or warm the GPU context — that
+                    // still happens on the first real transcribe. Pre-warming
+                    // with 0.5s of low-amplitude noise turns the first user
+                    // dictation from a 2-5s cold start into the same ~150ms
+                    // p50 we measure thereafter.
+                    await self.preWarmParakeet()
                 } else {
                     NSLog("[VoiceFlow] Parakeet load state: %@", String(describing: parakeetEngine.state))
                 }
@@ -2430,6 +2438,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .ready:
                     NSLog("[VoiceFlow] llama-server ready on http://127.0.0.1:%d (ctx=%d)",
                           LlamaServerManager.port, LlamaServerManager.contextSize)
+                    // Pre-warm Bonsai. Server-ready means the binary is
+                    // responding on /v1/models, but the FIRST chat completion
+                    // still pays the cost of loading weights into Metal +
+                    // JITting kernels (typically 4-8s). A throwaway request
+                    // with max_tokens=1 absorbs that one-time cost in the
+                    // background so the first real dictation feels instant.
+                    await self.preWarmBonsai()
                 case .missingBinary:
                     NSLog("[VoiceFlow] llama-server binary missing — see RELEASE_NOTES.md install steps.")
                 case .crashed(let msg):
@@ -2439,6 +2454,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    // MARK: - Model pre-warm
+
+    /// Trigger a throwaway Parakeet transcribe to JIT the Metal kernels.
+    /// Uses 0.5s of low-amplitude noise (rather than pure silence) so the
+    /// model doesn't short-circuit on a "no signal" path and skip the
+    /// inference graph we want to warm.
+    private func preWarmParakeet() async {
+        let sampleCount = 8000  // 0.5s at 16 kHz
+        var audio = [Float](repeating: 0, count: sampleCount)
+        for i in 0..<sampleCount {
+            audio[i] = Float.random(in: -0.001...0.001)
+        }
+        let start = Date()
+        _ = await parakeetEngine.transcribe(audio: audio)
+        let ms = Date().timeIntervalSince(start) * 1000
+        NSLog("[VoiceFlow] Parakeet pre-warm: %.0fms (kernels JITted, weights resident)", ms)
+    }
+
+    /// Fire a `max_tokens: 1` chat completion against the local llama-server
+    /// to put Bonsai's weights in Metal and JIT its kernels. Result is
+    /// discarded — only the side effect (warm model) matters.
+    private func preWarmBonsai() async {
+        guard let url = URL(string: "http://127.0.0.1:8080/v1/chat/completions") else { return }
+        let body: [String: Any] = [
+            "model": "default",
+            "messages": [
+                ["role": "user", "content": "."],
+            ],
+            "max_tokens": 1,
+            "temperature": 0,
+            "stream": false,
+        ]
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        let start = Date()
+        _ = try? await URLSession.shared.data(for: request)
+        let ms = Date().timeIntervalSince(start) * 1000
+        NSLog("[VoiceFlow] Bonsai pre-warm: %.0fms (model resident in Metal)", ms)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
