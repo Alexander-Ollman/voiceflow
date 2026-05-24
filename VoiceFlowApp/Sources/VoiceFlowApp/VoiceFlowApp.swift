@@ -2189,6 +2189,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updatePunctuationMenuChecks()
     }
 
+    /// Fires when the user re-opens the app from Finder, Spotlight, or the
+    /// dock while it's already running. On a menu-bar-only app (LSUIElement)
+    /// there's no dock icon to bounce, so without handling this the user
+    /// sees nothing happen — a real bug on Macs where the VoiceFlow status
+    /// item is hidden under the notch and Spotlight is the only way back in.
+    ///
+    /// Always open the Settings window (which is the main UI anyway) and
+    /// return true so macOS knows we handled the event.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        openSettings()
+        return true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide dock icon - menu bar only
         NSApp.setActivationPolicy(.accessory)
