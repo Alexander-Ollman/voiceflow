@@ -316,6 +316,169 @@ pub extern "C" fn voiceflow_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
 }
 
+// =============================================================================
+// Intent classifier + retroactive correction
+// =============================================================================
+
+/// Classify the intent of a transcribed utterance.
+///
+/// Returns a JSON string describing the intent (verbatim / inline correction /
+/// retroactive correction / one of the AI commands), plus an optional anchor
+/// hint when the utterance was an unambiguous "X to Y" / "X, not Y" form.
+/// Caller must free via `voiceflow_free_string`.
+///
+/// # Safety
+/// `text` must be a valid null-terminated UTF-8 string. Returns null on
+/// parse / serialization failure.
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_classify_intent(text: *const c_char) -> *mut c_char {
+    if text.is_null() {
+        return ptr::null_mut();
+    }
+    let s = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let result = voiceflow_core::text_normalize::classify_intent(s);
+    match serde_json::to_string(&result) {
+        Ok(json) => CString::new(json).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Run an AI voice command (rewrite / proofread / shorten / bullet / continue /
+/// summarize / reply / explain / draft / question).
+///
+/// `input_json` is a JSON-encoded `CommandInput`:
+/// ```json
+/// { "command": "rewrite", "parameter": "more formal",
+///   "selection": "...", "field_text": "...", "field_source": "ax" }
+/// ```
+///
+/// Returns the LLM's prose output as JSON `{"output":"...","abstained":bool}`.
+/// Caller must free via `voiceflow_free_string`. Returns null on error.
+///
+/// # Safety
+/// `handle` must be a valid pointer from `voiceflow_init`.
+/// `input_json` must be a valid null-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_run_ai_command(
+    handle: *mut VoiceFlowHandle,
+    input_json: *const c_char,
+) -> *mut c_char {
+    if handle.is_null() || input_json.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let input_str = match CStr::from_ptr(input_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        let input: voiceflow_core::llm::CommandInput = match serde_json::from_str(input_str) {
+            Ok(v) => v,
+            Err(e) => {
+                log_debug(&format!("run_ai_command: malformed input JSON: {}", e));
+                return None;
+            }
+        };
+
+        let pipeline = match (*handle).pipeline.as_mut() {
+            Some(p) => p,
+            None => {
+                log_debug("run_ai_command: pipeline not available");
+                return None;
+            }
+        };
+
+        match pipeline.run_command(&input) {
+            Ok(out) => match serde_json::to_string(&out) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    log_debug(&format!("run_ai_command: serialize failed: {}", e));
+                    None
+                }
+            },
+            Err(e) => {
+                log_debug(&format!("run_ai_command: LLM call failed: {}", e));
+                None
+            }
+        }
+    }));
+
+    match result {
+        Ok(Some(json)) => CString::new(json).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+        _ => ptr::null_mut(),
+    }
+}
+
+/// Run retroactive correction.
+///
+/// `input_json` is a JSON-encoded `RetroactiveInput`:
+/// ```json
+/// { "field_text": "...", "field_source": "ax|browser|shadow|ocr",
+///   "recent_insertions": ["...", "..."], "user_utterance": "..." }
+/// ```
+///
+/// Returns the LLM's structured `Edit` as a JSON string the Swift side
+/// parses and applies. Caller must free via `voiceflow_free_string`.
+/// Returns null on error (handle null, JSON malformed, LLM unavailable).
+///
+/// # Safety
+/// `handle` must be a valid pointer from `voiceflow_init`.
+/// `input_json` must be a valid null-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_retroactive_correct(
+    handle: *mut VoiceFlowHandle,
+    input_json: *const c_char,
+) -> *mut c_char {
+    if handle.is_null() || input_json.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let input_str = match CStr::from_ptr(input_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        let input: voiceflow_core::llm::RetroactiveInput =
+            match serde_json::from_str(input_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    log_debug(&format!("retroactive_correct: malformed input JSON: {}", e));
+                    return None;
+                }
+            };
+
+        let pipeline = match (*handle).pipeline.as_mut() {
+            Some(p) => p,
+            None => {
+                log_debug("retroactive_correct: pipeline not available (consolidated mode)");
+                return None;
+            }
+        };
+
+        match pipeline.retroactive_correct(&input) {
+            Ok(edit) => match serde_json::to_string(&edit) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    log_debug(&format!("retroactive_correct: edit serialize failed: {}", e));
+                    None
+                }
+            },
+            Err(e) => {
+                log_debug(&format!("retroactive_correct: LLM call failed: {}", e));
+                None
+            }
+        }
+    }));
+
+    match result {
+        Ok(Some(json)) => CString::new(json).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+        _ => ptr::null_mut(),
+    }
+}
+
 fn error_result(msg: &str) -> VoiceFlowResult {
     VoiceFlowResult {
         success: false,

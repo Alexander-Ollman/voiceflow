@@ -118,6 +118,58 @@ void voiceflow_destroy(struct VoiceFlowHandle *handle);
 const char *voiceflow_version(void);
 
 /**
+ * Classify the intent of a transcribed utterance.
+ *
+ * Returns a JSON string describing the intent (verbatim / inline correction /
+ * retroactive correction / one of the AI commands), plus an optional anchor
+ * hint when the utterance was an unambiguous "X to Y" / "X, not Y" form.
+ * Caller must free via `voiceflow_free_string`.
+ *
+ * # Safety
+ * `text` must be a valid null-terminated UTF-8 string. Returns null on
+ * parse / serialization failure.
+ */
+char *voiceflow_classify_intent(const char *text);
+
+/**
+ * Run an AI voice command (rewrite / proofread / shorten / bullet / continue /
+ * summarize / reply / explain / draft / question).
+ *
+ * `input_json` is a JSON-encoded `CommandInput`:
+ * ```json
+ * { "command": "rewrite", "parameter": "more formal",
+ *   "selection": "...", "field_text": "...", "field_source": "ax" }
+ * ```
+ *
+ * Returns the LLM's prose output as JSON `{"output":"...","abstained":bool}`.
+ * Caller must free via `voiceflow_free_string`. Returns null on error.
+ *
+ * # Safety
+ * `handle` must be a valid pointer from `voiceflow_init`.
+ * `input_json` must be a valid null-terminated UTF-8 string.
+ */
+char *voiceflow_run_ai_command(struct VoiceFlowHandle *handle, const char *inputJson);
+
+/**
+ * Run retroactive correction.
+ *
+ * `input_json` is a JSON-encoded `RetroactiveInput`:
+ * ```json
+ * { "field_text": "...", "field_source": "ax|browser|shadow|ocr",
+ *   "recent_insertions": ["...", "..."], "user_utterance": "..." }
+ * ```
+ *
+ * Returns the LLM's structured `Edit` as a JSON string the Swift side
+ * parses and applies. Caller must free via `voiceflow_free_string`.
+ * Returns null on error (handle null, JSON malformed, LLM unavailable).
+ *
+ * # Safety
+ * `handle` must be a valid pointer from `voiceflow_init`.
+ * `input_json` must be a valid null-terminated UTF-8 string.
+ */
+char *voiceflow_retroactive_correct(struct VoiceFlowHandle *handle, const char *inputJson);
+
+/**
  * Get the models directory path
  */
 char *voiceflow_models_dir(void);

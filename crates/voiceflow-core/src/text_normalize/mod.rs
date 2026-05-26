@@ -7,6 +7,7 @@
 //! Target latency: <5ms for typical transcripts.
 
 mod correction_commands;
+mod intent_classifier;
 mod stammer_dedup;
 
 use crate::llm::numbers::{fix_abbreviations, normalize_numbers};
@@ -20,6 +21,7 @@ use crate::prosody::{
 };
 
 pub use correction_commands::apply_correction_commands;
+pub use intent_classifier::{classify_intent, AnchorHint, CommandKind, IntentKind, IntentResult};
 pub use stammer_dedup::dedup_stammers;
 
 /// Result of deterministic normalization

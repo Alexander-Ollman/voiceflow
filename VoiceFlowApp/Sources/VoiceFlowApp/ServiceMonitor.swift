@@ -36,8 +36,8 @@ final class ServiceMonitor: ObservableObject {
         }
     }
 
-    @Published var parakeet = Service(name: "Parakeet daemon")
-    @Published var llamaServer = Service(name: "llama-server (Bonsai)", endpoint: "http://127.0.0.1:8080")
+    @Published var parakeet = Service(name: "Speech service")
+    @Published var llamaServer = Service(name: "Language model service", endpoint: "http://127.0.0.1:8080")
 
     private var timer: Timer?
 

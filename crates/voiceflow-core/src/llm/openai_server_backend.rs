@@ -97,6 +97,42 @@ impl OpenAIServerBackend {
         })
     }
 
+    /// Build a /v1/chat/completions body with JSON-schema constraint.
+    ///
+    /// Uses the chat endpoint so llama-server applies the model's own template
+    /// (Bonsai needs this — its baked template generates Claude-style "Human:"
+    /// output when fed raw text through /v1/completions). The structured
+    /// caller splits the prompt into a system block + user block.
+    fn build_structured_chat_body(
+        &self,
+        system: &str,
+        user: &str,
+        schema: &Value,
+        max_tokens: u32,
+        temperature: f32,
+        top_p: f32,
+    ) -> Value {
+        json!({
+            "model": self.server.model,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user }
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "stream": false,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "strict": true,
+                    "schema": schema,
+                }
+            }
+        })
+    }
+
     fn post_request(&self, url: &str, body: Value) -> Result<ureq::Response> {
         let mut req = self.agent.post(url)
             .set("Content-Type", "application/json");
@@ -246,6 +282,74 @@ impl LlmBackendTrait for OpenAIServerBackend {
     fn supports_multimodal(&self) -> bool {
         true
     }
+
+    fn generate_structured(
+        &self,
+        prompt: &str,
+        schema: &Value,
+        max_tokens: u32,
+        temperature: f32,
+        top_p: f32,
+    ) -> Result<String> {
+        // Split prompt into system + user at the "## Input" boundary so the
+        // chat template puts the bulky data block in the user turn (where the
+        // model expects it) and instructions in the system turn.
+        let (system, user) = if let Some(pos) = prompt.find("## Input") {
+            (prompt[..pos].trim_end().to_string(), prompt[pos..].to_string())
+        } else {
+            (prompt.to_string(), String::new())
+        };
+
+        let body = self.build_structured_chat_body(
+            &system, &user, schema, max_tokens, temperature, top_p,
+        );
+        let resp = self.post_request(&self.chat_url(), body)?;
+        let raw = Self::parse_chat_response(resp)?;
+
+        // Strip Qwen-style thinking blocks if the model emitted any despite our
+        // chat-template hints. llama-server's chat template usually handles this,
+        // but Bonsai's template doesn't always pre-fill <think></think>.
+        let cleaned = strip_thinking_prefix(&raw);
+
+        // Validate JSON; raise a useful error when the model strayed.
+        serde_json::from_str::<Value>(cleaned).with_context(|| {
+            format!(
+                "Structured generation returned non-JSON output: {}",
+                cleaned.chars().take(200).collect::<String>()
+            )
+        })?;
+        Ok(cleaned.to_string())
+    }
+
+    fn supports_structured(&self) -> bool {
+        true
+    }
+
+    fn generate_chat(
+        &self,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+        temperature: f32,
+        top_p: f32,
+        stop: &[&str],
+    ) -> Result<String> {
+        let messages = json!([
+            { "role": "system", "content": system },
+            { "role": "user", "content": user }
+        ]);
+        let mut body = self.build_chat_body(messages, max_tokens, temperature, top_p, false);
+        if !stop.is_empty() {
+            body["stop"] = json!(stop);
+        }
+        let resp = self.post_request(&self.chat_url(), body)?;
+        let raw = Self::parse_chat_response(resp)?;
+        Ok(strip_thinking_prefix(&raw).to_string())
+    }
+
+    fn supports_chat(&self) -> bool {
+        true
+    }
 }
 
 fn build_vision_messages(prompt: &str, image: &[u8]) -> Value {
@@ -259,6 +363,22 @@ fn build_vision_messages(prompt: &str, image: &[u8]) -> Value {
             { "type": "image_url", "image_url": { "url": data_url } }
         ]
     }])
+}
+
+/// Strip a leading `<think>...</think>` block (or `</think>` alone if llama-server
+/// pre-filled an empty thinking turn) from raw model output. Returns the rest
+/// trimmed of leading whitespace.
+fn strip_thinking_prefix(s: &str) -> &str {
+    let trimmed = s.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("<think>") {
+        if let Some(close) = rest.find("</think>") {
+            return rest[close + "</think>".len()..].trim_start();
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("</think>") {
+        return rest.trim_start();
+    }
+    trimmed
 }
 
 fn sniff_image_mime(image: &[u8]) -> &'static str {

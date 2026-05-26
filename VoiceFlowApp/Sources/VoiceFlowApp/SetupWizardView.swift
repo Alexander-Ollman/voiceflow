@@ -354,20 +354,20 @@ struct ModelDownloadStepView: View {
             VStack(alignment: .leading, spacing: 10) {
                 ModelRundownRow(
                     icon: "waveform",
-                    title: "Parakeet TDT 0.6B v2 (STT)",
-                    detail: "NVIDIA — speech-to-text via parakeet-mlx",
+                    title: "Speech model",
+                    detail: "Transcribes your voice on-device",
                     size: "~1.2 GB",
                     installed: setup.parakeetInstalled
                 )
                 ModelRundownRow(
                     icon: "brain",
-                    title: "Bonsai-8B Q1_0 (LLM)",
-                    detail: "PrismML — 1.125-bit quantized formatter",
+                    title: "Language model",
+                    detail: "Formats and punctuates your dictation on-device",
                     size: "~1.1 GB",
                     installed: setup.bonsaiInstalled
                 )
                 Divider()
-                Text("Total: about 2.3 GB. One-time download. Both models stay on your machine.")
+                Text("Total: about 2.3 GB. One-time download. Everything stays on your machine.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

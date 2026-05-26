@@ -70,6 +70,151 @@ enum BrowserContext {
         }
         return host
     }
+
+    // MARK: - Active-field DOM read
+
+    /// Snapshot of the focused DOM element in the active browser tab.
+    struct DOMFieldSnapshot {
+        let text: String
+        let cursor: Int?    // selectionStart, if applicable
+        let tag: String     // INPUT / TEXTAREA / DIV / etc.
+        let role: String?   // ARIA role if present
+    }
+
+    /// Run JS in the active tab of the given browser to read the focused field.
+    /// Returns nil if browser isn't running, automation is denied, no field is focused,
+    /// or (Safari) "Allow JavaScript from Apple Events" is off.
+    ///
+    /// Coverage: Gmail compose, Slack/Discord web, Notion web, Linear, ChatGPT/Claude,
+    /// any contenteditable or input/textarea. Recipient pills are read separately by
+    /// the recipient-context flow.
+    static func currentFieldSnapshot(forBundleId bundleId: String) -> DOMFieldSnapshot? {
+        guard let driver = drivers[bundleId] else { return nil }
+
+        // Single-line JS — AppleScript chokes on multi-line strings.
+        // Returns JSON: {text, cursor, tag, role} or {err}.
+        let js = "(function(){var e=document.activeElement;if(!e||e===document.body)return JSON.stringify({err:'no-focus'});var v=e.value;if(v===undefined||v===null){v=e.innerText||e.textContent||'';}var s=null;try{s=e.selectionStart;}catch(_){}return JSON.stringify({text:String(v),cursor:s,tag:e.tagName||'',role:e.getAttribute&&e.getAttribute('role')||null});})()"
+
+        let script: String
+        if driver.isChromium {
+            // execute … javascript returns the JS result directly as a string.
+            script = """
+            tell application "\(driver.appName)"
+                if (count of windows) is 0 then return ""
+                return execute active tab of front window javascript "\(js.replacingOccurrences(of: "\"", with: "\\\""))"
+            end tell
+            """
+        } else {
+            // Safari: do JavaScript … in current tab. Requires Develop → Allow JavaScript from Apple Events.
+            script = """
+            tell application "\(driver.appName)"
+                if (count of windows) is 0 then return ""
+                return (do JavaScript "\(js.replacingOccurrences(of: "\"", with: "\\\""))" in current tab of front window) as string
+            end tell
+            """
+        }
+
+        var error: NSDictionary?
+        guard let appleScript = NSAppleScript(source: script) else { return nil }
+        let result = appleScript.executeAndReturnError(&error)
+
+        if let err = error {
+            let code = (err["NSAppleScriptErrorNumber"] as? Int) ?? 0
+            if code != -1728 { // -1728 "no window" is normal
+                NSLog("[BrowserContext] JS-bridge error %d: %@",
+                      code, (err["NSAppleScriptErrorMessage"] as? String) ?? "")
+            }
+            return nil
+        }
+
+        guard let jsonString = result.stringValue, !jsonString.isEmpty,
+              let data = jsonString.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+
+        if obj["err"] != nil { return nil }
+
+        let text = (obj["text"] as? String) ?? ""
+        let cursor = obj["cursor"] as? Int
+        let tag = (obj["tag"] as? String) ?? ""
+        let role = obj["role"] as? String
+
+        return DOMFieldSnapshot(text: text, cursor: cursor, tag: tag, role: role)
+    }
+
+    // MARK: - Recipient extraction (Phase 4)
+
+    /// Information about the message-target that's active in the browser.
+    /// E.g. Gmail compose "To:" pills, Slack channel name, Discord DM target.
+    struct RecipientHint {
+        let target: String          // "Sarah Chen" / "#engineering" / "@ops"
+        let channel: String?        // "Gmail" / "Slack" / "Discord" / "Linear"
+        let role: String?           // "recipient" / "channel" / "team"
+    }
+
+    /// Extract a recipient hint from the active browser tab. Returns nil if
+    /// no recognized compose surface is on screen.
+    ///
+    /// Coverage:
+    /// - Gmail compose: reads the `To:` field pills
+    /// - Slack DM/channel: reads the active conversation header
+    /// - Discord: reads the channel header
+    /// - Linear: reads the assignee field
+    static func currentRecipientHint(forBundleId bundleId: String) -> RecipientHint? {
+        guard let driver = drivers[bundleId] else { return nil }
+
+        // Single-line JS that detects each surface in turn and returns the first hit.
+        let js = """
+        (function(){
+          var loc=location.hostname||'';
+          function txt(sel){var e=document.querySelector(sel);return e?(e.innerText||e.textContent||'').trim():'';}
+          function pills(sel){var nl=document.querySelectorAll(sel);var out=[];for(var i=0;i<nl.length;i++){var t=(nl[i].innerText||nl[i].textContent||'').trim();if(t)out.push(t);}return out;}
+          // Gmail
+          if(loc.indexOf('mail.google.com')>=0){var to=pills('[aria-label*=\\"To\\"][role=\\"option\\"], .vR .vN');if(to.length)return JSON.stringify({target:to.join(', '),channel:'Gmail',role:'recipient'});}
+          // Slack web
+          if(loc.indexOf('slack.com')>=0){var ch=txt('[data-qa=\\"channel_name_button_text\\"]')||txt('[data-qa=\\"channel_name\\"]')||txt('h2[data-qa=\\"channel_name\\"]');if(ch)return JSON.stringify({target:ch,channel:'Slack',role:'channel'});}
+          // Discord
+          if(loc.indexOf('discord.com')>=0){var dc=txt('[class*=\\"title-\\"] h3, [class*=\\"channelName\\"]')||txt('[class*=\\"name-\\"]');if(dc)return JSON.stringify({target:dc,channel:'Discord',role:'channel'});}
+          // Linear
+          if(loc.indexOf('linear.app')>=0){var ass=txt('[aria-label*=\\"Assignee\\"]')||txt('button[aria-label*=\\"assignee\\"]');if(ass)return JSON.stringify({target:ass,channel:'Linear',role:'assignee'});}
+          return '';
+        })()
+        """.replacingOccurrences(of: "\n", with: " ")
+
+        let script: String
+        if driver.isChromium {
+            script = """
+            tell application "\(driver.appName)"
+                if (count of windows) is 0 then return ""
+                return execute active tab of front window javascript "\(js.replacingOccurrences(of: "\"", with: "\\\""))"
+            end tell
+            """
+        } else {
+            script = """
+            tell application "\(driver.appName)"
+                if (count of windows) is 0 then return ""
+                return (do JavaScript "\(js.replacingOccurrences(of: "\"", with: "\\\""))" in current tab of front window) as string
+            end tell
+            """
+        }
+
+        var error: NSDictionary?
+        guard let appleScript = NSAppleScript(source: script) else { return nil }
+        let result = appleScript.executeAndReturnError(&error)
+
+        if error != nil { return nil }
+        guard let jsonString = result.stringValue, !jsonString.isEmpty,
+              let data = jsonString.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let target = obj["target"] as? String, !target.isEmpty
+        else { return nil }
+
+        return RecipientHint(
+            target: target,
+            channel: obj["channel"] as? String,
+            role: obj["role"] as? String
+        )
+    }
 }
 
 // MARK: - Browser site rules (hostname → persona)

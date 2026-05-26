@@ -84,6 +84,24 @@ impl LlmEngine {
         })
     }
 
+    /// Run retroactive correction against this engine's backend.
+    /// Returns a parsed `Edit` describing the change the LLM decided to make.
+    pub fn retroactive_correct(
+        &self,
+        input: &crate::llm::structured_edit::RetroactiveInput,
+    ) -> Result<crate::llm::structured_edit::Edit> {
+        crate::llm::structured_edit::retroactive_correct(self.backend.as_ref(), input)
+    }
+
+    /// Run an AI voice command (rewrite / proofread / etc.) against this
+    /// engine's backend. Returns the LLM's prose output.
+    pub fn run_command(
+        &self,
+        input: &crate::llm::structured_edit::CommandInput,
+    ) -> Result<crate::llm::structured_edit::CommandOutput> {
+        crate::llm::structured_edit::run_command(self.backend.as_ref(), input)
+    }
+
     /// Format a transcript using the LLM (async)
     pub async fn format_async(&self, transcript: &str, prompt_template: &str) -> Result<String> {
         let prompt = format_prompt(prompt_template, transcript, &self.config);

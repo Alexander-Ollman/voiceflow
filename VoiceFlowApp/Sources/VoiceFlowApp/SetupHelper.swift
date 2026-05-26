@@ -1,5 +1,42 @@
 import Foundation
 
+/// Tracks download bytes-per-second over a recent time window so we can
+/// estimate time-remaining without showing a wildly-jittery number. We
+/// keep the most-recent samples in a small ring and compute the slope
+/// between the oldest and newest sample in the window.
+private final class DownloadRateTracker {
+    private struct Sample {
+        let time: Date
+        let bytes: Int64
+    }
+    private var samples: [Sample] = []
+    private let windowSeconds: TimeInterval = 5.0
+
+    func reset() {
+        samples.removeAll()
+    }
+
+    func record(totalBytesDone: Int64) {
+        let now = Date()
+        samples.append(Sample(time: now, bytes: totalBytesDone))
+        while let first = samples.first, now.timeIntervalSince(first.time) > windowSeconds {
+            samples.removeFirst()
+        }
+    }
+
+    /// Recent throughput in bytes/sec, or nil if we don't have enough data yet.
+    var bytesPerSecond: Double? {
+        guard samples.count >= 2,
+              let first = samples.first,
+              let last = samples.last else { return nil }
+        let dt = last.time.timeIntervalSince(first.time)
+        guard dt >= 0.5 else { return nil }   // need at least half a second
+        let db = Double(last.bytes - first.bytes)
+        guard db > 0 else { return nil }
+        return db / dt
+    }
+}
+
 /// Downloads and verifies the two models VoiceFlow ships with: Parakeet TDT 0.6B v2
 /// (STT) and Bonsai-8B Q1_0 (LLM). Centralizes the install logic so both the
 /// onboarding wizard and the Models settings page can share the same code path.
@@ -24,7 +61,40 @@ final class SetupHelper: ObservableObject {
         case failed(String)
     }
 
-    @Published var phase: Phase = .idle
+    @Published var phase: Phase = .idle {
+        didSet {
+            // Reset rate samples when entering a fresh download flow (idle/failed
+            // /complete → downloading). Don't reset on Bonsai→Parakeet transition:
+            // both downloads are HF-bound so the recent rate carries over and
+            // the ETA stays smooth across the handoff.
+            let wasInDownload: Bool = {
+                switch oldValue {
+                case .downloadingBonsai, .loadingParakeet: return true
+                default: return false
+                }
+            }()
+            let nowInDownload: Bool = {
+                switch phase {
+                case .downloadingBonsai, .loadingParakeet: return true
+                default: return false
+                }
+            }()
+            if nowInDownload && !wasInDownload {
+                rateTracker.reset()
+            }
+            // Sample for ETA. Use *global* bytes-done (sum across both models)
+            // so the rate corresponds to overall install progress, not just
+            // the current phase.
+            switch phase {
+            case .downloadingBonsai(let done, _):
+                rateTracker.record(totalBytesDone: done)
+            case .loadingParakeet(let done, _):
+                rateTracker.record(totalBytesDone: Self.bonsaiApproxBytes + done)
+            default:
+                break
+            }
+        }
+    }
 
     // Public switches — true once the corresponding artifact is on disk/loaded.
     @Published var bonsaiInstalled: Bool = false
@@ -32,6 +102,7 @@ final class SetupHelper: ObservableObject {
 
     private var parakeetEngine: ParakeetASREngine?
     private var bonsaiDownloadTask: URLSessionDownloadTask?
+    private let rateTracker = DownloadRateTracker()
 
     init() {
         refreshInstallState()
@@ -220,22 +291,51 @@ final class SetupHelper: ObservableObject {
         switch phase {
         case .idle:
             return ""
-        case .downloadingBonsai(let done, let total):
-            let mb = Double(done) / 1_048_576.0
-            let totalMB = Double(total) / 1_048_576.0
-            return String(format: "Downloading Bonsai-8B GGUF — %.0f / %.0f MB", mb, totalMB)
-        case .loadingParakeet(let done, let total):
-            let mb = Double(done) / 1_048_576.0
-            let totalMB = Double(total) / 1_048_576.0
-            if mb < 1.0 {
-                return "Loading Parakeet TDT 0.6B (first run, ~1.2 GB)…"
+        case .downloadingBonsai(let done, _):
+            return downloadLabel(globalDone: done)
+        case .loadingParakeet(let done, _):
+            // Parakeet's HF cache directory is empty at the moment of the
+            // call until the daemon actually starts pulling bytes (~1s).
+            // During that window show a preparing label so the user doesn't
+            // see "0%" hang.
+            if done < 1_048_576 {
+                return "Preparing…"
             }
-            return String(format: "Downloading Parakeet TDT 0.6B — %.0f / %.0f MB", mb, totalMB)
+            return downloadLabel(globalDone: Self.bonsaiApproxBytes + done)
         case .complete:
-            return "Setup complete. Both models installed."
+            return "Setup complete. Models installed."
         case .failed(let msg):
             return "Setup failed: \(msg)"
         }
+    }
+
+    /// Compose the user-facing "Downloading… X% · ~Y min remaining" string from
+    /// total bytes-done across both models. ETA is dropped if the rate sampler
+    /// hasn't accumulated enough data yet (first ~1s of a download).
+    private func downloadLabel(globalDone: Int64) -> String {
+        let total = Self.totalApproxBytes
+        guard total > 0 else { return "Downloading…" }
+        let clampedDone = min(globalDone, total)
+        let pct = Int(Double(clampedDone) / Double(total) * 100)
+        var label = "Downloading… \(pct)%"
+        if let bps = rateTracker.bytesPerSecond, bps > 1024 {
+            let remaining = max(0, total - clampedDone)
+            let secondsLeft = Double(remaining) / bps
+            label += " · \(Self.formatRemaining(secondsLeft)) remaining"
+        }
+        return label
+    }
+
+    private static func formatRemaining(_ seconds: Double) -> String {
+        if seconds < 10 { return "~\(max(1, Int(seconds)))s" }
+        if seconds < 60 { return "~\(Int(seconds))s" }
+        if seconds < 3600 {
+            let m = Int((seconds + 30) / 60)   // round to nearest minute
+            return "~\(max(1, m)) min"
+        }
+        let h = Int(seconds / 3600)
+        let m = Int((seconds - Double(h * 3600)) / 60)
+        return "~\(h)h \(m)m"
     }
 }
 

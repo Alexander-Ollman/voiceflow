@@ -121,17 +121,21 @@ final class ParakeetASREngine: ObservableObject {
     }
 
     private func spawnDaemon() throws {
-        let pythonPath = findPython()
-        let scriptPath = try findDaemonScript()
-
-        NSLog("[Parakeet] Spawning daemon: %@ %@", pythonPath, scriptPath)
-
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonPath)
-        process.arguments = [scriptPath]
         process.environment = ProcessInfo.processInfo.environment.merging([
             "CUDA_VISIBLE_DEVICES": "",
         ]) { _, new in new }
+
+        if let bundledDaemon = findBundledDaemon() {
+            NSLog("[Parakeet] Spawning bundled daemon: %@", bundledDaemon)
+            process.executableURL = URL(fileURLWithPath: bundledDaemon)
+        } else {
+            let pythonPath = findPython()
+            let scriptPath = try findDaemonScript()
+            NSLog("[Parakeet] Spawning daemon (dev fallback): %@ %@", pythonPath, scriptPath)
+            process.executableURL = URL(fileURLWithPath: pythonPath)
+            process.arguments = [scriptPath]
+        }
 
         let logFile = FileHandle(forWritingAtPath: "/tmp/voiceflow_parakeet_daemon.log")
             ?? FileHandle.nullDevice
@@ -141,6 +145,17 @@ final class ParakeetASREngine: ObservableObject {
         try process.run()
         daemonProcess = process
         NSLog("[Parakeet] Daemon spawned with PID %d", process.processIdentifier)
+    }
+
+    /// Production path: PyInstaller-frozen daemon shipped inside the .app bundle.
+    /// Lives under Resources/ (not MacOS/) so codesign doesn't treat PyInstaller's
+    /// nested directories as unsigned sub-bundles. See build.sh for context.
+    /// Returns the path if present and executable, nil otherwise.
+    private func findBundledDaemon() -> String? {
+        let path = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Resources/parakeet-daemon/parakeet-daemon")
+            .path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
     private func findPython() -> String {
