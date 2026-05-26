@@ -10,6 +10,13 @@ APP_NAME="VoiceFlow"
 ONNX_VERSION="1.22.0"
 ONNX_CACHE_DIR="$BUILD_DIR/onnxruntime-cache"
 
+# PrismML llama-server release artifact. Era hosts a pre-built tarball
+# (binary + dylibs) pinned to a PrismML SHA, since the PrismML repo is
+# third-party and we can't publish releases there.
+LLAMA_SERVER_SHA="d104cf1"
+LLAMA_SERVER_CACHE_DIR="$BUILD_DIR/llama-server-cache"
+LLAMA_SERVER_DIR="$LLAMA_SERVER_CACHE_DIR/llama-server-$LLAMA_SERVER_SHA"
+
 echo "Building VoiceFlow macOS App..."
 
 # Step 0: Download ONNX Runtime if not cached
@@ -36,6 +43,24 @@ else
     echo "Step 0: Using cached ONNX Runtime $ONNX_VERSION"
 fi
 
+# Step 0b: Download bundled llama-server (PrismML fork, required for Bonsai Q1_0)
+if [ ! -x "$LLAMA_SERVER_DIR/bin/llama-server" ]; then
+    echo "Step 0b: Downloading llama-server ($LLAMA_SERVER_SHA)..."
+    mkdir -p "$LLAMA_SERVER_DIR"
+    LLAMA_URL="https://github.com/Alexander-Ollman/voiceflow/releases/download/llama-server-$LLAMA_SERVER_SHA/llama-server-macos-arm64-prismml-$LLAMA_SERVER_SHA.tgz"
+    curl -fsSL "$LLAMA_URL" -o "$LLAMA_SERVER_CACHE_DIR/llama-server.tgz"
+    tar -xzf "$LLAMA_SERVER_CACHE_DIR/llama-server.tgz" -C "$LLAMA_SERVER_DIR"
+    rm -f "$LLAMA_SERVER_CACHE_DIR/llama-server.tgz"
+    echo "  llama-server downloaded and cached."
+else
+    echo "Step 0b: Using cached llama-server $LLAMA_SERVER_SHA"
+fi
+
+# Step 0c: Build PyInstaller-frozen Parakeet daemon (cached; skips if up-to-date)
+echo "Step 0c: Building Parakeet daemon..."
+"$PROJECT_ROOT/scripts/build-parakeet-daemon.sh"
+PARAKEET_DAEMON_DIR="$BUILD_DIR/parakeet-cache/dist/parakeet-daemon"
+
 # Step 1: Build Rust FFI library
 echo "Step 1: Building Rust FFI library..."
 cd "$PROJECT_ROOT"
@@ -53,17 +78,22 @@ swift package resolve
 
 # Step 4: Build Swift app
 echo "Step 4: Building Swift app..."
-MOONSHINE_LIB_DIR="$SCRIPT_DIR/.build/arm64-apple-macosx/release"
-# Fall back to the xcframework path if the release-config copy isn't there yet
-# (first build of a clean checkout).
+# moonshine-swift declares libmoonshine.a as a binaryTarget — SwiftPM links it
+# automatically via the Package.swift dependency. Don't pass an explicit
+# `-Xlinker -lmoonshine`: the Moonshine wrapper target produces a stub
+# `libmoonshine.a` (undefined refs only) in `.build/<triple>/release/` whose
+# basename collides with the xcframework binary, and an explicit -lmoonshine
+# resolves to whichever -L path comes first — usually the stub, producing a
+# flood of "_moonshine_*" undefined-symbol errors at the final link step.
+MOONSHINE_LIB_DIR="$SCRIPT_DIR/.build/artifacts/moonshine-swift/Moonshine/Moonshine.xcframework/macos-arm64_x86_64"
 if [ ! -f "$MOONSHINE_LIB_DIR/libmoonshine.a" ]; then
-    MOONSHINE_LIB_DIR="$SCRIPT_DIR/.build/artifacts/moonshine-swift/Moonshine/Moonshine.xcframework/macos-arm64_x86_64"
+    echo "  ERROR: moonshine-swift xcframework not present. Run 'swift package resolve' first." >&2
+    exit 1
 fi
 swift build -c release \
     -Xlinker -L"$PROJECT_ROOT/target/release" \
     -Xlinker -lvoiceflow_ffi \
-    -Xlinker -L"$MOONSHINE_LIB_DIR" \
-    -Xlinker -lmoonshine \
+    -Xlinker -force_load -Xlinker "$MOONSHINE_LIB_DIR/libmoonshine.a" \
     -Xcc -I"$SCRIPT_DIR/Sources/VoiceFlowFFI"
 
 # Step 5: Create app bundle
@@ -83,6 +113,19 @@ cp "$PROJECT_ROOT/target/release/libvoiceflow_ffi.dylib" "$APP_BUNDLE/Contents/F
 # Copy ONNX Runtime library (required for Moonshine STT)
 cp "$ONNX_DYLIB" "$APP_BUNDLE/Contents/Frameworks/libonnxruntime.dylib"
 
+# Copy PrismML llama-server binary + its dylibs (Bonsai serving)
+cp "$LLAMA_SERVER_DIR/bin/llama-server" "$APP_BUNDLE/Contents/MacOS/llama-server"
+# cp -a preserves the versioned/symlink layout the dylibs need at runtime.
+cp -a "$LLAMA_SERVER_DIR/lib/"lib*.dylib "$APP_BUNDLE/Contents/Frameworks/"
+
+# Copy PyInstaller-frozen Parakeet daemon (whole --onedir tree) into Resources/.
+# Resources/ is required (not MacOS/) because the PyInstaller layout contains
+# subdirectories with Mach-O .so/.dylib files but no Info.plist. Under MacOS/
+# codesign interprets those as nested bundles missing their signature and
+# refuses to sign the outer .app ("code object is not signed at all" pointing
+# at a .pyi sibling). Resources/ is treated as data and doesn't trigger that.
+cp -R "$PARAKEET_DAEMON_DIR" "$APP_BUNDLE/Contents/Resources/parakeet-daemon"
+
 # Copy navbar icon asset from img/navbar/
 # White icon works for both light and dark menu bars
 IMG_DIR="$PROJECT_ROOT/img"
@@ -93,16 +136,11 @@ cp "$NAVBAR_DIR/navbar-light.png" "$APP_BUNDLE/Contents/Resources/MenuBarIcon.pn
 # Copy app icon for Settings UI
 cp "$IMG_DIR/app.png" "$APP_BUNDLE/Contents/Resources/AppLogo.png"
 
-# Copy Python daemon script for Qwen3-ASR consolidated mode
+# Copy Python daemon script for Qwen3-ASR consolidated mode (developer
+# fallback path — production users get the PyInstaller-frozen daemon).
 if [ -f "$PROJECT_ROOT/scripts/qwen3_asr_daemon.py" ]; then
     cp "$PROJECT_ROOT/scripts/qwen3_asr_daemon.py" "$APP_BUNDLE/Contents/Resources/"
     echo "  Copied qwen3_asr_daemon.py to Resources"
-fi
-
-# Copy Python daemon script for Parakeet-MLX batch STT
-if [ -f "$PROJECT_ROOT/scripts/parakeet_asr_daemon.py" ]; then
-    cp "$PROJECT_ROOT/scripts/parakeet_asr_daemon.py" "$APP_BUNDLE/Contents/Resources/"
-    echo "  Copied parakeet_asr_daemon.py to Resources"
 fi
 
 # Generate macOS app icon (.icns) from app.png
@@ -145,6 +183,13 @@ install_name_tool -add_rpath "@loader_path" "$APP_BUNDLE/Contents/Frameworks/lib
 # Fix ONNX Runtime install name to use @rpath
 install_name_tool -id "@rpath/libonnxruntime.dylib" "$APP_BUNDLE/Contents/Frameworks/libonnxruntime.dylib"
 
+# llama-server's build-time rpath points at the dev box that produced the
+# tarball; redirect it into Contents/Frameworks/ so the bundled dylibs resolve.
+install_name_tool -delete_rpath "/Users/alexanderollman/PrismML-llama.cpp/build-novoid/bin" \
+    "$APP_BUNDLE/Contents/MacOS/llama-server" 2>/dev/null || true
+install_name_tool -add_rpath "@executable_path/../Frameworks" \
+    "$APP_BUNDLE/Contents/MacOS/llama-server" 2>/dev/null || true
+
 # Create Info.plist
 cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -160,9 +205,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <key>CFBundleDisplayName</key>
     <string>VoiceFlow</string>
     <key>CFBundleVersion</key>
-    <string>2.0.8</string>
+    <string>2.1.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.8</string>
+    <string>2.1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
@@ -192,6 +237,34 @@ if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
     # Sign frameworks individually first (required for proper timestamps)
     codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/libonnxruntime.dylib"
     codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/libvoiceflow_ffi.dylib"
+    # Sign each bundled llama.cpp dylib (skip the versioned/unversioned symlinks).
+    for dylib in "$APP_BUNDLE/Contents/Frameworks/"libllama*.dylib \
+                 "$APP_BUNDLE/Contents/Frameworks/"libggml*.dylib \
+                 "$APP_BUNDLE/Contents/Frameworks/"libmtmd*.dylib; do
+        [ -L "$dylib" ] && continue
+        codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$dylib"
+    done
+    # Sign the llama-server helper executable
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/llama-server"
+    # Sign every Mach-O inside the PyInstaller'd Parakeet daemon. PyInstaller
+    # bundles ship hundreds of .so/.dylib files; each must be individually
+    # signed under Hardened Runtime before the .app can pass deep verify.
+    PARAKEET_BUNDLE="$APP_BUNDLE/Contents/Resources/parakeet-daemon"
+    while IFS= read -r -d '' mach_o; do
+        codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$mach_o" 2>/dev/null || true
+    done < <(find "$PARAKEET_BUNDLE" -type f \( -name "*.so" -o -name "*.dylib" \) -print0)
+    # Sign any other Mach-O executables inside the bundle (embedded Python interpreter, etc.)
+    while IFS= read -r -d '' f; do
+        if file "$f" 2>/dev/null | grep -q "Mach-O"; then
+            codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$f" 2>/dev/null || true
+        fi
+    done < <(find "$PARAKEET_BUNDLE" -type f ! -name "*.so" ! -name "*.dylib" -perm +111 -print0)
+    # Sign the top-level Parakeet daemon binary last, with its own entitlements
+    # (allow-jit, disable-library-validation, etc — required by PyInstaller + MLX).
+    codesign --force --options runtime --timestamp \
+        --entitlements "$SCRIPT_DIR/Parakeet.entitlements" \
+        --sign "$SIGN_IDENTITY" \
+        "$PARAKEET_BUNDLE/parakeet-daemon"
     # Sign the main app bundle
     codesign --force --options runtime --timestamp --entitlements "$SCRIPT_DIR/VoiceFlow.entitlements" --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
     codesign --verify --deep --strict "$APP_BUNDLE"

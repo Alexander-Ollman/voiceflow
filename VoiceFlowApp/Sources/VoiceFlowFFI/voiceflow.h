@@ -29,6 +29,53 @@ typedef struct VoiceFlowResult {
 } VoiceFlowResult;
 
 /**
+ * Model info struct for FFI
+ */
+typedef struct ModelInfo {
+  char *id;
+  char *display_name;
+  char *filename;
+  float size_gb;
+  bool is_downloaded;
+} ModelInfo;
+
+/**
+ * Moonshine model info struct for FFI
+ */
+typedef struct MoonshineModelInfo {
+  char *id;
+  char *display_name;
+  uint32_t size_mb;
+  bool is_downloaded;
+} MoonshineModelInfo;
+
+/**
+ * Consolidated model info struct for FFI
+ */
+typedef struct ConsolidatedModelInfo {
+  char *id;
+  char *display_name;
+  char *dir_name;
+  float size_gb;
+  bool is_downloaded;
+} ConsolidatedModelInfo;
+
+/**
+ * C function pointer type for streaming token callbacks.
+ * Returns true to continue generation, false to abort.
+ */
+typedef bool (*TokenCallbackFn)(const char *token, void *userdata);
+
+/**
+ * Memory info struct for FFI
+ */
+typedef struct MemoryInfo {
+  uintptr_t resident_bytes;
+  uintptr_t virtual_bytes;
+  uintptr_t peak_bytes;
+} MemoryInfo;
+
+/**
  * Initialize the VoiceFlow pipeline
  *
  * # Safety
@@ -71,15 +118,56 @@ void voiceflow_destroy(struct VoiceFlowHandle *handle);
 const char *voiceflow_version(void);
 
 /**
- * Model info struct for FFI
+ * Classify the intent of a transcribed utterance.
+ *
+ * Returns a JSON string describing the intent (verbatim / inline correction /
+ * retroactive correction / one of the AI commands), plus an optional anchor
+ * hint when the utterance was an unambiguous "X to Y" / "X, not Y" form.
+ * Caller must free via `voiceflow_free_string`.
+ *
+ * # Safety
+ * `text` must be a valid null-terminated UTF-8 string. Returns null on
+ * parse / serialization failure.
  */
-typedef struct ModelInfo {
-    char *id;
-    char *display_name;
-    char *filename;
-    float size_gb;
-    bool is_downloaded;
-} ModelInfo;
+char *voiceflow_classify_intent(const char *text);
+
+/**
+ * Run an AI voice command (rewrite / proofread / shorten / bullet / continue /
+ * summarize / reply / explain / draft / question).
+ *
+ * `input_json` is a JSON-encoded `CommandInput`:
+ * ```json
+ * { "command": "rewrite", "parameter": "more formal",
+ *   "selection": "...", "field_text": "...", "field_source": "ax" }
+ * ```
+ *
+ * Returns the LLM's prose output as JSON `{"output":"...","abstained":bool}`.
+ * Caller must free via `voiceflow_free_string`. Returns null on error.
+ *
+ * # Safety
+ * `handle` must be a valid pointer from `voiceflow_init`.
+ * `input_json` must be a valid null-terminated UTF-8 string.
+ */
+char *voiceflow_run_ai_command(struct VoiceFlowHandle *handle, const char *inputJson);
+
+/**
+ * Run retroactive correction.
+ *
+ * `input_json` is a JSON-encoded `RetroactiveInput`:
+ * ```json
+ * { "field_text": "...", "field_source": "ax|browser|shadow|ocr",
+ *   "recent_insertions": ["...", "..."], "user_utterance": "..." }
+ * ```
+ *
+ * Returns the LLM's structured `Edit` as a JSON string the Swift side
+ * parses and applies. Caller must free via `voiceflow_free_string`.
+ * Returns null on error (handle null, JSON malformed, LLM unavailable).
+ *
+ * # Safety
+ * `handle` must be a valid pointer from `voiceflow_init`.
+ * `input_json` must be a valid null-terminated UTF-8 string.
+ */
+char *voiceflow_retroactive_correct(struct VoiceFlowHandle *handle, const char *inputJson);
 
 /**
  * Get the models directory path
@@ -126,7 +214,7 @@ char *voiceflow_current_model(void);
  * # Safety
  * model_id must be a valid null-terminated string
  */
-bool voiceflow_set_model(const char *model_id);
+bool voiceflow_set_model(const char *modelId);
 
 /**
  * Get the HuggingFace download URL for a model
@@ -134,11 +222,7 @@ bool voiceflow_set_model(const char *model_id);
  * # Safety
  * model_id must be a valid null-terminated string
  */
-char *voiceflow_model_download_url(const char *model_id);
-
-// =============================================================================
-// STT Engine Management
-// =============================================================================
+char *voiceflow_model_download_url(const char *modelId);
 
 /**
  * Get the current STT engine ("whisper", "moonshine", or "qwen3-asr")
@@ -151,7 +235,7 @@ char *voiceflow_current_stt_engine(void);
  * # Safety
  * engine_id must be a valid null-terminated string
  */
-bool voiceflow_set_stt_engine(const char *engine_id);
+bool voiceflow_set_stt_engine(const char *engineId);
 
 /**
  * Get the current Moonshine model ("tiny" or "base")
@@ -164,17 +248,7 @@ char *voiceflow_current_moonshine_model(void);
  * # Safety
  * model_id must be a valid null-terminated string
  */
-bool voiceflow_set_moonshine_model(const char *model_id);
-
-/**
- * Moonshine model info struct for FFI
- */
-typedef struct MoonshineModelInfo {
-    char *id;
-    char *display_name;
-    uint32_t size_mb;
-    bool is_downloaded;
-} MoonshineModelInfo;
+bool voiceflow_set_moonshine_model(const char *modelId);
 
 /**
  * Get the number of available Moonshine models
@@ -203,27 +277,12 @@ void voiceflow_free_moonshine_model_info(struct MoonshineModelInfo info);
  * # Safety
  * model_id must be a valid null-terminated string ("tiny" or "base")
  */
-bool voiceflow_moonshine_model_downloaded(const char *model_id);
+bool voiceflow_moonshine_model_downloaded(const char *modelId);
 
 /**
  * Get the Moonshine models directory path
  */
 char *voiceflow_moonshine_models_dir(void);
-
-// =============================================================================
-// Pipeline Mode and Consolidated Model Management
-// =============================================================================
-
-/**
- * Consolidated model info struct for FFI
- */
-typedef struct ConsolidatedModelInfo {
-    char *id;
-    char *display_name;
-    char *dir_name;
-    float size_gb;
-    bool is_downloaded;
-} ConsolidatedModelInfo;
 
 /**
  * Get the current pipeline mode ("stt-plus-llm" or "consolidated")
@@ -249,7 +308,7 @@ char *voiceflow_current_consolidated_model(void);
  * # Safety
  * model_id must be a valid null-terminated string
  */
-bool voiceflow_set_consolidated_model(const char *model_id);
+bool voiceflow_set_consolidated_model(const char *modelId);
 
 /**
  * Get the number of available consolidated models
@@ -278,7 +337,7 @@ void voiceflow_free_consolidated_model_info(struct ConsolidatedModelInfo info);
  * # Safety
  * model_id must be a valid null-terminated string
  */
-bool voiceflow_consolidated_model_downloaded(const char *model_id);
+bool voiceflow_consolidated_model_downloaded(const char *modelId);
 
 /**
  * Get the directory path for a consolidated model
@@ -286,11 +345,7 @@ bool voiceflow_consolidated_model_downloaded(const char *model_id);
  * # Safety
  * model_id must be a valid null-terminated string
  */
-char *voiceflow_consolidated_model_dir(const char *model_id);
-
-// =============================================================================
-// Multimodal (mmproj) Support
-// =============================================================================
+char *voiceflow_consolidated_model_dir(const char *modelId);
 
 /**
  * Get the mmproj filename for the current model, or null if not multimodal
@@ -313,7 +368,7 @@ bool voiceflow_model_mmproj_downloaded(void);
 float voiceflow_model_mmproj_size_gb(void);
 
 /**
- * Process pre-transcribed text with an image through multimodal LLM formatting.
+ * Process pre-transcribed text with an image through post-processing + multimodal LLM formatting.
  * Used for visual context dictation (Control+Option+Space hotkey).
  *
  * # Safety
@@ -323,14 +378,10 @@ float voiceflow_model_mmproj_size_gb(void);
  * - image_data must point to image_len bytes of JPEG data (or null for text-only)
  */
 struct VoiceFlowResult voiceflow_process_text_with_image(struct VoiceFlowHandle *handle,
-                                                          const char *text,
-                                                          const char *context,
-                                                          const uint8_t *image_data,
-                                                          uintptr_t image_len);
-
-// =============================================================================
-// Post-Processing
-// =============================================================================
+                                                         const char *text,
+                                                         const char *context,
+                                                         const uint8_t *imageData,
+                                                         uintptr_t imageLen);
 
 /**
  * Add a user-learned correction to the replacement dictionary.
@@ -352,8 +403,7 @@ bool voiceflow_add_replacement(struct VoiceFlowHandle *handle,
  * - handle must be a valid pointer from voiceflow_init
  * - original must be a valid null-terminated string
  */
-bool voiceflow_remove_replacement(struct VoiceFlowHandle *handle,
-                                  const char *original);
+bool voiceflow_remove_replacement(struct VoiceFlowHandle *handle, const char *original);
 
 /**
  * Apply post-processing to text (tokenization fix, voice commands, spelled words, replacements).
@@ -366,7 +416,10 @@ char *voiceflow_post_process_text(const char *text);
 
 /**
  * Process pre-transcribed text through post-processing + LLM formatting.
- * Used when an external STT engine (e.g. Qwen3-ASR) provides the raw transcript.
+ * Used when an external STT engine (e.g. Qwen3-ASR Python daemon) provides the raw transcript
+ * and we want the traditional pipeline's LLM formatting applied.
+ *
+ * Returns a VoiceFlowResult with formatted_text and raw_transcript.
  *
  * # Safety
  * - handle must be a valid pointer from voiceflow_init
@@ -374,8 +427,8 @@ char *voiceflow_post_process_text(const char *text);
  * - context can be null
  */
 struct VoiceFlowResult voiceflow_format_text(struct VoiceFlowHandle *handle,
-                                              const char *text,
-                                              const char *context);
+                                             const char *text,
+                                             const char *context);
 
 /**
  * Process pre-transcribed text through deterministic normalization (no LLM).
@@ -400,15 +453,9 @@ struct VoiceFlowResult voiceflow_format_text_deterministic(struct VoiceFlowHandl
  * - context may be null
  */
 struct VoiceFlowResult voiceflow_process_audio_direct(struct VoiceFlowHandle *handle,
-                                                       const float *audio_data,
-                                                       unsigned long audio_len,
-                                                       const char *context);
-
-/**
- * Callback function type for streaming token delivery.
- * Returns true to continue generation, false to abort.
- */
-typedef bool (*TokenCallbackFn)(const char *token, void *userdata);
+                                                      const float *audioData,
+                                                      uintptr_t audioLen,
+                                                      const char *context);
 
 /**
  * Process pre-transcribed text through post-processing + LLM formatting with streaming.
@@ -443,19 +490,6 @@ bool voiceflow_is_consolidated_mode(void);
  */
 bool voiceflow_is_audio_direct_mode(void);
 
-// =============================================================================
-// Memory Management and Cleanup
-// =============================================================================
-
-/**
- * Memory info struct for FFI
- */
-typedef struct MemoryInfo {
-    uintptr_t resident_bytes;
-    uintptr_t virtual_bytes;
-    uintptr_t peak_bytes;
-} MemoryInfo;
-
 /**
  * Unload all models from memory (LLM and STT)
  * Call this before app termination or when switching models
@@ -484,6 +518,7 @@ void voiceflow_unload_stt(struct VoiceFlowHandle *handle);
 
 /**
  * Get approximate memory usage in bytes
+ * This is a rough estimate based on tracked allocations
  */
 uintptr_t voiceflow_memory_usage(void);
 
@@ -494,6 +529,7 @@ struct MemoryInfo voiceflow_memory_info(void);
 
 /**
  * Force a garbage collection hint
+ * On Rust, this mainly drops any cached allocator memory
  */
 void voiceflow_force_gc(void);
 

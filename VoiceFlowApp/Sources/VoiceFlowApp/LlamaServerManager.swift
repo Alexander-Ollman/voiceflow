@@ -43,9 +43,10 @@ final class LlamaServerManager: ObservableObject {
     private static var binarySearchPaths: [String] {
         let home = NSHomeDirectory()
         return [
-            // 1. Bundled in app Resources (preferred — once we ship it)
-            Bundle.main.path(forResource: "llama-server", ofType: nil) ?? "",
-            // 2. Explicit env override
+            // 1. Bundled at Contents/MacOS/llama-server (production path).
+            Bundle.main.bundleURL
+                .appendingPathComponent("Contents/MacOS/llama-server").path,
+            // 2. Explicit env override (dev iteration on a fresh PrismML build).
             ProcessInfo.processInfo.environment["VOICEFLOW_LLAMA_SERVER"] ?? "",
             // 3. PrismML build at the conventional dev path
             "\(home)/PrismML-llama.cpp/build/bin/llama-server",
@@ -94,12 +95,11 @@ final class LlamaServerManager: ObservableObject {
         guard let binary = Self.locateBinary() else {
             let searched = Self.binarySearchPaths.joined(separator: "\n  - ")
             lastError = """
-            PrismML llama-server binary not found. Searched:
+            Language model server binary not found. Searched:
               - \(searched)
 
-            Build it with:
-              git clone https://github.com/PrismML-Eng/llama.cpp ~/PrismML-llama.cpp
-              cd ~/PrismML-llama.cpp && cmake -B build && cmake --build build --target llama-server -j
+            This usually means VoiceFlow.app is corrupted or was extracted
+            incorrectly. Re-download and reinstall from the official DMG.
             """
             state = .missingBinary(searched)
             NSLog("[LlamaServer] %@", lastError ?? "")
@@ -176,9 +176,19 @@ final class LlamaServerManager: ObservableObject {
         watchdogTimer = nil
         if let p = process, p.isRunning {
             p.terminate()
-            // Give it a beat to exit gracefully before SIGKILL.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
-                if p.isRunning { p.interrupt() }
+            // Wait synchronously up to 2s for graceful exit, then SIGKILL.
+            // The previous async-dispatch SIGKILL never fired during
+            // applicationWillTerminate: the parent app exits before the
+            // global queue gets to the +2s block, the dispatch is dropped,
+            // the child reparents to launchd, and the user is left with an
+            // orphan llama-server holding ~1.1GB of Bonsai weights resident.
+            let deadline = Date().addingTimeInterval(2.0)
+            while p.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if p.isRunning {
+                kill(p.processIdentifier, SIGKILL)
+                p.waitUntilExit()
             }
         }
         process = nil

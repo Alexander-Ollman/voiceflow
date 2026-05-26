@@ -288,6 +288,26 @@ impl Pipeline {
         Ok(self.llm.as_mut().unwrap())
     }
 
+    /// Run retroactive correction. Lazily initializes the LLM if needed.
+    /// Returns the LLM's structured edit decision; callers should check the
+    /// `confidence` field before applying.
+    pub fn retroactive_correct(
+        &mut self,
+        input: &crate::llm::RetroactiveInput,
+    ) -> Result<crate::llm::Edit> {
+        let llm = self.get_llm()?;
+        llm.retroactive_correct(input)
+    }
+
+    /// Run an AI voice command. Lazily initializes the LLM if needed.
+    pub fn run_command(
+        &mut self,
+        input: &crate::llm::CommandInput,
+    ) -> Result<crate::llm::CommandOutput> {
+        let llm = self.get_llm()?;
+        llm.run_command(input)
+    }
+
     /// Unload the STT engine from memory
     /// The pipeline will not be able to transcribe audio until reinitialized
     pub fn unload_stt(&mut self) {

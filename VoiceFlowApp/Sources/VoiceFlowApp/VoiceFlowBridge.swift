@@ -581,6 +581,71 @@ final class VoiceFlowBridge: ObservableObject {
         }
         return String(cString: versionPtr)
     }
+
+    // MARK: - Intent classification (no LLM, ~µs)
+
+    /// Classify the intent of a freshly-transcribed utterance.
+    /// Returns nil if the FFI call fails or the result can't be decoded.
+    nonisolated static func classifyIntent(_ text: String) -> IntentResult? {
+        guard let jsonPtr = text.withCString({ voiceflow_classify_intent($0) }) else {
+            return nil
+        }
+        defer { voiceflow_free_string(jsonPtr) }
+        let json = String(cString: jsonPtr)
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(IntentResult.self, from: data)
+    }
+
+    // MARK: - Retroactive correction (LLM)
+
+    /// Ask the LLM to produce a structured edit for a retroactive correction.
+    /// Latency: ~150–400ms depending on model + context length. Off the main thread.
+    func retroactiveCorrect(_ input: RetroactiveInput) async -> Edit? {
+        guard let handle = handle else { return nil }
+        guard let inputJSON = (try? JSONEncoder().encode(input)).flatMap({ String(data: $0, encoding: .utf8) }) else {
+            return nil
+        }
+
+        let result: String? = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ptr = inputJSON.withCString { voiceflow_retroactive_correct(handle, $0) }
+                guard let ptr = ptr else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                defer { voiceflow_free_string(ptr) }
+                continuation.resume(returning: String(cString: ptr))
+            }
+        }
+
+        guard let result = result, let data = result.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(Edit.self, from: data)
+    }
+
+    // MARK: - AI voice commands
+
+    /// Run an AI voice command. ~300ms–1.5s depending on output length.
+    func runCommand(_ input: CommandInput) async -> CommandOutput? {
+        guard let handle = handle else { return nil }
+        guard let inputJSON = (try? JSONEncoder().encode(input))
+            .flatMap({ String(data: $0, encoding: .utf8) })
+        else { return nil }
+
+        let result: String? = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ptr = inputJSON.withCString { voiceflow_run_ai_command(handle, $0) }
+                guard let ptr = ptr else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                defer { voiceflow_free_string(ptr) }
+                continuation.resume(returning: String(cString: ptr))
+            }
+        }
+
+        guard let result = result, let data = result.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(CommandOutput.self, from: data)
+    }
 }
 
 /// Cancellation handle for a `formatTextStreaming` call. The caller can

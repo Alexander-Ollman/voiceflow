@@ -2227,6 +2227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// before any of those code paths runs.
     private func applyParakeetBonsaiDefaults() {
         let defaults: [(String, String)] = [
+            // STT is external (Parakeet daemon, spawned from Swift). Without
+            // this, Rust Pipeline::new tries to load Moonshine ONNX files
+            // that aren't downloaded → voiceflow_init returns nil → all LLM
+            // formatting silently no-ops and nothing reaches the clipboard.
+            ("VOICEFLOW_STT_ENGINE", "qwen3_asr"),
             ("VOICEFLOW_LLM_BACKEND", "openai_server"),
             ("VOICEFLOW_LLM_SERVER_ENDPOINT", "http://127.0.0.1:8080"),
             ("VOICEFLOW_LLM_SERVER_MODEL", "default"),
@@ -2244,6 +2249,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Already in /Applications — nothing to do
         if appPath.hasPrefix(applicationsDir) { return }
+
+        // macOS App Translocation: when a quarantined .app is launched from
+        // /Applications, Gatekeeper runs it via a read-only translocated mirror
+        // under /private/var/folders/.../AppTranslocation/<UUID>/d/<App>.app.
+        // Bundle.main.bundlePath returns the translocated path, NOT the real
+        // /Applications location. The "real" copy already lives at
+        // /Applications/<name>.app and the translocated path is just a view of
+        // it. Doing a copyItem here would delete the destination (which is the
+        // actual original), invalidate the translocation mount mid-copy, and
+        // leave zero copies of the app.
+        //
+        // The right behavior under translocation: strip quarantine from the
+        // real /Applications copy, then relaunch from there.
+        let appName = (appPath as NSString).lastPathComponent
+        let originalInApplications = (applicationsDir as NSString).appendingPathComponent(appName)
+        let isTranslocated = appPath.contains("/AppTranslocation/")
+
+        if isTranslocated {
+            guard FileManager.default.fileExists(atPath: originalInApplications) else {
+                // Unusual: translocated but the original isn't in /Applications.
+                // Don't try to recover — just let the user re-drag manually next time.
+                return
+            }
+
+            // Don't loop on relaunches that haven't taken effect yet.
+            let lastRelaunchedFrom = UserDefaults.standard.string(forKey: "relocateLastAskedPath")
+            if lastRelaunchedFrom == appPath { return }
+            UserDefaults.standard.set(appPath, forKey: "relocateLastAskedPath")
+
+            // Strip quarantine off the real .app so macOS doesn't re-translocate.
+            let strip = Process()
+            strip.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            strip.arguments = ["-dr", "com.apple.quarantine", originalInApplications]
+            try? strip.run()
+            strip.waitUntilExit()
+
+            // Relaunch from the real path after a beat, then exit this translocated instance.
+            let relaunch = Process()
+            relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+            relaunch.arguments = ["-c", "sleep 0.5; open \"\(originalInApplications)\""]
+            try? relaunch.run()
+            NSApp.terminate(nil)
+            return
+        }
 
         // Don't nag on every launch — only ask once per location
         let lastAskedPath = UserDefaults.standard.string(forKey: "relocateLastAskedPath")
@@ -2268,8 +2317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard response == .alertFirstButtonReturn else { return }
 
-        let appName = (appPath as NSString).lastPathComponent
-        let destPath = (applicationsDir as NSString).appendingPathComponent(appName)
+        let destPath = originalInApplications
 
         do {
             let fm = FileManager.default
@@ -3970,7 +4018,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run { simulatePaste() }
 
                 showNotification(
-                    title: "Pasted (parakeet)",
+                    title: "Pasted",
                     body: String(spacedText.prefix(100)) + (spacedText.count > 100 ? "..." : "")
                 )
                 self.lastPastedText = spacedText
@@ -6214,7 +6262,7 @@ struct HomeView: View {
                         Text("Suggested shortcuts")
                             .font(.system(size: 17, weight: .bold))
                             .foregroundColor(.white)
-                        Text("Bonsai found these patterns in your dictation history. All analysis runs on-device.")
+                        Text("We found these patterns in your dictation history. All analysis runs on-device.")
                             .font(.system(size: 11))
                             .foregroundColor(.white.opacity(0.55))
                     }
@@ -6855,7 +6903,7 @@ struct StyleSettingsView: View {
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.85))
                     }
-                    Text("Captures a screenshot and uses the Qwen3.5 multimodal model to incorporate on-screen terms, names, and context into your dictation. Requires Screen Recording permission.")
+                    Text("Captures a screenshot so VoiceFlow can incorporate on-screen terms, names, and context into your dictation. Requires Screen Recording permission.")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.55))
 
@@ -8986,7 +9034,7 @@ struct ModelSettingsView: View {
             VStack(alignment: .leading, spacing: 22) {
                 VFPageHeader(
                     title: "Models",
-                    subtitle: "Parakeet TDT 0.6B v2 (STT) + Bonsai-8B Q1_0 (LLM). Both run on-device on Apple Silicon."
+                    subtitle: "On-device speech and language models. Both run locally on Apple Silicon."
                 ) {
                     Button {
                         monitor.refresh()
@@ -9028,8 +9076,8 @@ struct ModelSettingsView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     ModelStatusRow(
                         icon: "waveform",
-                        title: "Parakeet TDT 0.6B v2",
-                        subtitle: "NVIDIA — speech-to-text via parakeet-mlx (MLX-accelerated)",
+                        title: "Speech model",
+                        subtitle: "Transcribes your voice on-device",
                         size: fileSizeText(SetupHelper.parakeetCachePath, fallback: "~1.2 GB"),
                         installed: setup.parakeetInstalled,
                         location: SetupHelper.parakeetCachePath.path
@@ -9037,8 +9085,8 @@ struct ModelSettingsView: View {
                     Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
                     ModelStatusRow(
                         icon: "brain",
-                        title: "Bonsai-8B Q1_0",
-                        subtitle: "PrismML — 1.125-bit GGUF, served via local llama.cpp",
+                        title: "Language model",
+                        subtitle: "Formats and punctuates your dictation on-device",
                         size: fileSizeText(SetupHelper.bonsaiPath, fallback: "~1.1 GB"),
                         installed: setup.bonsaiInstalled,
                         location: SetupHelper.bonsaiPath.path
@@ -9285,212 +9333,6 @@ struct ModelStatusRow: View {
     }
 }
 
-
-struct ModelRowView: View {
-    let model: LLMModel
-    let isSelected: Bool
-    let isDownloading: Bool
-    let downloadProgress: Double
-    let onSelect: () -> Void
-    let onDownload: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // Selection indicator (radio button)
-            ZStack {
-                Circle()
-                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
-                    .frame(width: 20, height: 20)
-
-                if isSelected {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 12, height: 12)
-                }
-            }
-
-            // Model info
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(model.displayName)
-                        .fontWeight(.medium)
-                    if isSelected {
-                        Text("Active")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.2))
-                            .cornerRadius(4)
-                    }
-                }
-
-                Text(String(format: "%.1f GB", model.sizeGB))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            // Download/Status indicator
-            if model.isDownloaded {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-            } else if isDownloading {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                    Text("\(Int(downloadProgress * 100))%")
-                        .font(.caption)
-                        .monospacedDigit()
-                }
-            } else {
-                Button(action: onDownload) {
-                    Label("Download", systemImage: "arrow.down.circle")
-                        .font(.caption)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            // Allow selecting downloaded models by tapping anywhere on the row
-            if model.isDownloaded && !isSelected {
-                onSelect()
-            }
-        }
-        .opacity(model.isDownloaded || isDownloading ? 1.0 : 0.7)
-    }
-}
-
-// MARK: - STT Engine Row View
-
-struct SttEngineRowView: View {
-    let engine: SttEngine
-    let isSelected: Bool
-    let onSelect: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // Selection indicator (radio button)
-            ZStack {
-                Circle()
-                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 2)
-                    .frame(width: 20, height: 20)
-
-                if isSelected {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 12, height: 12)
-                }
-            }
-
-            // Engine info
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(engine.displayName)
-                        .fontWeight(.medium)
-                    if isSelected {
-                        Text("Active")
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.2))
-                            .cornerRadius(4)
-                    }
-                }
-
-                Text(engine.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if !isSelected {
-                onSelect()
-            }
-        }
-    }
-}
-
-// MARK: - Moonshine Model Row View
-
-struct MoonshineModelRowView: View {
-    let model: MoonshineModel
-    let isSelected: Bool
-    let isDownloading: Bool
-    let downloadProgress: Double
-    let onSelect: () -> Void
-    let onDownload: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            // Selection indicator (smaller radio button)
-            ZStack {
-                Circle()
-                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1.5)
-                    .frame(width: 16, height: 16)
-
-                if isSelected {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 10, height: 10)
-                }
-            }
-
-            // Model info
-            VStack(alignment: .leading, spacing: 1) {
-                Text(model.displayName)
-                    .font(.callout)
-                    .fontWeight(isSelected ? .medium : .regular)
-
-                Text("\(model.sizeMB) MB")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            // Download status / button
-            if model.isDownloaded {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .font(.caption)
-            } else if isDownloading {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                    Text("\(Int(downloadProgress * 100))%")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            } else {
-                Button(action: onDownload) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.down.circle")
-                        Text("Download")
-                    }
-                    .font(.caption)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.mini)
-            }
-        }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if !isSelected && model.isDownloaded {
-                onSelect()
-            }
-        }
-        .opacity(model.isDownloaded || isDownloading ? 1.0 : 0.8)
-    }
-}
 
 // MARK: - AI Result State
 

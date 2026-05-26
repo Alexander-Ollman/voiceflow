@@ -10,6 +10,7 @@ mod llamacpp_backend;
 #[cfg(feature = "mistralrs")]
 mod mistralrs_backend;
 mod openai_server_backend;
+mod structured_edit;
 pub(crate) mod numbers;
 pub(crate) mod prompts;
 
@@ -20,3 +21,7 @@ pub use llamacpp_backend::LlamaCppBackend;
 pub use mistralrs_backend::MistralRsBackend;
 pub use openai_server_backend::OpenAIServerBackend;
 pub use prompts::format_prompt;
+pub use structured_edit::{
+    retroactive_correct, run_command, translate, CommandInput, CommandOutput, Edit, EditAction,
+    Occurrence, RetroactiveInput,
+};

@@ -108,4 +108,54 @@ pub trait LlmBackendTrait: Send + Sync {
     fn supports_audio_direct(&self) -> bool {
         false
     }
+
+    /// Generate output constrained to a JSON schema.
+    ///
+    /// The returned string is guaranteed to parse as JSON conforming to `schema`
+    /// when the backend declares `supports_structured() == true`. Backends that
+    /// don't support schema constraints either return an error or fall back to
+    /// best-effort prompt-only JSON output.
+    ///
+    /// Used by AI commands and retroactive correction where the caller needs a
+    /// strict shape (e.g. `{action, anchor, replacement, confidence}`) and
+    /// can't afford to parse free prose.
+    fn generate_structured(
+        &self,
+        _prompt: &str,
+        _schema: &serde_json::Value,
+        _max_tokens: u32,
+        _temperature: f32,
+        _top_p: f32,
+    ) -> Result<String> {
+        anyhow::bail!("Structured generation not supported by this backend")
+    }
+
+    /// Whether this backend can enforce a JSON schema on generation.
+    fn supports_structured(&self) -> bool {
+        false
+    }
+
+    /// Generate using the server's chat-completions endpoint with a separate
+    /// system + user message. Lets llama-server apply the model's native chat
+    /// template instead of relying on our manual `<|im_start|>` wrapping.
+    /// Essential for chat-tuned models like Bonsai where the bare /v1/completions
+    /// path produces "Human:/AI:" style rambling.
+    ///
+    /// `stop` is an optional list of stop sequences the server should respect.
+    fn generate_chat(
+        &self,
+        _system: &str,
+        _user: &str,
+        _max_tokens: u32,
+        _temperature: f32,
+        _top_p: f32,
+        _stop: &[&str],
+    ) -> Result<String> {
+        anyhow::bail!("Chat-completions generation not supported by this backend")
+    }
+
+    /// Whether this backend supports the chat-completions path.
+    fn supports_chat(&self) -> bool {
+        false
+    }
 }

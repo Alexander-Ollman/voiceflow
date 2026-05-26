@@ -715,9 +715,17 @@ impl Config {
 
         // STT engine
         if let Ok(val) = env::var(env_vars::STT_ENGINE) {
-            match val.to_lowercase().as_str() {
+            match val.to_lowercase().replace("-", "_").as_str() {
                 "whisper" => self.stt_engine = SttEngine::Whisper,
                 "moonshine" => self.stt_engine = SttEngine::Moonshine,
+                // External-STT marker: Swift-side daemons (Parakeet, Qwen3-ASR)
+                // handle transcription. The Rust pipeline still serves LLM
+                // formatting, but `SttEngine::new` returns `None` for these so
+                // we don't try to load Moonshine/Whisper model files that the
+                // user hasn't downloaded.
+                "qwen3_asr" | "parakeet" | "external" => {
+                    self.stt_engine = SttEngine::Qwen3Asr;
+                }
                 _ => tracing::warn!("Unknown STT engine from env: {}", val),
             }
         }
