@@ -79,6 +79,12 @@ struct VoiceFlowApp: App {
         // Doing the check here gives us a chance to display a clean alert
         // and exit cleanly.
         PreflightCheck.runOrExit()
+
+        // Install the diagnostics log capture as early as possible — before
+        // AppDelegate (and its VoiceFlowBridge / Rust FFI) is instantiated — so
+        // startup output is captured. Redirects stdout/stderr into the in-app
+        // ring buffer + ~/Library/Logs/VoiceFlow/voiceflow.log.
+        LogStore.shared.start()
     }
 
     var body: some Scene {
@@ -6767,7 +6773,7 @@ struct SuggestionRow: View {
                 VStack(spacing: 6) {
                     Button(action: onAccept) {
                         HStack(spacing: 4) {
-                            Image(systemName: "checkmark")
+                            Image(systemName: "plus")
                             Text("Add")
                         }
                         .font(.system(size: 11, weight: .semibold))
@@ -7216,6 +7222,7 @@ struct AIFeaturesSettingsView: View {
 struct GeneralSettingsView: View {
     @EnvironmentObject var voiceFlow: VoiceFlowBridge
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var showLogs = false
 
     var body: some View {
         ScrollView {
@@ -7302,6 +7309,24 @@ struct GeneralSettingsView: View {
                     }
                 }
 
+                cardSection(title: "Diagnostics", icon: "doc.text.magnifyingglass") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Logs")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("Live app & engine logs — export to help diagnose issues")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
+                        Spacer()
+                        Button { showLogs = true } label: {
+                            Label("Open Logs", systemImage: "chevron.right")
+                        }
+                        .buttonStyle(VFOutlinePillStyle())
+                    }
+                }
+
                 HStack {
                     Button(action: restartApp) {
                         Label("Restart", systemImage: "arrow.clockwise")
@@ -7317,6 +7342,9 @@ struct GeneralSettingsView: View {
                 .padding(.top, 4)
             }
             .padding(24)
+        }
+        .sheet(isPresented: $showLogs) {
+            LogConsoleView()
         }
     }
 
