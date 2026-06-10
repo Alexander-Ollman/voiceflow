@@ -56,7 +56,7 @@ struct SetupWizardView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 560, height: 480)
+        .frame(width: 620, height: 700)
         .background(Color(NSColor.windowBackgroundColor))
     }
 }
@@ -333,6 +333,79 @@ struct ModelDownloadStepView: View {
     @StateObject private var setup = SetupHelper()
 
     var body: some View {
+        Group {
+            if isInProgress {
+                installingView
+            } else {
+                introView
+            }
+        }
+        .padding(.top, 8)
+        .onAppear { setup.refreshInstallState() }
+    }
+
+    // MARK: While downloading — slim status strip + a contained tips card.
+
+    private var installingView: some View {
+        VStack(spacing: 18) {
+            // Zone 1 — status strip: what's happening, compact and top-anchored.
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.accentColor)
+                    Text("Installing models")
+                        .font(.headline)
+                    Spacer()
+                }
+                if let frac = setup.progressFraction {
+                    ProgressView(value: frac).progressViewStyle(.linear)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+                HStack {
+                    Text(setup.phaseLabel)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+            .padding(.horizontal, 32)
+            .padding(.top, 8)
+
+            // Zone 2 — tips card: what to read while you wait. Contained so it
+            // reads as its own module and cycling never shifts the layout.
+            QuickTipsCarousel(autoAdvance: true)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.primary.opacity(0.04))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                        )
+                )
+                .padding(.horizontal, 32)
+
+            Spacer(minLength: 0)
+
+            // Quiet busy indicator — nothing is actionable while installing, so
+            // just a spinner, no competing button or label.
+            ProgressView()
+                .controlSize(.small)
+                .padding(.bottom, 28)
+        }
+    }
+
+    // MARK: Pre-download / complete — header, rundown, and the action button.
+
+    private var introView: some View {
         VStack(spacing: 20) {
             // Header
             VStack(spacing: 8) {
@@ -378,22 +451,6 @@ struct ModelDownloadStepView: View {
             )
             .padding(.horizontal, 32)
 
-            // Phase / progress
-            if setup.phase != .idle && setup.phase != .complete {
-                VStack(spacing: 6) {
-                    if let frac = setup.progressFraction {
-                        ProgressView(value: frac)
-                            .progressViewStyle(.linear)
-                            .frame(maxWidth: 320)
-                    } else {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                    }
-                    Text(setup.phaseLabel)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
             if case .failed(let msg) = setup.phase {
                 Text(msg).font(.caption).foregroundColor(.red)
             }
@@ -413,20 +470,17 @@ struct ModelDownloadStepView: View {
                     .buttonStyle(.borderedProminent)
                 } else {
                     Button(action: { Task { await setup.runSetup() } }) {
-                        Text(isInProgress ? "Installing…" : "Setup")
+                        Text("Setup")
                             .frame(minWidth: 140)
                     }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
-                    .disabled(isInProgress)
                 }
                 Spacer()
             }
             .padding(.bottom, 28)
         }
-        .padding(.top, 8)
-        .onAppear { setup.refreshInstallState() }
     }
 
     private var isInProgress: Bool {
@@ -553,40 +607,49 @@ struct DoneStepView: View {
     @State private var launchAtLogin = true
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 12) {
             Spacer()
 
             ZStack {
                 Circle()
                     .fill(Color.green.opacity(0.15))
-                    .frame(width: 100, height: 100)
+                    .frame(width: 60, height: 60)
                     .scaleEffect(showCheckmark ? 1.0 : 0.5)
 
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 64))
+                    .font(.system(size: 40))
                     .foregroundColor(.green)
                     .scaleEffect(showCheckmark ? 1.0 : 0.0)
             }
             .animation(.spring(response: 0.5, dampingFraction: 0.6), value: showCheckmark)
 
-            VStack(spacing: 8) {
-                Text("You're All Set!")
-                    .font(.system(size: 28, weight: .bold))
+            VStack(spacing: 6) {
+                Text("Talk this way.")
+                    .font(.system(size: 24, weight: .bold))
 
-                Text("VoiceFlow is ready to use")
-                    .font(.body)
+                Text("Hold ⌥ Space, speak, and you're off.")
+                    .font(.subheadline)
                     .foregroundColor(.secondary)
             }
 
-            VStack(spacing: 10) {
-                UsageTipRow(icon: "option", text: "Hold \u{2325} Space to record, release to paste")
-                UsageTipRow(icon: "menubar.rectangle", text: "Access settings from the menu bar icon")
+            // Where to find it from now on.
+            HStack(spacing: 12) {
+                Image(systemName: "menubar.arrow.up.rectangle")
+                    .font(.system(size: 22))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 32)
+                Text("VoiceFlow lives in your menu bar — click the icon at the top of your screen anytime for settings, insights, and help.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
             .padding(.horizontal, 40)
-            .padding(.vertical, 16)
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(12)
-            .padding(.horizontal, 40)
+            .padding(.top, 8)
 
             Toggle("Launch VoiceFlow when you log in", isOn: $launchAtLogin)
                 .padding(.horizontal, 60)
@@ -610,7 +673,7 @@ struct DoneStepView: View {
             .controlSize(.large)
 
             Spacer()
-                .frame(height: 40)
+                .frame(height: 20)
         }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {

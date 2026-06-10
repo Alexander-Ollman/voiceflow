@@ -2528,30 +2528,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[VoiceFlow] Parakeet pre-warm: %.0fms (kernels JITted, weights resident)", ms)
     }
 
-    /// Fire a `max_tokens: 1` chat completion against the local llama-server
-    /// to put Bonsai's weights in Metal and JIT its kernels. Result is
-    /// discarded — only the side effect (warm model) matters.
+    /// Warm Bonsai for the first real dictation. This does two things:
+    ///   1. Puts the weights in Metal / JITs the kernels (the side effect of
+    ///      any inference).
+    ///   2. Prefills the *stable persona prefix* into llama-server's prompt
+    ///      cache. Every format request carries `formattingLevel.systemPrompt`
+    ///      as the first ~4k tokens of context (see buildLiveFormatContext);
+    ///      llama.cpp's prompt cache is prefix-matched, so caching this prefix
+    ///      means the first real dictation only prefills the small per-app
+    ///      delta instead of eating a full ~21s cold prefill at ~190 tok/s.
+    ///
+    /// We route through `formatTextStreaming` (not a raw chat/completions POST)
+    /// so the tokenization/templating is byte-identical to the real path —
+    /// otherwise the prefix wouldn't match and the cache would miss. We bail at
+    /// the first token; only the prefill (the expensive part) matters.
     private func preWarmBonsai() async {
-        guard let url = URL(string: "http://127.0.0.1:8080/v1/chat/completions") else { return }
-        let body: [String: Any] = [
-            "model": "default",
-            "messages": [
-                ["role": "user", "content": "."],
-            ],
-            "max_tokens": 1,
-            "temperature": 0,
-            "stream": false,
-        ]
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 60
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
+        let prefix = formattingLevel.systemPrompt
+        let cancellation = LLMStreamCancellation()
         let start = Date()
-        _ = try? await URLSession.shared.data(for: request)
+        _ = await voiceFlow.formatTextStreaming(
+            ".",
+            context: prefix,
+            cancellation: cancellation,
+            onToken: { _ in
+                // Prefill is done once the first token streams; stop here.
+                cancellation.cancel()
+            }
+        )
         let ms = Date().timeIntervalSince(start) * 1000
-        NSLog("[VoiceFlow] Bonsai pre-warm: %.0fms (model resident in Metal)", ms)
+        NSLog("[VoiceFlow] Bonsai pre-warm: %.0fms (model resident in Metal, persona prefix cached)", ms)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -4936,48 +4941,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Simulate Cmd+V paste keystroke using AppleScript (more reliable)
+    /// Simulate a Cmd+V paste keystroke via CGEvent.
+    ///
+    /// We deliberately do NOT use AppleScript (`tell application "System Events"
+    /// keystroke "v"`). That path requires the *Automation* TCC permission to
+    /// control System Events — a permission separate from Accessibility that
+    /// onboarding never requests, so on a clean install it throws -1743
+    /// (errAEEventNotPermitted) on every paste. CGEvent only needs the
+    /// Accessibility permission we already hold, so it's both simpler and one
+    /// fewer permission class to get wrong.
     private func simulatePaste() {
-        // Check accessibility first
         guard AXIsProcessTrusted() else {
             print("Accessibility not granted - cannot auto-paste")
             return
         }
 
-        // Use AppleScript for more reliable paste
-        let script = NSAppleScript(source: """
-            tell application "System Events"
-                keystroke "v" using command down
-            end tell
-        """)
-
-        var error: NSDictionary?
-        script?.executeAndReturnError(&error)
-
-        if let error = error {
-            print("AppleScript paste error: \(error)")
-            // Fallback to CGEvent
-            fallbackPaste()
-        }
-    }
-
-    private func fallbackPaste() {
-        let vKeyCode: CGKeyCode = 9
-
-        // Create event source
+        let vKeyCode: CGKeyCode = 9  // 'v'
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
 
-        // Create key down event with Cmd modifier
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true) else { return }
         keyDown.flags = .maskCommand
 
-        // Create key up event with Cmd modifier
         guard let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false) else { return }
         keyUp.flags = .maskCommand
 
-        // Post the events with small delay between
         keyDown.post(tap: .cgSessionEventTap)
-        usleep(10000)  // 10ms delay
+        usleep(10000)  // 10ms between down/up
         keyUp.post(tap: .cgSessionEventTap)
     }
 
@@ -7223,6 +7212,7 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var voiceFlow: VoiceFlowBridge
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showLogs = false
+    @State private var showTips = false
 
     var body: some View {
         ScrollView {
@@ -7327,6 +7317,24 @@ struct GeneralSettingsView: View {
                     }
                 }
 
+                cardSection(title: "Help", icon: "questionmark.circle") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Quick Tips")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("Replay the how-to-use VoiceFlow animations")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
+                        Spacer()
+                        Button { showTips = true } label: {
+                            Label("Replay Tips", systemImage: "play.circle")
+                        }
+                        .buttonStyle(VFOutlinePillStyle())
+                    }
+                }
+
                 HStack {
                     Button(action: restartApp) {
                         Label("Restart", systemImage: "arrow.clockwise")
@@ -7345,6 +7353,9 @@ struct GeneralSettingsView: View {
         }
         .sheet(isPresented: $showLogs) {
             LogConsoleView()
+        }
+        .sheet(isPresented: $showTips) {
+            QuickTipsSheet()
         }
     }
 

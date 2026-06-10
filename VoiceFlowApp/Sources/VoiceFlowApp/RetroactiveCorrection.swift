@@ -386,27 +386,21 @@ extension AppDelegate {
     }
 
     /// Static paste entry point so non-AppDelegate code can request a paste
-    /// without taking an AppDelegate reference. Implemented as keystroke
-    /// simulation via the existing path.
+    /// without taking an AppDelegate reference.
+    ///
+    /// Uses CGEvent directly — NOT AppleScript/System Events, which needs the
+    /// Automation TCC permission onboarding never requests and fails with -1743
+    /// on a clean install. CGEvent only needs Accessibility. (Mirrors
+    /// AppDelegate.simulatePaste.)
     @MainActor
     static func paste() {
-        // Inline the simulatePaste logic — AppleScript with CGEvent fallback.
-        let script = NSAppleScript(source: """
-            tell application "System Events"
-                keystroke "v" using command down
-            end tell
-        """)
-        var error: NSDictionary?
-        script?.executeAndReturnError(&error)
-        if error != nil {
-            let source = CGEventSource(stateID: .combinedSessionState)
-            let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-            down?.flags = .maskCommand
-            let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-            up?.flags = .maskCommand
-            down?.post(tap: .cghidEventTap)
-            up?.post(tap: .cghidEventTap)
-        }
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
+        down?.flags = .maskCommand
+        let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
+        up?.flags = .maskCommand
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
     }
 }
 

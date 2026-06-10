@@ -32,7 +32,7 @@ final class SetupWizardController {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
-        window.setContentSize(NSSize(width: 560, height: 480))
+        window.setContentSize(NSSize(width: 620, height: 700))
         window.center()
         window.isReleasedWhenClosed = false
 
