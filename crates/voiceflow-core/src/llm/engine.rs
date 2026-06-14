@@ -93,6 +93,15 @@ impl LlmEngine {
         crate::llm::structured_edit::retroactive_correct(self.backend.as_ref(), input)
     }
 
+    /// Assess whether a freshly-transcribed utterance is a redo (replace) of
+    /// the previous dictated output, or new content to append.
+    pub fn assess_redo(
+        &self,
+        input: &crate::llm::structured_edit::RedoInput,
+    ) -> Result<crate::llm::structured_edit::RedoDecision> {
+        crate::llm::structured_edit::assess_redo(self.backend.as_ref(), input)
+    }
+
     /// Run an AI voice command (rewrite / proofread / etc.) against this
     /// engine's backend. Returns the LLM's prose output.
     pub fn run_command(

@@ -486,12 +486,28 @@ struct LogConsoleView: View {
     private func exportRecent(copy: Bool) {
         let f = filtered
         let slice = (exportCount == -1 || exportCount >= f.count) ? f : Array(f.suffix(exportCount))
-        deliver(render(slice), namePrefix: "voiceflow-logs", copy: copy)
+        deliver(render(withPipelineContext(slice)), namePrefix: "voiceflow-logs", copy: copy)
     }
 
     private func exportProblems(copy: Bool) {
         let slice = store.lines.filter { $0.level != .info }
-        deliver(render(slice), namePrefix: "voiceflow-errors", copy: copy)
+        deliver(render(withPipelineContext(slice)), namePrefix: "voiceflow-errors", copy: copy)
+    }
+
+    /// Always fold the full pipeline (Rust FFI) lifecycle into an export slice.
+    /// These `voiceflow_init` milestone/failure lines pinpoint "stuck on
+    /// Initializing…" reports, but they're sparse and emitted at startup — a
+    /// short last-N window or a non-error filter routinely drops them, which is
+    /// exactly what hid the root cause in the fresh-install Initializing bug.
+    /// Merge them in (dedup + chronological by monotonic id) so every export
+    /// answers "did the pipeline initialize, and if not, why".
+    private func withPipelineContext(_ slice: [VFLogLine]) -> [VFLogLine] {
+        let pipeline = store.lines.filter { $0.source == .ffi }
+        guard !pipeline.isEmpty else { return slice }
+        var byID: [UInt64: VFLogLine] = [:]
+        for line in slice { byID[line.id] = line }
+        for line in pipeline { byID[line.id] = line }
+        return byID.values.sorted { $0.id < $1.id }
     }
 
     private func render(_ ls: [VFLogLine]) -> String {

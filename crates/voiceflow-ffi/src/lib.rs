@@ -479,6 +479,65 @@ pub unsafe extern "C" fn voiceflow_retroactive_correct(
     }
 }
 
+/// Assess whether a freshly-transcribed utterance is a redo (replace) of the
+/// previous dictated output. Takes a `RedoInput` as JSON, returns a
+/// `RedoDecision` as JSON (caller frees via `voiceflow_free_string`), or null
+/// on any error.
+///
+/// # Safety
+/// `handle` must be a valid pointer from `voiceflow_init`.
+/// `input_json` must be a valid null-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn voiceflow_assess_redo(
+    handle: *mut VoiceFlowHandle,
+    input_json: *const c_char,
+) -> *mut c_char {
+    if handle.is_null() || input_json.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let input_str = match CStr::from_ptr(input_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        let input: voiceflow_core::llm::RedoInput = match serde_json::from_str(input_str) {
+            Ok(v) => v,
+            Err(e) => {
+                log_debug(&format!("assess_redo: malformed input JSON: {}", e));
+                return None;
+            }
+        };
+
+        let pipeline = match (*handle).pipeline.as_mut() {
+            Some(p) => p,
+            None => {
+                log_debug("assess_redo: pipeline not available (consolidated mode)");
+                return None;
+            }
+        };
+
+        match pipeline.assess_redo(&input) {
+            Ok(decision) => match serde_json::to_string(&decision) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    log_debug(&format!("assess_redo: decision serialize failed: {}", e));
+                    None
+                }
+            },
+            Err(e) => {
+                log_debug(&format!("assess_redo: LLM call failed: {}", e));
+                None
+            }
+        }
+    }));
+
+    match result {
+        Ok(Some(json)) => CString::new(json).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+        _ => ptr::null_mut(),
+    }
+}
+
 fn error_result(msg: &str) -> VoiceFlowResult {
     VoiceFlowResult {
         success: false,

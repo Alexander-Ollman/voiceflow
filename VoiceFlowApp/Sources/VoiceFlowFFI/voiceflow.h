@@ -170,6 +170,25 @@ char *voiceflow_run_ai_command(struct VoiceFlowHandle *handle, const char *input
 char *voiceflow_retroactive_correct(struct VoiceFlowHandle *handle, const char *inputJson);
 
 /**
+ * Assess whether a freshly-transcribed utterance is a redo (replace) of the
+ * previous dictated output, or new content to append.
+ *
+ * `input_json` is a JSON-encoded `RedoInput`:
+ * ```json
+ * { "previous_output": "...", "new_transcript": "...", "context": "..." }
+ * ```
+ *
+ * Returns a `RedoDecision` as a JSON string ({ "replace": bool, "text":
+ * string, "confidence": number }) the Swift side parses. Caller must free via
+ * `voiceflow_free_string`. Returns null on error.
+ *
+ * # Safety
+ * `handle` must be a valid pointer from `voiceflow_init`.
+ * `input_json` must be a valid null-terminated UTF-8 string.
+ */
+char *voiceflow_assess_redo(struct VoiceFlowHandle *handle, const char *inputJson);
+
+/**
  * Get the models directory path
  */
 char *voiceflow_models_dir(void);

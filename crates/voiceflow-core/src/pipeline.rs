@@ -299,6 +299,16 @@ impl Pipeline {
         llm.retroactive_correct(input)
     }
 
+    /// Assess whether the latest utterance is a redo of the previous output.
+    /// Lazily initializes the LLM if needed.
+    pub fn assess_redo(
+        &mut self,
+        input: &crate::llm::RedoInput,
+    ) -> Result<crate::llm::RedoDecision> {
+        let llm = self.get_llm()?;
+        llm.assess_redo(input)
+    }
+
     /// Run an AI voice command. Lazily initializes the LLM if needed.
     pub fn run_command(
         &mut self,

@@ -1,6 +1,68 @@
 import AppKit
 import Foundation
 
+/// Deterministic pre-check for the automatic redo path. Decides — WITHOUT the
+/// LLM — whether an utterance is even a plausible "redo" of the previous
+/// output, so clearly-new dictation never triggers a replace and we don't spend
+/// a Bonsai call on it. Two signals: explicit correction hotwords, and
+/// word-level overlap (Dice coefficient) with the previous output.
+enum RedoSignal {
+
+    /// Word-overlap at or above this (and no hotword) counts as a plausible
+    /// re-say. ~0.4 catches "I went to the store" vs "I went to the shop"
+    /// (Dice 0.8) while rejecting unrelated sentences.
+    static let similarityThreshold: Double = 0.4
+
+    /// Leading / standalone phrases that strongly signal the user is correcting
+    /// or replacing what they just said. Matched case- and punctuation-
+    /// insensitively, either as the whole utterance, a leading phrase, or a
+    /// standalone clause.
+    static let hotwords: [String] = [
+        "scratch that", "strike that", "delete that", "replace that",
+        "no i meant", "no i mean", "i meant", "i mean", "i actually meant",
+        "correction", "actually no", "no wait", "let me redo", "let me try again",
+        "redo that", "do over", "not what i meant", "i said",
+    ]
+
+    struct Result {
+        let hotword: Bool
+        let similarity: Double
+        var isCandidate: Bool { hotword || similarity >= RedoSignal.similarityThreshold }
+    }
+
+    static func evaluate(utterance: String, previous: String) -> Result {
+        Result(hotword: detectHotword(utterance),
+               similarity: similarity(utterance, previous))
+    }
+
+    /// Word-level Dice similarity in [0, 1], case/punctuation-insensitive.
+    static func similarity(_ a: String, _ b: String) -> Double {
+        let sa = Set(tokens(a)), sb = Set(tokens(b))
+        guard !sa.isEmpty, !sb.isEmpty else { return 0 }
+        let inter = sa.intersection(sb).count
+        return (2.0 * Double(inter)) / Double(sa.count + sb.count)
+    }
+
+    private static func detectHotword(_ s: String) -> Bool {
+        let norm = normalize(s)
+        return hotwords.contains { hw in
+            norm == hw || norm.hasPrefix(hw + " ") || norm.contains(" " + hw + " ")
+        }
+    }
+
+    private static func tokens(_ s: String) -> [String] {
+        normalize(s).split(separator: " ").map(String.init)
+    }
+
+    /// Lowercase, replace any non-alphanumeric with a space, collapse runs.
+    private static func normalize(_ s: String) -> String {
+        let mapped = s.lowercased().map { ch -> Character in
+            (ch.isLetter || ch.isNumber) ? ch : " "
+        }
+        return String(mapped).split(whereSeparator: { $0 == " " }).joined(separator: " ")
+    }
+}
+
 /// Resolves a structured `Edit` into a concrete byte range in the focused
 /// field, then applies the replacement via the existing AX/paste path.
 ///
@@ -237,6 +299,88 @@ extension AppDelegate {
         voiceFlow: VoiceFlowBridge
     ) async -> Bool {
         await interceptAIIntent(rawTranscript: rawTranscript, voiceFlow: voiceFlow)
+    }
+
+    /// Only replace if the previous insertion was recent — beyond this the user
+    /// has likely moved on and a "redo" would clobber unrelated text.
+    private static let redoMaxAge: TimeInterval = 90
+
+    /// Repeat-to-replace. If the user simply re-says or fixes the previous
+    /// dictated output, replace it in place instead of appending. Bonsai makes
+    /// the redo-vs-new call (`assessRedo`); we only act when it returns
+    /// `replace=true` AND the previous insertion is still verbatim in the same
+    /// app/window and recent — otherwise we fall through to the normal paste.
+    ///
+    /// Returns the replacement text when handled (caller should set it as the
+    /// last-pasted text and skip the normal paste), or nil to fall through.
+    @MainActor
+    func interceptRedoReplacement(
+        rawTranscript: String,
+        context: String,
+        voiceFlow: VoiceFlowBridge
+    ) async -> String? {
+        // Need a focused field we can both read and edit.
+        let ctx = await FieldContext.resolve()
+        guard ctx.source != .empty, !ctx.text.isEmpty else { return nil }
+
+        // Most-recent insertion in this same app/window, within the guard window.
+        let recents = ShadowBuffer.shared.recent(bundleId: ctx.bundleId, windowKey: ctx.windowKey, limit: 1)
+        guard let last = recents.last,
+              Date().timeIntervalSince(last.timestamp) <= Self.redoMaxAge,
+              !last.inserted.isEmpty else { return nil }
+        let previous = last.inserted
+
+        // Safe to replace only if the previous insertion is still present
+        // verbatim — if the user edited it or moved the cursor elsewhere,
+        // appending is the safer choice.
+        guard ctx.text.range(of: previous) != nil else { return nil }
+
+        // Deterministic pre-check BEFORE spending a Bonsai call: a clearly-new
+        // utterance (no correction hotword AND low word-overlap with the
+        // previous output) is never a redo — append it. Keeps normal dictation
+        // fast and prevents accidental replacements.
+        let signal = RedoSignal.evaluate(utterance: rawTranscript, previous: previous)
+        guard signal.isCandidate else {
+            NSLog("[VoiceFlow] Redo: gate skip — sim=%.2f hotword=false; appending", signal.similarity)
+            return nil
+        }
+
+        // Ask Bonsai to confirm + produce the replacement text. A correction
+        // hotword lowers the bar we require from the model; a bare similar
+        // re-say still needs solid model confidence.
+        let input = RedoInput(previousOutput: previous, newTranscript: rawTranscript, context: context)
+        guard let decision = await voiceFlow.assessRedo(input) else { return nil }
+        let acceptBar: Float = signal.hotword ? 0.5 : 0.7
+        NSLog("[VoiceFlow] Redo: sim=%.2f hotword=%@ replace=%@ conf=%.2f bar=%.2f",
+              signal.similarity, signal.hotword ? "true" : "false",
+              decision.replace ? "true" : "false", decision.confidence, acceptBar)
+        guard decision.replace, !decision.text.isEmpty, decision.confidence >= acceptBar else { return nil }
+
+        let expanded = SnippetManager.shared.expandSnippets(in: decision.text)
+
+        // Reuse the retroactive applier: select the previous insertion's range
+        // (last occurrence) and replace it. `apply` enforces its own confidence
+        // floor and updates the shadow buffer with the new text.
+        // We've already cleared our own accept bar above; pass a confidence
+        // that won't trip `RetroactiveApplier`'s independent 0.7 floor (it
+        // would otherwise abstain on a hotword-accepted lower-confidence redo).
+        let edit = Edit(
+            action: .replaceRange,
+            anchor: previous,
+            occurrence: .last,
+            replacement: expanded,
+            confidence: max(decision.confidence, RetroactiveApplier.minConfidence),
+            explanation: "redo"
+        )
+        switch RetroactiveApplier.apply(edit: edit, context: ctx) {
+        case .applied:
+            RetroactiveToast.shared.show("Replaced last dictation", source: ctx.source)
+            NSLog("[VoiceFlow] Redo: APPLIED replacement (%d chars)", expanded.count)
+            return expanded
+        case .abstained(let r), .anchorMissing(let r), .failure(let r):
+            NSLog("[VoiceFlow] Redo: not applied — %@", r)
+            return nil
+        }
     }
 
     @MainActor

@@ -80,6 +80,17 @@ struct VoiceFlowApp: App {
         // and exit cleanly.
         PreflightCheck.runOrExit()
 
+        // Seed Parakeet+Bonsai runtime env vars HERE — before the
+        // @NSApplicationDelegateAdaptor instantiates AppDelegate, whose stored
+        // `var voiceFlow = VoiceFlowBridge()` property fires a detached
+        // `voiceflow_init` that reads these vars in `Config::apply_env_overrides`.
+        // Doing it in `applicationDidFinishLaunching` was too late: on a fresh
+        // install (no config.toml) the detached init wins the race, sees no
+        // VOICEFLOW_STT_ENGINE, defaults to Moonshine, fails to load an
+        // un-downloaded ONNX model, and returns nil — leaving the pipeline stuck
+        // on "Initializing…" with no LLM formatting ever reaching the clipboard.
+        AppDelegate.applyParakeetBonsaiDefaults()
+
         // Install the diagnostics log capture as early as possible — before
         // AppDelegate (and its VoiceFlowBridge / Rust FFI) is instantiated — so
         // startup output is captured. Redirects stdout/stderr into the in-app
@@ -2212,10 +2223,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Hide dock icon - menu bar only
         NSApp.setActivationPolicy(.accessory)
 
-        // Apply Parakeet+Bonsai runtime defaults before any Rust pipeline init
-        // reads its environment. Each call only fills in a var if it isn't
-        // already set, so dev overrides on the shell still win.
-        applyParakeetBonsaiDefaults()
+        // Belt-and-suspenders: env is already seeded in VoiceFlowApp.init()
+        // before VoiceFlowBridge is constructed, but re-apply here in case the
+        // delegate is ever instantiated without that path running. setenv(_,_,0)
+        // is idempotent, so this never overrides what's already set.
+        Self.applyParakeetBonsaiDefaults()
 
         // Offer to move to /Applications if running from elsewhere (e.g. Downloads)
         offerRelocationIfNeeded()
@@ -2231,7 +2243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// pipeline reads these env vars in `Config::apply_env_overrides` and the
     /// PersonaClassifier reads them via `ProcessInfo`, so they must be set
     /// before any of those code paths runs.
-    private func applyParakeetBonsaiDefaults() {
+    static func applyParakeetBonsaiDefaults() {
         let defaults: [(String, String)] = [
             // STT is external (Parakeet daemon, spawned from Swift). Without
             // this, Rust Pipeline::new tries to load Moonshine ONNX files
@@ -3746,6 +3758,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
 
+                // Repeat-to-replace: Bonsai decides if this utterance re-does the
+                // previous output; if so, replace it in place and skip the paste.
+                if let redone = await self.interceptRedoReplacement(
+                    rawTranscript: rawTranscript, context: context, voiceFlow: voiceFlow
+                ) {
+                    self.lastPastedText = redone
+                    await MainActor.run { self.hideOverlay() }
+                    return
+                }
+
                 // Format raw transcript through LLM with token streaming.
                 // showOverlay (not bare state assignment) resizes the NSPanel
                 // from the .processing pill (200×70) to the .formatting card
@@ -3944,6 +3966,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let correctionHint = CorrectionManager.shared.correctionContext(for: "")
                 if !correctionHint.isEmpty {
                     context += correctionHint
+                }
+
+                // Repeat-to-replace: if Bonsai judges this utterance a redo of
+                // the previous dictated output, replace it in place and skip the
+                // normal append. Only fires when a recent insertion is still in
+                // the field (otherwise it's a no-op and we format as usual).
+                if let redone = await self.interceptRedoReplacement(
+                    rawTranscript: rawTranscript, context: context, voiceFlow: voiceFlow
+                ) {
+                    self.lastPastedText = redone
+                    await MainActor.run { self.hideOverlay() }
+                    return
                 }
 
                 NSLog("[VoiceFlow] Parakeet → LLM: formatting %d-char transcript", rawTranscript.count)
@@ -4856,18 +4890,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let systemPrompt = """
-        You are an editor. The user dictated some text earlier, you produced \
-        a formatted version, and now they want to revise it. Apply the user's \
-        instruction to the prior text and return ONLY the revised text — no \
-        explanation, no commentary, no quotation marks, no preamble. Preserve \
-        the original formatting, punctuation, and tone unless the instruction \
-        explicitly changes them.
+        You are an editor for a voice dictation app. The user dictated some \
+        text earlier, you produced a formatted version, and now they want to \
+        change it. Their new spoken utterance is EITHER:
+          (a) an INSTRUCTION describing a change to the prior text (e.g. "make \
+        it more formal", "change 3pm to 4pm", "delete the last sentence"), or
+          (b) a RE-DICTATION — them saying the text again, possibly reworded or \
+        with a fix, meaning they want the prior text replaced by what they just \
+        said.
+
+        Decide which it is:
+        - If it is an instruction, apply it to the prior text.
+        - If it is a re-dictation, replace the prior text entirely with a clean, \
+        properly capitalized and punctuated version of the new utterance — do \
+        NOT treat its words as commands.
+        When unsure, prefer treating it as a re-dictation (replace).
+
+        Return ONLY the final revised text — no explanation, no commentary, no \
+        quotation marks, no preamble. Preserve the prior text's formatting and \
+        tone unless the change requires otherwise.
         """
         let userMessage = """
         Prior text:
         \(original)
 
-        Instruction:
+        New utterance:
         \(instruction)
         """
 

@@ -36,10 +36,17 @@ pub enum ConfigError {
 #[serde(rename_all = "kebab-case")]
 pub enum SttEngine {
     Whisper,
-    #[default]
     Moonshine,
     /// Qwen3-ASR: external Python daemon handles transcription.
     /// In traditional mode, output is piped through the LLM for formatting.
+    ///
+    /// This is the default: the shipping runtime uses an external STT daemon
+    /// (Parakeet/Qwen3-ASR) and the Rust pipeline only does LLM formatting.
+    /// `SttEngine::new` returns `None` for this variant, so a fresh install
+    /// with no config.toml and no `VOICEFLOW_STT_ENGINE` env var can never try
+    /// to load an un-downloaded Moonshine/Whisper model and fail `voiceflow_init`
+    /// (which would leave the pipeline stuck on "Initializing…" with no paste).
+    #[default]
     Qwen3Asr,
 }
 

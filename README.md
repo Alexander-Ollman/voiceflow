@@ -38,6 +38,7 @@
 - **Correction learning** &mdash; Learns from your edits to fix recurring spelling mistakes automatically
 - **Voice snippets** &mdash; Custom trigger phrases that expand into any text
 - **AI voice commands** &mdash; Say "reply to this", "rewrite this", "proofread this", "continue writing", "summarize this" for context-aware AI actions on the current text field
+- **Repeat to replace** &mdash; Re-say a sentence (or just fix a word) and VoiceFlow replaces your last dictation instead of appending it. A deterministic pre-check &mdash; correction hotwords ("scratch that", "I meant…") plus word-overlap with your last output &mdash; gates the call, then Bonsai confirms redo-vs-new. Hold `⌥⇧ Space` to force a replace, or to speak an edit ("make it more formal")
 - **Menu bar app** &mdash; Minimal footprint, no dock icon, launch at login
 
 ## How It Works
@@ -71,6 +72,8 @@ VoiceFlow runs two locally-hosted services as children of the macOS app:
 ```
 
 VoiceFlow spawns and supervises both services on launch. They shut down with the app.
+
+Before appending a paste, VoiceFlow checks whether you're **redoing** the last one: a deterministic gate (correction hotwords + word-overlap with the previous output) decides whether to consult Bonsai, which confirms redo-vs-new and produces the replacement. On a redo it selects the prior insertion via the Accessibility API and replaces it in place. Holding `⌥⇧ Space` forces this — re-say to replace, or speak an instruction to edit.
 
 The LLM prompt is composed at dictation time:
 
@@ -106,6 +109,13 @@ See [Building from Source](#building-from-source) below — note you'll also nee
 1. **Launch VoiceFlow** &mdash; Look for the icon in your menu bar
 2. **Hold `⌥ Space`** &mdash; Start speaking
 3. **Release `⌥ Space`** &mdash; Text is transcribed by Parakeet, formatted by Bonsai with the right persona for your current app, and pasted at your cursor
+
+### Editing & repeating
+
+VoiceFlow can replace your **last** dictation in place instead of always appending:
+
+- **Just say it again** &mdash; Re-dictate the sentence, or only the fix (e.g. say "store" after "I went to the stoor"). When your utterance looks like a redo &mdash; a correction hotword (`scratch that`, `I meant…`) or high word-overlap with the last output &mdash; Bonsai decides whether to replace or append. Clearly-new speech is always appended, and the replace only happens while your last paste is still present and recent in the same app.
+- **Hold `⌥⇧ Space`** (the edit hotkey) &mdash; Hold it and either re-say the text to replace it, or speak an instruction (`make it more formal`, `change 3pm to 4pm`). The spoken edit is applied to your last paste in place. Works while that paste is recent and you haven't switched apps.
 
 ### Status Indicator
 

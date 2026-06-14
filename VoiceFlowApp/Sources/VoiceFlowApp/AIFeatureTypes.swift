@@ -112,6 +112,31 @@ struct RetroactiveInput: Codable {
     }
 }
 
+// MARK: - Redo (repeat-to-replace) types
+
+/// Sent to Bonsai to judge whether the latest utterance re-does the previous
+/// dictated output. `previousOutput` is the immediately-prior insertion still
+/// present in the field; `newTranscript` is the fresh utterance.
+struct RedoInput: Codable {
+    let previousOutput: String
+    let newTranscript: String
+    let context: String
+
+    enum CodingKeys: String, CodingKey {
+        case previousOutput = "previous_output"
+        case newTranscript = "new_transcript"
+        case context
+    }
+}
+
+/// Bonsai's redo verdict. When `replace` is true, `text` is the full corrected
+/// sentence to put in place of the previous output; otherwise append normally.
+struct RedoDecision: Codable {
+    let replace: Bool
+    let text: String
+    let confidence: Float
+}
+
 // MARK: - AI voice command types
 
 struct CommandInput: Codable {

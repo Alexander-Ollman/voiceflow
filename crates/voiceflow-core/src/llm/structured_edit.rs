@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 const RETROACTIVE_PROMPT: &str = include_str!("../../../../prompts/retroactive_correction.txt");
 const AI_COMMAND_PROMPT: &str = include_str!("../../../../prompts/ai_command.txt");
 const TRANSLATE_PROMPT: &str = include_str!("../../../../prompts/translate.txt");
+const REDO_PROMPT: &str = include_str!("../../../../prompts/redo_or_append.txt");
 
 /// What action the LLM decided on.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,6 +59,76 @@ pub struct RetroactiveInput {
     pub field_source: String,           // "ax" / "browser" / "shadow" / "ocr"
     pub recent_insertions: Vec<String>, // oldest first
     pub user_utterance: String,
+}
+
+/// Inputs for the redo-vs-append assessment. `previous_output` is the
+/// immediately-preceding dictated insertion still present in the field;
+/// `new_transcript` is the freshly-transcribed utterance to judge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedoInput {
+    pub previous_output: String,
+    pub new_transcript: String,
+    #[serde(default)]
+    pub context: String,
+}
+
+/// The LLM's redo decision. When `replace` is true, `text` holds the complete
+/// corrected output that should take the place of `previous_output`; when
+/// false, `text` is empty and the caller should format + append normally.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedoDecision {
+    pub replace: bool,
+    pub text: String,
+    pub confidence: f32,
+}
+
+/// JSON schema enforced on the redo decision. Matches `RedoDecision`.
+fn redo_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["replace", "text", "confidence"],
+        "properties": {
+            "replace": { "type": "boolean" },
+            "text": { "type": "string" },
+            "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 }
+        }
+    })
+}
+
+/// Ask the LLM whether `new_transcript` is the user re-saying / fixing
+/// `previous_output` (a redo that should replace it) or new content to append.
+///
+/// Returns a `RedoDecision`. Callers should treat `replace == false` (or a
+/// confidence below their threshold) as "append normally". When `replace` is
+/// true, `text` is the full replacement sentence — capitalized and punctuated.
+pub fn assess_redo(
+    backend: &dyn LlmBackendTrait,
+    input: &RedoInput,
+) -> Result<RedoDecision> {
+    let ctx = if input.context.trim().is_empty() {
+        "default".to_string()
+    } else {
+        input.context.clone()
+    };
+    let prompt = REDO_PROMPT
+        .replace("{context}", &ctx)
+        .replace("{previous_output}", &input.previous_output)
+        .replace("{new_transcript}", &input.new_transcript);
+
+    let raw = if backend.supports_structured() {
+        backend
+            .generate_structured(&prompt, &redo_schema(), 512, 0.1, 0.9)
+            .context("LLM structured generation failed (redo)")?
+    } else {
+        backend
+            .generate(&prompt, 512, 0.1, 0.9)
+            .context("LLM generation failed (redo)")?
+    };
+
+    let cleaned = extract_json_object(&raw);
+    serde_json::from_str::<RedoDecision>(cleaned)
+        .with_context(|| format!("Failed to parse RedoDecision from LLM output: {}", cleaned))
 }
 
 /// JSON schema enforced on the LLM output. Matches `Edit`.

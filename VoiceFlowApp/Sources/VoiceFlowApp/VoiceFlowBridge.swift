@@ -622,6 +622,30 @@ final class VoiceFlowBridge: ObservableObject {
         return try? JSONDecoder().decode(Edit.self, from: data)
     }
 
+    /// Ask Bonsai whether the latest utterance is a redo (replace) of the
+    /// previous dictated output. ~150–400ms; runs off the main thread.
+    func assessRedo(_ input: RedoInput) async -> RedoDecision? {
+        guard let handle = handle else { return nil }
+        guard let inputJSON = (try? JSONEncoder().encode(input)).flatMap({ String(data: $0, encoding: .utf8) }) else {
+            return nil
+        }
+
+        let result: String? = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ptr = inputJSON.withCString { voiceflow_assess_redo(handle, $0) }
+                guard let ptr = ptr else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                defer { voiceflow_free_string(ptr) }
+                continuation.resume(returning: String(cString: ptr))
+            }
+        }
+
+        guard let result = result, let data = result.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(RedoDecision.self, from: data)
+    }
+
     // MARK: - AI voice commands
 
     /// Run an AI voice command. ~300ms–1.5s depending on output length.

@@ -22,6 +22,6 @@ pub use mistralrs_backend::MistralRsBackend;
 pub use openai_server_backend::OpenAIServerBackend;
 pub use prompts::format_prompt;
 pub use structured_edit::{
-    retroactive_correct, run_command, translate, CommandInput, CommandOutput, Edit, EditAction,
-    Occurrence, RetroactiveInput,
+    assess_redo, retroactive_correct, run_command, translate, CommandInput, CommandOutput, Edit,
+    EditAction, Occurrence, RedoDecision, RedoInput, RetroactiveInput,
 };
