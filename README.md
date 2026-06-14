@@ -89,7 +89,7 @@ The LLM prompt is composed at dictation time:
 
 ### Requirements
 
-- **macOS 13.0** (Ventura) or later
+- **macOS 15.0** (Sequoia) or later — VoiceFlow uses Metal 3.2 compute features that require it
 - **Apple Silicon** (M1 or later) — Parakeet runs via MLX which is Apple-Silicon-only
 - **~2.5 GB** disk space for the two models
 
@@ -97,7 +97,7 @@ The LLM prompt is composed at dictation time:
 
 1. Download the latest `VoiceFlow.zip` from [Releases](https://github.com/Alexander-Ollman/voiceflow/releases)
 2. Extract and launch — the app will offer to move itself to Applications
-3. Grant **Microphone**, **Accessibility**, and **Automation** permissions when prompted
+3. Grant **Microphone** (recording) and **Accessibility** (auto-paste) permissions when prompted — and optionally **Screen Recording** if you use visual context
 4. Click **Setup** in the onboarding wizard. Two models download (~2.3 GB total, one-time)
 
 ### Build from source
