@@ -2395,6 +2395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupHotkey()
         installHotkeyObserversIfNeeded()
+        UpdateManager.shared.startAutomaticChecks()
         setupOverlay()
         setupAIResultPanel()
 
@@ -2576,6 +2577,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // If an update is staged, swap it in now (we're quitting anyway — no
+        // relaunch). Touches only the app bundle, so user stats/settings persist.
+        UpdateManager.shared.applyStagedUpdateOnQuitIfNeeded()
+
         // Clean up AI result key monitors
         removeAIResultKeyMonitors()
 
@@ -7343,6 +7348,10 @@ struct GeneralSettingsView: View {
                             }
                         }
                         .toggleStyle(.switch)
+                }
+
+                cardSection(title: "Software Update", icon: "arrow.down.circle") {
+                    UpdateSettingsView()
                 }
 
                 cardSection(title: "Status", icon: "info.circle") {
