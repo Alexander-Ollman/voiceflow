@@ -2053,6 +2053,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var editContext: EditContext?
     private var isEditMode: Bool = false
 
+    /// Guards one-time installation of the hotkey-rebind observers.
+    private var hotkeyObserversInstalled = false
+
     // Moonshine streaming engine (Beta)
     var moonshineEngine = MoonshineStreamingEngine()
     private var streamingTextCancellable: AnyCancellable?
@@ -2391,6 +2394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func proceedWithNormalLaunch() {
         setupStatusItem()
         setupHotkey()
+        installHotkeyObserversIfNeeded()
         setupOverlay()
         setupAIResultPanel()
 
@@ -2663,7 +2667,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        recordingMenuItem = NSMenuItem(title: "Hold ⌥ Space to Record", action: #selector(toggleRecording), keyEquivalent: "")
+        recordingMenuItem = NSMenuItem(title: "Hold \(dictateHotkeyLabel) to Record", action: #selector(toggleRecording), keyEquivalent: "")
         recordingMenuItem?.target = self
         menu.addItem(recordingMenuItem!)
 
@@ -3107,12 +3111,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Hotkey Setup
 
+    /// Current key+modifiers for an action, from the user-customizable store.
+    private func binding(_ action: HotkeyAction) -> HotkeyBinding {
+        HotkeyStore.shared.binding(for: action)
+    }
+
+    /// Display label (e.g. "⌥ Space") for the dictation / edit shortcuts.
+    var dictateHotkeyLabel: String { HotkeyFormatter.display(binding(.dictate)) }
+    var editHotkeyLabel: String { HotkeyFormatter.display(binding(.edit)) }
+
     private func setupHotkey() {
-        // Option + Space: hold to record, release to stop and paste (text-only)
+        // Dictate (default ⌥ Space): hold to record, release to paste (text-only)
+        let dictate = binding(.dictate)
         hotkeyManager.register(
-            id: 1,
-            keyCode: UInt32(kVK_Space),
-            modifiers: UInt32(optionKey),
+            id: HotkeyAction.dictate.hotkeyID,
+            keyCode: dictate.keyCode,
+            modifiers: dictate.modifiers,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.isVisualContextRecording = false
@@ -3126,11 +3140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
-        // Control + Option + Space: hold to record with visual context (screenshot + multimodal)
+        // Dictate with visual context (default ⌃⌥ Space): screenshot + multimodal
+        let visual = binding(.visualDictate)
         hotkeyManager.register(
-            id: 2,
-            keyCode: UInt32(kVK_Space),
-            modifiers: UInt32(controlKey | optionKey),
+            id: HotkeyAction.visualDictate.hotkeyID,
+            keyCode: visual.keyCode,
+            modifiers: visual.modifiers,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.isVisualContextRecording = true
@@ -3144,15 +3159,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
-        // Option + Shift + Space: hold to record a voice INSTRUCTION that
-        // edits whatever VoiceFlow just pasted into the focused field.
-        // Requires editContext to be valid (last paste was < 10s ago and
-        // in the same app). If the window expired or the app changed, we
-        // show a notification instead of recording.
+        // Edit / repeat (default ⌥⇧ Space): hold to record a voice INSTRUCTION
+        // (or re-say to replace) the last paste. Requires editContext to be
+        // valid (last paste < 10s ago and in the same app).
+        let edit = binding(.edit)
         hotkeyManager.register(
-            id: 3,
-            keyCode: UInt32(kVK_Space),
-            modifiers: UInt32(optionKey | shiftKey),
+            id: HotkeyAction.edit.hotkeyID,
+            keyCode: edit.keyCode,
+            modifiers: edit.modifiers,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.startEditRecording()
@@ -3165,12 +3179,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
-        // Control + Option + Shift + Space: cycle formatting level (was on
-        // ⌥⇧Space; moved to make room for the edit hotkey). Tap, don't hold.
+        // Cycle formatting level (default ⌃⌥⇧ Space): tap, don't hold.
+        let cycle = binding(.cycleFormatting)
         hotkeyManager.register(
-            id: 4,
-            keyCode: UInt32(kVK_Space),
-            modifiers: UInt32(controlKey | optionKey | shiftKey),
+            id: HotkeyAction.cycleFormatting.hotkeyID,
+            keyCode: cycle.keyCode,
+            modifiers: cycle.modifiers,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.cycleFormattingLevel()
@@ -3178,6 +3192,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onRelease: {}
         )
+    }
+
+    /// Tear down all four hotkeys (used while the user is recording a new one,
+    /// so pressing the current shortcut is captured rather than fired).
+    private func suspendHotkeys() {
+        for action in HotkeyAction.allCases {
+            hotkeyManager.unregister(id: action.hotkeyID)
+        }
+    }
+
+    /// Re-register every hotkey from the current (possibly edited) bindings.
+    private func reapplyHotkeys() {
+        suspendHotkeys()
+        setupHotkey()
+        refreshHotkeyLabels()
+    }
+
+    /// Keep the menu-bar item's idle title in sync with the dictate shortcut.
+    private func refreshHotkeyLabels() {
+        if !isRecording {
+            recordingMenuItem?.title = "Hold \(dictateHotkeyLabel) to Record"
+        }
+    }
+
+    /// One-time wiring so Settings edits take effect live.
+    private func installHotkeyObserversIfNeeded() {
+        guard !hotkeyObserversInstalled else { return }
+        hotkeyObserversInstalled = true
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: HotkeyStore.changedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.reapplyHotkeys()
+        }
+        nc.addObserver(forName: HotkeyStore.recordingBeganNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.suspendHotkeys()
+        }
+        nc.addObserver(forName: HotkeyStore.recordingEndedNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.reapplyHotkeys()
+        }
     }
 
     /// Cycle through FormattingLevel cases and show a quick toast confirming
@@ -3448,7 +3500,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try audioRecorder.startRecording()
             isRecording = true
-            recordingMenuItem?.title = "Recording... (release ⌥ Space)"
+            recordingMenuItem?.title = "Recording... (release \(dictateHotkeyLabel))"
 
             // If streaming is enabled and an engine is ready, start a streaming
             // session. Skipped in audio-direct mode (audio goes straight to
@@ -3642,7 +3694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   gainResult.originalRMS, gainResult.appliedGain)
         }
         isRecording = false
-        recordingMenuItem?.title = "Hold ⌥ Space to Record"
+        recordingMenuItem?.title = "Hold \(dictateHotkeyLabel) to Record"
 
         // Streaming path: get raw transcript from engine, then format deterministically.
         // Parakeet streaming output is display-only — final transcript comes from
@@ -4766,7 +4818,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[VoiceFlow] Edit hotkey pressed but no valid edit context")
             showNotification(
                 title: "Nothing to edit",
-                body: "Hold ⌥⇧Space within 10 seconds of a paste to revise it."
+                body: "Hold \(editHotkeyLabel) within 10 seconds of a paste to revise it."
             )
             return
         }
@@ -4817,7 +4869,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let audio = audioRecorder.stopRecording()
         isRecording = false
         isEditMode = false
-        recordingMenuItem?.title = "Hold ⌥ Space to Record"
+        recordingMenuItem?.title = "Hold \(dictateHotkeyLabel) to Record"
 
         showOverlay(state: .processing)
 
@@ -5276,6 +5328,17 @@ final class GlobalHotkeyManager {
         if let ref = ref {
             hotKeyRefs[id] = ref
         }
+    }
+
+    /// Unregister a single hotkey so it can be re-bound at runtime. Clears the
+    /// Carbon ref and the stored handlers for that id.
+    func unregister(id: UInt32) {
+        if let ref = hotKeyRefs[id] {
+            UnregisterEventHotKey(ref)
+            hotKeyRefs.removeValue(forKey: id)
+        }
+        GlobalHotkeyManager.pressHandlers.removeValue(forKey: id)
+        GlobalHotkeyManager.releaseHandlers.removeValue(forKey: id)
     }
 
     deinit {
@@ -6381,7 +6444,7 @@ struct HomeView: View {
                     Text("No transcriptions yet")
                         .font(.subheadline)
                         .foregroundColor(.white.opacity(0.7))
-                    Text("Press ⌥ Space to start dictating")
+                    Text("Press \(HotkeyFormatter.display(HotkeyStore.shared.binding(for: .dictate))) to start dictating")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.45))
                 }
@@ -7266,21 +7329,8 @@ struct GeneralSettingsView: View {
             VStack(alignment: .leading, spacing: 22) {
                 VFPageHeader(title: "Settings", subtitle: "App-wide preferences and system access")
 
-                cardSection(title: "Hotkey", icon: "keyboard") {
-                    HStack {
-                        Label("Recording Shortcut", systemImage: "command")
-                            .font(.system(size: 13))
-                            .foregroundColor(.white.opacity(0.85))
-                        Spacer()
-                        Text("⌥ Space")
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(
-                                Capsule().fill(Color.white.opacity(0.08))
-                            )
-                            .foregroundColor(.white.opacity(0.9))
-                    }
+                cardSection(title: "Hotkeys", icon: "keyboard") {
+                    HotkeyRecorderList()
                 }
 
                 cardSection(title: "Startup", icon: "power") {
