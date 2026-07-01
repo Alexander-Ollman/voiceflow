@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import IOKit.hidsystem
 import SwiftUI
 
 // MARK: - Model
@@ -56,12 +57,77 @@ enum HotkeyAction: String, CaseIterable, Identifiable {
     }
 }
 
-/// A key + Carbon modifier mask. `modifiers` uses Carbon constants
-/// (`optionKey` / `shiftKey` / `controlKey` / `cmdKey`) so it can be passed
-/// straight to `RegisterEventHotKey`.
+enum HotkeyModifier: String, Codable, CaseIterable {
+    case leftShift
+    case rightShift
+    case leftControl
+    case rightControl
+    case leftOption
+    case rightOption
+    case leftCommand
+    case rightCommand
+    case shift
+    case control
+    case option
+    case command
+    case function
+
+    func isPressed(in flags: NSEvent.ModifierFlags) -> Bool {
+        let raw = flags.rawValue
+        switch self {
+        case .leftShift: return raw & UInt(NX_DEVICELSHIFTKEYMASK) != 0
+        case .rightShift: return raw & UInt(NX_DEVICERSHIFTKEYMASK) != 0
+        case .leftControl: return raw & UInt(NX_DEVICELCTLKEYMASK) != 0
+        case .rightControl: return raw & UInt(NX_DEVICERCTLKEYMASK) != 0
+        case .leftOption: return raw & UInt(NX_DEVICELALTKEYMASK) != 0
+        case .rightOption: return raw & UInt(NX_DEVICERALTKEYMASK) != 0
+        case .leftCommand: return raw & UInt(NX_DEVICELCMDKEYMASK) != 0
+        case .rightCommand: return raw & UInt(NX_DEVICERCMDKEYMASK) != 0
+        case .shift: return flags.contains(.shift)
+        case .control: return flags.contains(.control)
+        case .option: return flags.contains(.option)
+        case .command: return flags.contains(.command)
+        case .function: return flags.contains(.function)
+        }
+    }
+
+    static func active(in flags: NSEvent.ModifierFlags) -> [HotkeyModifier] {
+        let sideSpecific: [HotkeyModifier] = [
+            .leftShift, .rightShift,
+            .leftControl, .rightControl,
+            .leftOption, .rightOption,
+            .leftCommand, .rightCommand,
+        ].filter { $0.isPressed(in: flags) }
+
+        if flags.contains(.function) {
+            return sideSpecific + [.function]
+        }
+        return sideSpecific
+    }
+}
+
+/// A bindable hotkey. Normal bindings use a key code plus Carbon modifiers.
+/// Modifier-only bindings leave `keyCode` empty and set `modifierOnly`.
 struct HotkeyBinding: Codable, Equatable {
-    var keyCode: UInt32
+    var keyCode: UInt32?
     var modifiers: UInt32
+    var modifierOnly: HotkeyModifier?
+
+    init(keyCode: UInt32, modifiers: UInt32) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.modifierOnly = nil
+    }
+
+    init(modifierOnly: HotkeyModifier) {
+        self.keyCode = nil
+        self.modifiers = 0
+        self.modifierOnly = modifierOnly
+    }
+
+    var isModifierOnly: Bool {
+        keyCode == nil && modifierOnly != nil
+    }
 }
 
 // MARK: - Store
@@ -132,19 +198,43 @@ final class HotkeyStore: ObservableObject {
 
 enum HotkeyFormatter {
 
+    static func modifierGlyph(_ modifier: HotkeyModifier) -> String {
+        switch modifier {
+        case .leftShift: return "L ⇧"
+        case .rightShift: return "R ⇧"
+        case .leftControl: return "L ⌃"
+        case .rightControl: return "R ⌃"
+        case .leftOption: return "L ⌥"
+        case .rightOption: return "R ⌥"
+        case .leftCommand: return "L ⌘"
+        case .rightCommand: return "R ⌘"
+        case .shift: return "⇧"
+        case .control: return "⌃"
+        case .option: return "⌥"
+        case .command: return "⌘"
+        case .function: return "fn"
+        }
+    }
+
     /// Carbon modifier mask → glyphs in the canonical macOS order ⌃⌥⇧⌘.
     static func modifierGlyphs(_ modifiers: UInt32) -> String {
         var s = ""
-        if modifiers & UInt32(controlKey) != 0 { s += "⌃" }
-        if modifiers & UInt32(optionKey)  != 0 { s += "⌥" }
-        if modifiers & UInt32(shiftKey)   != 0 { s += "⇧" }
-        if modifiers & UInt32(cmdKey)     != 0 { s += "⌘" }
+        if modifiers & UInt32(controlKey) != 0 { s += modifierGlyph(.control) }
+        if modifiers & UInt32(optionKey)  != 0 { s += modifierGlyph(.option) }
+        if modifiers & UInt32(shiftKey)   != 0 { s += modifierGlyph(.shift) }
+        if modifiers & UInt32(cmdKey)     != 0 { s += modifierGlyph(.command) }
         return s
     }
 
     static func display(_ binding: HotkeyBinding) -> String {
+        if let modifier = binding.modifierOnly {
+            return modifierGlyph(modifier)
+        }
+        guard let keyCode = binding.keyCode else {
+            return "Unset"
+        }
         let mods = modifierGlyphs(binding.modifiers)
-        let key = keyName(binding.keyCode)
+        let key = keyName(keyCode)
         return mods.isEmpty ? key : "\(mods) \(key)"
     }
 
@@ -169,7 +259,11 @@ enum HotkeyFormatter {
     }
 
     static func isValid(_ binding: HotkeyBinding) -> Bool {
-        requiresModifier(binding.keyCode) ? hasCommandControlOption(binding.modifiers) : true
+        if binding.isModifierOnly {
+            return binding.modifierOnly != nil && binding.modifiers == 0
+        }
+        guard let keyCode = binding.keyCode else { return false }
+        return requiresModifier(keyCode) ? hasCommandControlOption(binding.modifiers) : true
     }
 
     /// Function keys can stand alone; everything else needs a real modifier.
@@ -221,14 +315,15 @@ enum HotkeyFormatter {
 // MARK: - Recorder UI
 
 /// One row in the Hotkey settings card: shows the action, its current binding,
-/// and a Record button that captures the next keystroke (any key + any
-/// combination of ⌃⌥⇧⌘). Esc cancels recording.
+/// and a Record button that captures the next keystroke or a single modifier.
+/// Esc cancels recording.
 struct HotkeyRecorderRow: View {
     let action: HotkeyAction
     @ObservedObject private var store = HotkeyStore.shared
     @State private var recording = false
     @State private var monitor: Any?
     @State private var error: String?
+    @State private var pendingModifierOnly: HotkeyModifier?
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -254,7 +349,7 @@ struct HotkeyRecorderRow: View {
                                                : Color.clear, lineWidth: 1)
                 )
                 .foregroundColor(.white.opacity(0.9))
-                .frame(minWidth: 86)
+                .frame(minWidth: 86, alignment: .trailing)
 
             Button(recording ? "Cancel" : "Record") {
                 recording ? stop() : start()
@@ -282,9 +377,10 @@ struct HotkeyRecorderRow: View {
 
     private func start() {
         error = nil
+        pendingModifierOnly = nil
         recording = true
         NotificationCenter.default.post(name: HotkeyStore.recordingBeganNotification, object: nil)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             handle(event)
             return nil // swallow — don't let the keystroke reach the UI
         }
@@ -293,6 +389,7 @@ struct HotkeyRecorderRow: View {
     private func stop() {
         if let m = monitor { NSEvent.removeMonitor(m) }
         monitor = nil
+        pendingModifierOnly = nil
         if recording {
             recording = false
             NotificationCenter.default.post(name: HotkeyStore.recordingEndedNotification, object: nil)
@@ -300,7 +397,27 @@ struct HotkeyRecorderRow: View {
     }
 
     private func handle(_ event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let rawFlags = event.modifierFlags
+        let flags = rawFlags.intersection(.deviceIndependentFlagsMask)
+        if event.type == .flagsChanged {
+            let modifiers = HotkeyModifier.active(in: rawFlags)
+            guard !modifiers.isEmpty else {
+                if let modifier = pendingModifierOnly {
+                    save(HotkeyBinding(modifierOnly: modifier))
+                }
+                return
+            }
+            guard modifiers.count == 1, let modifier = modifiers.first else {
+                pendingModifierOnly = nil
+                error = "Press exactly one modifier key."
+                return
+            }
+            pendingModifierOnly = modifier
+            error = nil
+            return
+        }
+
+        pendingModifierOnly = nil
         // Bare Esc cancels.
         if event.keyCode == UInt16(kVK_Escape) && !flags.contains(.command)
             && !flags.contains(.option) && !flags.contains(.control) && !flags.contains(.shift) {
@@ -317,6 +434,10 @@ struct HotkeyRecorderRow: View {
             error = "Add at least one of ⌃ ⌥ ⌘ to this key."
             return // keep recording
         }
+        save(binding)
+    }
+
+    private func save(_ binding: HotkeyBinding) {
         if let other = store.conflict(for: binding, excluding: action) {
             error = "Already used by “\(other.title)”."
             return
@@ -341,7 +462,7 @@ struct HotkeyRecorderList: View {
                 }
             }
             HStack {
-                Text("Tip: combine ⌃ ⌥ ⇧ ⌘ with any key. Press Esc to cancel recording.")
+                Text("Tip: press a single modifier, or combine ⌃ ⌥ ⇧ ⌘ with any key. Press Esc to cancel recording.")
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.4))
                 Spacer()

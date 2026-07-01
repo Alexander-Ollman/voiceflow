@@ -3130,8 +3130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dictate = binding(.dictate)
         hotkeyManager.register(
             id: HotkeyAction.dictate.hotkeyID,
-            keyCode: dictate.keyCode,
-            modifiers: dictate.modifiers,
+            binding: dictate,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.isVisualContextRecording = false
@@ -3142,6 +3141,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     self?.stopRecordingAndPaste()
                 }
+            },
+            onCancel: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.cancelActiveRecording()
+                }
             }
         )
 
@@ -3149,8 +3153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let visual = binding(.visualDictate)
         hotkeyManager.register(
             id: HotkeyAction.visualDictate.hotkeyID,
-            keyCode: visual.keyCode,
-            modifiers: visual.modifiers,
+            binding: visual,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.isVisualContextRecording = true
@@ -3161,6 +3164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     self?.stopRecordingAndPaste()
                 }
+            },
+            onCancel: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.cancelActiveRecording()
+                }
             }
         )
 
@@ -3170,8 +3178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let edit = binding(.edit)
         hotkeyManager.register(
             id: HotkeyAction.edit.hotkeyID,
-            keyCode: edit.keyCode,
-            modifiers: edit.modifiers,
+            binding: edit,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.startEditRecording()
@@ -3181,6 +3188,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     self?.stopEditAndApply()
                 }
+            },
+            onCancel: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.cancelActiveRecording()
+                }
             }
         )
 
@@ -3188,8 +3200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cycle = binding(.cycleFormatting)
         hotkeyManager.register(
             id: HotkeyAction.cycleFormatting.hotkeyID,
-            keyCode: cycle.keyCode,
-            modifiers: cycle.modifiers,
+            binding: cycle,
             onPress: { [weak self] in
                 DispatchQueue.main.async {
                     self?.cycleFormattingLevel()
@@ -3266,6 +3277,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             startRecording()
         }
+    }
+
+    private func cancelActiveRecording() {
+        guard isRecording else { return }
+        audioLevelCancellable?.cancel()
+        audioLevelCancellable = nil
+        streamingTextCancellable?.cancel()
+        streamingTextCancellable = nil
+        audioRecorder.onAudioChunk = nil
+        cancelLiveFormat()
+        _ = audioRecorder.stopRecording()
+
+        isRecording = false
+        isEditMode = false
+        isVisualContextRecording = false
+        isStreamingActive = false
+        activeStreamingEngine = .none
+        directTypingActive = false
+        lastStreamedText = ""
+        dictationInsertedLength = 0
+        dictationStartPosition = nil
+        dictationTargetApp = nil
+        recordingMenuItem?.title = "Hold \(dictateHotkeyLabel) to Record"
+        hideOverlay()
+        NSLog("[VoiceFlow] Recording cancelled")
     }
 
     /// Compose a [SCREEN VOCABULARY] block from the focused window's visible
@@ -5269,14 +5305,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 final class GlobalHotkeyManager {
     private var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
+    private var modifierHotkeys: [UInt32: HotkeyModifier] = [:]
+    private var activeModifierHotkeys = Set<UInt32>()
+    private var cancelledModifierHotkeys = Set<UInt32>()
+    private var modifierLocalMonitor: Any?
+    private var modifierGlobalMonitor: Any?
     private static var eventHandlerInstalled = false
 
     private static var pressHandlers: [UInt32: () -> Void] = [:]
     private static var releaseHandlers: [UInt32: () -> Void] = [:]
+    private static var cancelHandlers: [UInt32: () -> Void] = [:]
 
-    func register(id: UInt32, keyCode: UInt32, modifiers: UInt32, onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
+    func register(
+        id: UInt32,
+        binding: HotkeyBinding,
+        onPress: @escaping () -> Void,
+        onRelease: @escaping () -> Void,
+        onCancel: (() -> Void)? = nil
+    ) {
         GlobalHotkeyManager.pressHandlers[id] = onPress
         GlobalHotkeyManager.releaseHandlers[id] = onRelease
+        GlobalHotkeyManager.cancelHandlers[id] = onCancel
+
+        if let modifier = binding.modifierOnly {
+            modifierHotkeys[id] = modifier
+            installModifierEventMonitorsIfNeeded()
+            return
+        }
+
+        guard let keyCode = binding.keyCode else {
+            NSLog("[VoiceFlow] Refusing to register invalid hotkey binding for id %u", id)
+            return
+        }
 
         // Install the shared event handler once
         if !GlobalHotkeyManager.eventHandlerInstalled {
@@ -5323,7 +5383,7 @@ final class GlobalHotkeyManager {
         var ref: EventHotKeyRef?
         RegisterEventHotKey(
             keyCode,
-            modifiers,
+            binding.modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
@@ -5335,6 +5395,59 @@ final class GlobalHotkeyManager {
         }
     }
 
+    private func installModifierEventMonitorsIfNeeded() {
+        guard modifierLocalMonitor == nil, modifierGlobalMonitor == nil else { return }
+        modifierLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+            self?.handleModifierEvent(event)
+            return event
+        }
+        modifierGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+            self?.handleModifierEvent(event)
+        }
+    }
+
+    private func removeModifierEventMonitorsIfUnused() {
+        guard modifierHotkeys.isEmpty else { return }
+        if let monitor = modifierLocalMonitor {
+            NSEvent.removeMonitor(monitor)
+            modifierLocalMonitor = nil
+        }
+        if let monitor = modifierGlobalMonitor {
+            NSEvent.removeMonitor(monitor)
+            modifierGlobalMonitor = nil
+        }
+    }
+
+    private func handleModifierEvent(_ event: NSEvent) {
+        switch event.type {
+        case .flagsChanged:
+            let flags = event.modifierFlags
+            for (id, modifier) in modifierHotkeys {
+                let isPressed = modifier.isPressed(in: flags)
+                let wasPressed = activeModifierHotkeys.contains(id)
+                if isPressed && !wasPressed {
+                    activeModifierHotkeys.insert(id)
+                    cancelledModifierHotkeys.remove(id)
+                    GlobalHotkeyManager.pressHandlers[id]?()
+                } else if !isPressed && wasPressed {
+                    activeModifierHotkeys.remove(id)
+                    let wasCancelled = cancelledModifierHotkeys.remove(id) != nil
+                    if !wasCancelled {
+                        GlobalHotkeyManager.releaseHandlers[id]?()
+                    }
+                }
+            }
+        case .keyDown:
+            guard !activeModifierHotkeys.isEmpty else { return }
+            for id in activeModifierHotkeys where !cancelledModifierHotkeys.contains(id) {
+                cancelledModifierHotkeys.insert(id)
+                GlobalHotkeyManager.cancelHandlers[id]?()
+            }
+        default:
+            break
+        }
+    }
+
     /// Unregister a single hotkey so it can be re-bound at runtime. Clears the
     /// Carbon ref and the stored handlers for that id.
     func unregister(id: UInt32) {
@@ -5342,13 +5455,24 @@ final class GlobalHotkeyManager {
             UnregisterEventHotKey(ref)
             hotKeyRefs.removeValue(forKey: id)
         }
+        modifierHotkeys.removeValue(forKey: id)
+        activeModifierHotkeys.remove(id)
+        cancelledModifierHotkeys.remove(id)
+        removeModifierEventMonitorsIfUnused()
         GlobalHotkeyManager.pressHandlers.removeValue(forKey: id)
         GlobalHotkeyManager.releaseHandlers.removeValue(forKey: id)
+        GlobalHotkeyManager.cancelHandlers.removeValue(forKey: id)
     }
 
     deinit {
         for (_, ref) in hotKeyRefs {
             UnregisterEventHotKey(ref)
+        }
+        if let monitor = modifierLocalMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = modifierGlobalMonitor {
+            NSEvent.removeMonitor(monitor)
         }
     }
 }
