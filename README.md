@@ -149,7 +149,9 @@ Access from the menu bar icon → **Settings** or click the app icon. The sideba
 | **App Profiles** | Per-app persona assignments. Auto-Detect Apps scans `/Applications` and maps based on a curated bundle-id table. Classify Unmapped (LLM) uses Bonsai itself with a 3-vote consensus to fill in the rest |
 | **Browser Sites** | Hostname rules for when a browser is foreground (`github.com` → Software Engineer, `mail.google.com` → Professional Email, etc.). Wildcards: `*.atlassian.net` |
 | **AI Features** | Voice command toggles (reply, rewrite, proofread, continue, summarize) |
-| **Settings** | Permissions, hotkey, launch-at-login |
+| **Settings** | Permissions, hotkey, launch-at-login, and **Avoid Bluetooth microphone** (on by default — see below) |
+
+**Avoid Bluetooth microphone.** Bluetooth headsets (AirPods and most BT headphones) can't stream high-quality audio and run their microphone at the same time — opening the mic forces the whole device into the low-quality Hands-Free Profile, which makes music and calls in *every* app sound like a phone call. With this setting on (the default), VoiceFlow captures from your Mac's built-in mic whenever a Bluetooth device is your system input, so your headphones stay in high-quality audio while you dictate. Turn it off if you specifically want to dictate through your AirPods mic (e.g. away from the laptop). Macs without a built-in mic fall back to the system default input.
 
 ## Models
 

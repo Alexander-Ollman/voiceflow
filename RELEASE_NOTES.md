@@ -1,5 +1,34 @@
 # Release Notes
 
+## v2.7.0 — Keep Bluetooth headphones in high-quality audio while dictating
+
+Fixes a long-standing annoyance for AirPods and Bluetooth headphone users:
+while VoiceFlow was recording, the audio in *every other app* — music,
+video, calls — would drop to tinny "phone-call" quality.
+
+### Why it happened
+
+Classic Bluetooth can't stream high-quality audio and run a microphone at
+the same time. The moment any app opens a Bluetooth mic, macOS forces the
+whole device into the Hands-Free Profile (a mono 8–16 kHz link), which
+collapses its high-quality A2DP output for the entire system. VoiceFlow
+captured from whatever the system default input was — so if that was your
+AirPods, dictating dragged all your audio down with it.
+
+### The fix
+
+- **Avoid Bluetooth microphone (on by default).** When your system input is
+  a Bluetooth device, VoiceFlow now captures from the Mac's built-in mic
+  instead, so your headphones stay in high-quality audio while you dictate.
+  Non-Bluetooth inputs (built-in, USB, aggregate) are left untouched. Macs
+  without a built-in mic fall back to the system default input.
+- **New toggle** in **Settings → Microphone** to turn this off if you
+  specifically want to dictate through your AirPods mic (e.g. away from the
+  laptop).
+- **Faster device release.** The audio engine is now fully torn down when a
+  dictation ends, so a Bluetooth device returns to high-quality audio
+  promptly instead of lingering in Hands-Free mode.
+
 ## v2.0.0 — Parakeet + Bonsai by default, vocabulary-aware spelling, new Settings UI
 
 VoiceFlow v2.0.0 is a major release. The Parakeet → Bonsai stack is now

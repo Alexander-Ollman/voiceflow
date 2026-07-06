@@ -1,5 +1,6 @@
 import AVFoundation
 import Accelerate
+import AudioToolbox
 
 /// Audio recorder that captures microphone input and resamples to 16kHz
 final class AudioRecorder: ObservableObject {
@@ -20,6 +21,16 @@ final class AudioRecorder: ObservableObject {
     func startRecording() throws {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
+
+        // Avoid degrading Bluetooth output. If the system default input is a
+        // Bluetooth device (AirPods/headset), opening its mic forces the whole
+        // device into HFP/SCO — a mono 8–16 kHz link — which collapses its A2DP
+        // output to phone quality for *every* app. Redirect capture to the
+        // built-in mic in that case so the user's audio stays high quality.
+        // Must happen before reading the input format (the format follows the
+        // selected device) and before installing the tap.
+        redirectAwayFromBluetoothIfNeeded(inputNode)
+
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         // Guard against invalid audio format (can happen after sleep, device switch, etc.)
@@ -53,9 +64,44 @@ final class AudioRecorder: ObservableObject {
         isRecording = false
         audioLevel = 0
 
+        // Fully release the engine so the OS reclaims the input device promptly.
+        // Leaving a stopped engine alive can keep the HAL input unit claimed,
+        // pinning a Bluetooth device in HFP longer than the dictation lasts.
+        audioEngine = nil
+        inputNode = nil
+
         let samples = audioBuffer
         audioBuffer.removeAll()
         return samples
+    }
+
+    /// When the "Avoid Bluetooth microphone" setting is on and the system default
+    /// input is a Bluetooth device, point the engine's input node at the built-in
+    /// mic. No-op when the setting is off, the default input isn't Bluetooth, or
+    /// the Mac has no built-in mic (falls back to the system default).
+    private func redirectAwayFromBluetoothIfNeeded(_ inputNode: AVAudioInputNode) {
+        let avoidBluetooth = UserDefaults.standard.object(forKey: "avoidBluetoothMic") as? Bool ?? true
+        guard let deviceID = AudioDevices.preferredCaptureDeviceID(avoidBluetooth: avoidBluetooth),
+              let audioUnit = inputNode.audioUnit
+        else { return }
+
+        var mutableID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &mutableID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if status == noErr {
+            NSLog(
+                "[VoiceFlow] Mic: default input is Bluetooth; capturing via built-in mic '%@' to preserve output quality",
+                AudioDevices.name(of: deviceID)
+            )
+        } else {
+            NSLog("[VoiceFlow] Mic: failed to redirect to built-in mic (err %d); using system default", status)
+        }
     }
 
     private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, inputSampleRate: Double) {

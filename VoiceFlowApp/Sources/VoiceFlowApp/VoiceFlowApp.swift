@@ -7452,6 +7452,7 @@ struct GeneralSettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showLogs = false
     @State private var showTips = false
+    @AppStorage("avoidBluetoothMic") private var avoidBluetoothMic = true
 
     var body: some View {
         ScrollView {
@@ -7460,6 +7461,20 @@ struct GeneralSettingsView: View {
 
                 cardSection(title: "Hotkeys", icon: "keyboard") {
                     HotkeyRecorderList()
+                }
+
+                cardSection(title: "Microphone", icon: "mic") {
+                    Toggle(isOn: $avoidBluetoothMic) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Avoid Bluetooth microphone")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("Keeps AirPods and Bluetooth headphones in high-quality audio while dictating by capturing from the built-in mic instead.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
+                    }
+                    .toggleStyle(.switch)
                 }
 
                 cardSection(title: "Startup", icon: "power") {
