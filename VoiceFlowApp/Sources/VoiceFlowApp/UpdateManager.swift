@@ -41,6 +41,11 @@ final class UpdateManager: ObservableObject {
     /// Path to a verified, staged `.app` waiting to be swapped in (if any).
     private var stagedApp: URL?
     private var stagedVersion: String?
+    /// Set once a swap script has been handed off. "Install & Relaunch" and the
+    /// on-quit hook can both reach `runSwap` for the same staged update; two
+    /// concurrent swap scripts racing each other's mv/rm steps can nest the
+    /// bundle inside itself. Only the first hand-off wins.
+    private var swapLaunched = false
     private var checkTimer: Timer?
 
     var currentVersion: String {
@@ -247,21 +252,41 @@ final class UpdateManager: ObservableObject {
     /// bundle path — never `~/Library` — so user data is preserved. On any
     /// failure it restores the previous app so the user is never left without one.
     private func runSwap(newApp: URL, relaunch: Bool) {
+        guard !swapLaunched else { return }
         let pid = ProcessInfo.processInfo.processIdentifier
         let install = installURL.path
         let new = newApp.path
+        let scriptURL = (try? updatesDir())?.appendingPathComponent("swap.sh")
+            ?? URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("vf-swap.sh")
+        let lock = scriptURL.deletingLastPathComponent().appendingPathComponent("swap.lock").path
+        // BSD mv moves the source INTO a destination that exists as a directory
+        // instead of replacing it, so every mv below is guarded against an
+        // occupied destination (that's how the bundle once ended up nested
+        // inside itself). The mkdir lock serializes swap instances — mkdir is
+        // atomic, and a holder that died is detected via its recorded pid.
         let script = """
         #!/bin/sh
         # VoiceFlow self-update swap — touches only the app bundle, never ~/Library.
+        if ! mkdir "\(lock)" 2>/dev/null; then
+          oldpid=$(cat "\(lock)/pid" 2>/dev/null)
+          if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then exit 1; fi
+          rm -rf "\(lock)"
+          mkdir "\(lock)" 2>/dev/null || exit 1
+        fi
+        echo $$ > "\(lock)/pid"
+        trap 'rm -rf "\(lock)"' EXIT
         i=0
         while kill -0 \(pid) 2>/dev/null && [ $i -lt 150 ]; do sleep 0.2; i=$((i+1)); done
+        # App never exited — do not swap the bundle out from under a live process.
+        kill -0 \(pid) 2>/dev/null && exit 1
         rm -rf "\(install).old"
+        [ -e "\(install).old" ] && exit 1
         if ! mv "\(install)" "\(install).old"; then
           \(relaunch ? "open \"\(install)\"" : "true")
           exit 1
         fi
-        if ! mv "\(new)" "\(install)"; then
-          mv "\(install).old" "\(install)"
+        if [ -e "\(install)" ] || ! mv "\(new)" "\(install)"; then
+          [ -e "\(install)" ] || mv "\(install).old" "\(install)"
           \(relaunch ? "open \"\(install)\"" : "true")
           exit 1
         fi
@@ -270,8 +295,6 @@ final class UpdateManager: ObservableObject {
         \(relaunch ? "open \"\(install)\"" : "true")
         exit 0
         """
-        let scriptURL = (try? updatesDir())?.appendingPathComponent("swap.sh")
-            ?? URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("vf-swap.sh")
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
         } catch { return }
@@ -279,7 +302,14 @@ final class UpdateManager: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         p.arguments = ["-c", "nohup /bin/sh '\(scriptURL.path)' >/dev/null 2>&1 &"]
-        try? p.run()
+        do {
+            try p.run()
+            swapLaunched = true
+            // The staged app now belongs to the swap script; clearing it keeps
+            // the on-quit hook from spawning a second swap for the same update.
+            stagedApp = nil
+            stagedVersion = nil
+        } catch {}
     }
 
     // MARK: - Helpers
