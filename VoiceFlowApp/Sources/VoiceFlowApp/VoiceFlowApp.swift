@@ -2040,6 +2040,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overlayState = OverlayState()
     var settingsWindow: NSWindow?
     var wizardController: SetupWizardController?
+    /// The app that was frontmost when Settings opened, so focus can be handed
+    /// back when the window closes and we drop out of the dock again.
+    private var appToReactivateAfterSettings: NSRunningApplication?
     private var audioLevelCancellable: AnyCancellable?
     private var screenshotCapture = ScreenshotCapture()
     private var isVisualContextRecording = false
@@ -2055,6 +2058,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Guards one-time installation of the hotkey-rebind observers.
     private var hotkeyObserversInstalled = false
+    private var dockIconObserverInstalled = false
 
     // Moonshine streaming engine (Beta)
     var moonshineEngine = MoonshineStreamingEngine()
@@ -2395,6 +2399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupHotkey()
         installHotkeyObserversIfNeeded()
+        installDockIconObserverIfNeeded()
         UpdateManager.shared.startAutomaticChecks()
         setupOverlay()
         setupAIResultPanel()
@@ -2784,6 +2789,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         // If window already exists, just bring it to front
         if let window = settingsWindow {
+            showInDockWhileSettingsOpen()
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -2808,10 +2815,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 920, height: 600)
         window.center()
         window.isReleasedWhenClosed = false
+        window.delegate = self
 
         settingsWindow = window
+        showInDockWhileSettingsOpen()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - Dock icon while Settings is open
+
+    /// UserDefaults key for the "Show in Dock while Settings is open" toggle.
+    static let dockIconWhileSettingsOpenKey = "dockIconWhileSettingsOpen"
+    static let dockIconPreferenceChangedNotification = Notification.Name("VoiceFlow.dockIconPreferenceChanged")
+
+    static var dockIconWhileSettingsOpenEnabled: Bool {
+        // Default ON: unset means enabled.
+        UserDefaults.standard.object(forKey: dockIconWhileSettingsOpenKey) == nil
+            || UserDefaults.standard.bool(forKey: dockIconWhileSettingsOpenKey)
+    }
+
+    /// VoiceFlow is a menu-bar app (LSUIElement / `.accessory`), so it normally
+    /// has no dock tile and is invisible to ⌘-Tab. That's right for the idle
+    /// state, but once the Settings window is open it's a real window the user
+    /// wants to get back to — so while it's open we become a `.regular` app
+    /// (dock tile + ⌘-Tab entry) and drop back to menu-bar-only as soon as it
+    /// closes. The setup wizard does the same thing on its own.
+    private func showInDockWhileSettingsOpen() {
+        guard Self.dockIconWhileSettingsOpenEnabled else { return }
+        guard NSApp.activationPolicy() != .regular else { return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != me {
+            appToReactivateAfterSettings = front
+        }
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    /// Return to menu-bar-only mode unless another real window (the setup
+    /// wizard) still needs the dock tile. Called after the Settings window has
+    /// actually gone away, and when the user turns the preference off.
+    private func leaveDockIfNoWindowsOpen() {
+        let settingsVisible = settingsWindow?.isVisible ?? false
+        let wizardOpen = wizardController != nil
+        guard !settingsVisible, !wizardOpen else { return }
+        guard NSApp.activationPolicy() == .regular else { return }
+        NSApp.setActivationPolicy(.accessory)
+        // Switching to .accessory leaves us "active" with no menu bar; hand
+        // focus back to whatever the user was in before opening Settings.
+        let previous = appToReactivateAfterSettings
+        appToReactivateAfterSettings = nil
+        if let previous, !previous.isTerminated {
+            previous.activate()
+        }
+    }
+
+    /// Live-apply the Settings toggle: turning it on while Settings is open
+    /// shows the dock tile immediately, turning it off hides it.
+    private func applyDockIconPreference() {
+        if Self.dockIconWhileSettingsOpenEnabled {
+            if settingsWindow?.isVisible == true {
+                showInDockWhileSettingsOpen()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        } else if wizardController == nil, NSApp.activationPolicy() == .regular {
+            NSApp.setActivationPolicy(.accessory)
+            // Keep the window in front: dropping the policy would otherwise
+            // leave it behind the previously active app.
+            settingsWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    private func installDockIconObserverIfNeeded() {
+        guard !dockIconObserverInstalled else { return }
+        dockIconObserverInstalled = true
+        NotificationCenter.default.addObserver(
+            forName: Self.dockIconPreferenceChangedNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyDockIconPreference() }
+        }
     }
 
     @objc private func openAccessibilitySettings() {
@@ -5301,6 +5383,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - Settings window delegate
+
+extension AppDelegate: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        // The window is still on screen during willClose; flip the activation
+        // policy once it has actually been ordered out.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.leaveDockIfNoWindowsOpen() }
+        }
+    }
+}
+
 // MARK: - Global Hotkey Manager
 
 final class GlobalHotkeyManager {
@@ -7453,6 +7548,7 @@ struct GeneralSettingsView: View {
     @State private var showLogs = false
     @State private var showTips = false
     @AppStorage("avoidBluetoothMic") private var avoidBluetoothMic = true
+    @AppStorage(AppDelegate.dockIconWhileSettingsOpenKey) private var dockIconWhileSettingsOpen = true
 
     var body: some View {
         ScrollView {
@@ -7487,6 +7583,23 @@ struct GeneralSettingsView: View {
                             }
                         }
                         .toggleStyle(.switch)
+
+                    Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+
+                    Toggle(isOn: $dockIconWhileSettingsOpen) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show in Dock while Settings is open")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("VoiceFlow stays a menu-bar-only app, but gets a Dock icon and a ⌘-Tab entry while this window is open so you can switch back to it.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .onChange(of: dockIconWhileSettingsOpen) { _ in
+                        NotificationCenter.default.post(name: AppDelegate.dockIconPreferenceChangedNotification, object: nil)
+                    }
                 }
 
                 cardSection(title: "Software Update", icon: "arrow.down.circle") {
