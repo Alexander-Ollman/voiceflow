@@ -1,5 +1,14 @@
 # Release Notes
 
+## Unreleased — Desktop integration and recording waveform
+
+- Show VoiceFlow in the Dock while Settings is open, with a live preference.
+- Support Globe/fn dictation while preserving and restoring the system action.
+- Hide staged updates from Spotlight, register completed installs, and improve bundle metadata.
+- Preserve the previous installation if app relocation fails.
+- Center a wider waveform on a restrained recording surface; render bounded microphone history without a waveform timer.
+- Add an assessment of lightweight decision models; inference defaults remain unchanged.
+
 ## v2.7.0 — Keep Bluetooth headphones in high-quality audio while dictating
 
 Fixes a long-standing annoyance for AirPods and Bluetooth headphone users:

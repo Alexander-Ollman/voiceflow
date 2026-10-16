@@ -2355,6 +2355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // (Source may be on a read-only volume, hence copy rather than move.)
             let stagingPath = (applicationsDir as NSString)
                 .appendingPathComponent(".\(appName).installing-\(ProcessInfo.processInfo.processIdentifier)")
+            defer { try? fm.removeItem(atPath: stagingPath) }
             try? fm.removeItem(atPath: stagingPath)
             try fm.copyItem(atPath: appPath, toPath: stagingPath)
 
@@ -2363,14 +2364,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let stripProcess = Process()
             stripProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
             stripProcess.arguments = ["-dr", "com.apple.quarantine", stagingPath]
-            try? stripProcess.run()
-            stripProcess.waitUntilExit()
+            do {
+                try stripProcess.run()
+                stripProcess.waitUntilExit()
+            } catch {
+                NSLog("[VoiceFlow] Could not strip staging quarantine: %@", error.localizedDescription)
+            }
 
             // Replace any existing copy and move the finished bundle into place.
-            if fm.fileExists(atPath: destPath) {
-                try fm.removeItem(atPath: destPath)
-            }
-            try fm.moveItem(atPath: stagingPath, toPath: destPath)
+            try AppBundleInstaller.promote(
+                staged: URL(fileURLWithPath: stagingPath),
+                to: URL(fileURLWithPath: destPath),
+                fileManager: fm
+            )
 
             // Best-effort cleanup of the original (fails silently on read-only volumes)
             try? fm.removeItem(atPath: appPath)
@@ -2889,12 +2895,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let wizardOpen = wizardController != nil
         guard !settingsVisible, !wizardOpen else { return }
         guard NSApp.activationPolicy() == .regular else { return }
+        let shouldRestoreFocus = NSApp.isActive
         NSApp.setActivationPolicy(.accessory)
         // Switching to .accessory leaves us "active" with no menu bar; hand
         // focus back to whatever the user was in before opening Settings.
         let previous = appToReactivateAfterSettings
         appToReactivateAfterSettings = nil
-        if let previous, !previous.isTerminated {
+        if shouldRestoreFocus, let previous, !previous.isTerminated {
             previous.activate()
         }
     }
@@ -9912,8 +9919,15 @@ class OverlayState: ObservableObject {
         }
     }
 
-    @Published var state: RecordingState = .idle
-    @Published var audioLevel: Float = 0
+    let waveform = RecordingWaveformHistory()
+    @Published var state: RecordingState = .idle {
+        didSet {
+            if state.isRecording && !oldValue.isRecording { waveform.reset() }
+        }
+    }
+    @Published var audioLevel: Float = 0 {
+        didSet { waveform.append(audioLevel) }
+    }
 }
 
 // MARK: - Recording Overlay View
@@ -9961,7 +9975,7 @@ struct RecordingOverlayView: View {
 
     private var pillWidth: CGFloat {
         if case .aiProcessing = state.state { return 260 }
-        return 200
+        return 264
     }
 
     // MARK: - Body
@@ -10039,10 +10053,10 @@ struct RecordingOverlayView: View {
                     .frame(width: 40, height: 16)
                     .scaleEffect(0.6)
             } else {
-                logoView
-                WaveformView(audioLevel: state.audioLevel)
-                    .frame(width: 60, height: 30)
-                Spacer()
+                Spacer(minLength: 0)
+                LiveRecordingWaveformView(history: state.waveform)
+                    .frame(width: 256, height: 32)
+                Spacer(minLength: 0)
             }
         }
         .padding(.horizontal, 16)
@@ -10076,15 +10090,14 @@ struct RecordingOverlayView: View {
                     .scaleEffect(0.7)
             } else if case .streaming = state.state {
                 // Streaming with empty text — show waveform in pill
-                logoView
-                WaveformView(audioLevel: state.audioLevel)
-                    .frame(width: 80, height: 45)
+                LiveRecordingWaveformView(history: state.waveform)
+                    .frame(width: 224, height: 38)
             } else {
-                logoView
                 if state.state.isRecording {
-                    WaveformView(audioLevel: state.audioLevel)
-                        .frame(width: 80, height: 45)
+                    LiveRecordingWaveformView(history: state.waveform)
+                        .frame(width: 224, height: 38)
                 } else if state.state.isProcessing {
+                    logoView
                     processingView
                 }
             }
@@ -10120,15 +10133,14 @@ struct RecordingOverlayView: View {
     }
 
     private var pillBackground: some View {
-        ZStack {
-            if state.state.isRecording {
-                AnimatedGradientBackground(animate: animateGradient, colors: gradientColors)
-            } else {
-                Color.black.opacity(0.85)
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .fill(Color(red: 0.045, green: 0.052, blue: 0.064).opacity(0.96))
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(.white.opacity(0.12), lineWidth: 1)
             }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 30))
     }
+
 }
 
 // MARK: - Pulsing Dots View
@@ -10170,45 +10182,5 @@ struct AnimatedGradientBackground: View {
         )
         .hueRotation(.degrees(animate ? 45 : 0))
         .opacity(0.95)
-    }
-}
-
-// MARK: - Waveform View
-
-struct WaveformView: View {
-    let audioLevel: Float
-
-    private let barCount = 5
-    private let barSpacing: CGFloat = 4
-
-    var body: some View {
-        HStack(spacing: barSpacing) {
-            ForEach(0..<barCount, id: \.self) { index in
-                WaveformBar(audioLevel: audioLevel, index: index)
-            }
-        }
-    }
-}
-
-struct WaveformBar: View {
-    let audioLevel: Float
-    let index: Int
-
-    private let baseHeight: CGFloat = 6
-    private let maxHeight: CGFloat = 40  // Much bigger amplitude
-
-    private var computedHeight: CGFloat {
-        // Amplify the audio level for more visible movement
-        let amplifiedLevel = min(1.0, CGFloat(audioLevel) * 3.0)
-        let variation = sin(Double(index) * 1.5) * 0.4 + 0.6
-        let level = amplifiedLevel * CGFloat(variation)
-        return baseHeight + level * (maxHeight - baseHeight)
-    }
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 3)
-            .fill(Color.white)
-            .frame(width: 6, height: computedHeight)
-            .animation(.easeInOut(duration: 0.08), value: audioLevel)
     }
 }

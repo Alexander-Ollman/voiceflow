@@ -41,7 +41,11 @@ final class GlobeKeyController {
     /// UserDefaults key holding the user's original Globe action while we
     /// hold it at Do Nothing. Survives a crash, so the next launch still
     /// knows what to restore.
-    private static let originalUsageKey = "globeKey.originalFnUsageType"
+    static let originalUsageKey = "globeKey.originalFnUsageType"
+
+    private let defaults: UserDefaults
+    private let readUsage: (() -> FnUsage?)?
+    private let writeUsage: ((FnUsage) -> Void)?
 
     private typealias GetFn = @convention(c) () -> Int
     private typealias UpdateFn = @convention(c) (Int) -> Int
@@ -49,6 +53,9 @@ final class GlobeKeyController {
     private let updateFn: UpdateFn?
 
     private init() {
+        defaults = .standard
+        readUsage = nil
+        writeUsage = nil
         let path = "/System/Library/Frameworks/Carbon.framework/Frameworks/HIToolbox.framework/HIToolbox"
         if let handle = dlopen(path, RTLD_NOW) {
             getFn = dlsym(handle, "TISGetFnUsageType").map { unsafeBitCast($0, to: GetFn.self) }
@@ -59,10 +66,20 @@ final class GlobeKeyController {
         }
     }
 
+    /// Isolated preference storage and a simulated system action for lifecycle tests.
+    init(defaults: UserDefaults, readUsage: @escaping () -> FnUsage?, writeUsage: @escaping (FnUsage) -> Void) {
+        self.defaults = defaults
+        self.readUsage = readUsage
+        self.writeUsage = writeUsage
+        getFn = nil
+        updateFn = nil
+    }
+
     // MARK: - State
 
     /// What the Globe key currently does system-wide, or nil if unknown.
     var currentUsage: FnUsage? {
+        if let readUsage { return readUsage() }
         if let getFn {
             return FnUsage(rawValue: getFn() & 0xFFFF_FFFF)
         }
@@ -74,7 +91,7 @@ final class GlobeKeyController {
 
     /// The action we replaced, if we're currently holding the key at Do Nothing.
     var originalUsage: FnUsage? {
-        guard let raw = UserDefaults.standard.object(forKey: Self.originalUsageKey) as? Int else { return nil }
+        guard let raw = defaults.object(forKey: Self.originalUsageKey) as? Int else { return nil }
         return FnUsage(rawValue: raw)
     }
 
@@ -103,9 +120,9 @@ final class GlobeKeyController {
     /// setting back mid-session.
     func claim() {
         guard let current = currentUsage, current != .doNothing else { return }
-        if UserDefaults.standard.object(forKey: Self.originalUsageKey) == nil {
-            UserDefaults.standard.set(current.rawValue, forKey: Self.originalUsageKey)
-        }
+        // A nonzero action while claimed is a newer external choice. Restore
+        // that choice, rather than overwriting it with the first value we saw.
+        defaults.set(current.rawValue, forKey: Self.originalUsageKey)
         apply(.doNothing)
         NSLog("[VoiceFlow] Globe key: system action was '%@', set to Do Nothing while fn is a VoiceFlow hotkey", current.title)
     }
@@ -114,13 +131,24 @@ final class GlobeKeyController {
     /// Do Nothing we set, so we never clobber a change they made meanwhile.
     func restore() {
         guard let original = originalUsage else { return }
-        UserDefaults.standard.removeObject(forKey: Self.originalUsageKey)
-        guard currentUsage == .doNothing, original != .doNothing else { return }
+        guard let current = currentUsage else { return }
+        guard current == .doNothing, original != .doNothing else {
+            defaults.removeObject(forKey: Self.originalUsageKey)
+            return
+        }
         apply(original)
+        // Keep the recovery record if the system write failed, so a later
+        // restore or next launch can retry instead of losing the user's choice.
+        guard currentUsage == original else { return }
+        defaults.removeObject(forKey: Self.originalUsageKey)
         NSLog("[VoiceFlow] Globe key: restored system action to '%@'", original.title)
     }
 
     private func apply(_ usage: FnUsage) {
+        if let writeUsage {
+            writeUsage(usage)
+            return
+        }
         // TISUpdateFnUsageType flips the live setting in every process (it's
         // what System Settings calls). Also persist the preference so the
         // value survives even if the private call is unavailable.
