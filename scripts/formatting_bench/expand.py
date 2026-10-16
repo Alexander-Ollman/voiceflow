@@ -102,6 +102,13 @@ def challenges():
     assert len(rows)==357,len(rows)
     return rows
 
+def apply_gold_edits(tokens, annotations):
+    edited=tokens.copy()
+    # Multiple gold insertions at one boundary retain their original M2 order.
+    for _,(start,end,replacement) in sorted(enumerate(annotations),key=lambda pair:(pair[1][0],pair[1][1],pair[0]),reverse=True):
+        edited[start:end]=replacement
+    return edited
+
 def main():
     V2.mkdir(parents=True,exist_ok=True)
     corpus=V2/'corpus.jsonl'
@@ -144,7 +151,7 @@ def main():
                     parts=line[2:].split('|||');start,end=map(int,parts[0].split())
                     if start<0 or parts[1] in ['noop','UNK','Um']:continue
                     annotations.append((start,end,parts[2].split()))
-                for start,end,replacement in sorted(annotations,reverse=True):edited[start:end]=replacement
+                edited=apply_gold_edits(tokens,annotations)
                 source=' '.join(tokens);needle=norm(source)
                 matches=[id for id,body in docs if needle in body]
                 if len(matches)!=1:continue

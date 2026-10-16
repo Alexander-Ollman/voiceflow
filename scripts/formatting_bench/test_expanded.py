@@ -13,6 +13,9 @@ class ExpandedTests(unittest.TestCase):
         for r in rows:
             self.assertTrue(all(contains(r['input'],p) for p in r['protected']),r['id'])
             self.assertTrue(r['references'])
+    def test_gold_insertions_keep_annotation_order(self):
+        from expand import apply_gold_edits
+        self.assertEqual(apply_gold_edits(['Then','left','.'],[(1,1,['I']),(1,1,[','])]),['Then','I',',','left','.'])
     def test_balanced_selection_is_stable_and_unique(self):
         rows=challenges();a=balanced(rows,37);b=balanced(list(reversed(rows)),37)
         self.assertEqual([r['id'] for r in a],[r['id'] for r in b])

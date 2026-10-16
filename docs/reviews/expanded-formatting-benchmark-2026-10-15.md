@@ -122,8 +122,9 @@ benchmark remains held. The other workload was not stopped or changed.
 
 The remaining17 cases and final rescoring can resume only after sufficient
 stable headroom returns. The checkpoints verify input/model/code signatures.
-A low-overhead monitor checks for 24 GiB free, normal pressure and no new swap-outs
-for 60 seconds before reconsidering a restart. It does not itself load a model.
+A five-minute low-overhead monitor found no stable recovery. Before restarting,
+require 24 GiB free, normal pressure and no new swap-outs for 60 seconds. The
+monitor loaded no model, and no automatic restart is scheduled.
 The normal reserve guard must remain attached to any resumed run.
 
 ## Coverage and remaining limitations
