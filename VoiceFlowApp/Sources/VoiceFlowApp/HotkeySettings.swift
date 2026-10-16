@@ -156,6 +156,16 @@ final class HotkeyStore: ObservableObject {
         bindings[action.id] ?? action.defaultBinding
     }
 
+    /// Every current binding, in action order.
+    var allBindings: [HotkeyBinding] {
+        HotkeyAction.allCases.map { binding(for: $0) }
+    }
+
+    /// True when any action is bound to the bare 🌐 fn key.
+    var bindsGlobeKey: Bool {
+        allBindings.contains { $0.modifierOnly == .function }
+    }
+
     func setBinding(_ binding: HotkeyBinding, for action: HotkeyAction) {
         bindings[action.id] = binding
         Self.save(binding, action)
@@ -212,7 +222,7 @@ enum HotkeyFormatter {
         case .control: return "⌃"
         case .option: return "⌥"
         case .command: return "⌘"
-        case .function: return "fn"
+        case .function: return "🌐 fn"
         }
     }
 
@@ -379,6 +389,9 @@ struct HotkeyRecorderRow: View {
         error = nil
         pendingModifierOnly = nil
         recording = true
+        // Pressing 🌐 while recording would otherwise also open the emoji
+        // picker / start Apple dictation; park the system action meanwhile.
+        GlobeKeyController.shared.claim()
         NotificationCenter.default.post(name: HotkeyStore.recordingBeganNotification, object: nil)
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             handle(event)
@@ -392,6 +405,9 @@ struct HotkeyRecorderRow: View {
         pendingModifierOnly = nil
         if recording {
             recording = false
+            if !store.bindsGlobeKey {
+                GlobeKeyController.shared.restore()
+            }
             NotificationCenter.default.post(name: HotkeyStore.recordingEndedNotification, object: nil)
         }
     }
@@ -461,8 +477,12 @@ struct HotkeyRecorderList: View {
                     Divider().overlay(Color.white.opacity(0.06))
                 }
             }
+            if store.bindsGlobeKey {
+                GlobeKeyNotice()
+                    .padding(.top, 6)
+            }
             HStack {
-                Text("Tip: press a single modifier, or combine ⌃ ⌥ ⇧ ⌘ with any key. Press Esc to cancel recording.")
+                Text("Tip: press a single key such as 🌐 fn, right ⌘ or ⌥ on its own, or combine ⌃ ⌥ ⇧ ⌘ with any key. Press Esc to cancel recording.")
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.4))
                 Spacer()
@@ -475,5 +495,60 @@ struct HotkeyRecorderList: View {
             }
             .padding(.top, 6)
         }
+    }
+}
+
+/// Explains what happens to the system's own Globe-key action while 🌐 fn is
+/// a VoiceFlow hotkey, and flags it if the switch to "Do Nothing" didn't take.
+struct GlobeKeyNotice: View {
+    @ObservedObject private var store = HotkeyStore.shared
+    @State private var conflictingUsage: GlobeKeyController.FnUsage?
+    @State private var originalUsage: GlobeKeyController.FnUsage?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: conflictingUsage == nil ? "globe" : "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundColor(conflictingUsage == nil ? .white.opacity(0.5)
+                                                          : Color(red: 1.0, green: 0.75, blue: 0.35))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                if let usage = conflictingUsage {
+                    Text("macOS still runs “\(usage.title)” when you press 🌐, so the Globe hotkey will trigger both. Set “Press 🌐 key to” to Do Nothing in System Settings › Keyboard.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.75))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Keyboard Settings…") {
+                        GlobeKeyController.openKeyboardSettings()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color(red: 0.45, green: 0.78, blue: 1.0))
+                } else if let original = originalUsage {
+                    Text("While 🌐 fn is a VoiceFlow hotkey, the system’s own Globe-key action (“\(original.title)”) is set to Do Nothing. It comes back when you change the hotkey or quit VoiceFlow.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Hold 🌐 fn to dictate. The system’s Globe-key action is already set to Do Nothing, so nothing else fires when you press it.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .onAppear(perform: refresh)
+        .onReceive(store.$bindings) { _ in refresh() }
+        // The user may have changed the Keyboard setting while we were in the background.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+    }
+
+    private func refresh() {
+        let controller = GlobeKeyController.shared
+        if store.bindsGlobeKey {
+            controller.claim()
+        }
+        conflictingUsage = controller.systemActionConflicts ? controller.currentUsage : nil
+        originalUsage = controller.originalUsage
     }
 }

@@ -2586,6 +2586,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // relaunch). Touches only the app bundle, so user stats/settings persist.
         UpdateManager.shared.applyStagedUpdateOnQuitIfNeeded()
 
+        // Give the Globe key its system action back if we parked it.
+        GlobeKeyController.shared.restore()
+
         // Clean up AI result key monitors
         removeAIResultKeyMonitors()
 
@@ -3290,6 +3293,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onRelease: {}
         )
+
+        // A bare 🌐 fn binding only works if macOS isn't also using the key
+        // for emoji / dictation; park (or give back) that system action.
+        GlobeKeyController.shared.sync(bindings: HotkeyStore.shared.allBindings)
     }
 
     /// Tear down all four hotkeys (used while the user is recording a new one,
@@ -5523,6 +5530,11 @@ final class GlobalHotkeyManager {
                 if isPressed && !wasPressed {
                     activeModifierHotkeys.insert(id)
                     cancelledModifierHotkeys.remove(id)
+                    if modifier == .function {
+                        // Another app (or the user) may have handed the Globe
+                        // key back to emoji/dictation since we last checked.
+                        MainActor.assumeIsolated { GlobeKeyController.shared.claim() }
+                    }
                     GlobalHotkeyManager.pressHandlers[id]?()
                 } else if !isPressed && wasPressed {
                     activeModifierHotkeys.remove(id)
