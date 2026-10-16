@@ -1,6 +1,6 @@
 {
   "stage190": "complete",
-  "stage1000": "held_for_priority_workload",
+  "stage1000": "complete",
   "completed_cases": {
     "identity": 1000,
     "rules": 1000,
@@ -8,12 +8,13 @@
     "pcs_guarded": 1000,
     "gector": 1000,
     "coedit": 1000,
-    "bonsai": 983
+    "bonsai": 1000
   },
-  "recorded_call_count": 9643,
+  "recorded_call_count": 9660,
   "planned_call_count": 9660,
-  "remaining_cases": 17,
-  "resource_hold": {
+  "remaining_cases": 0,
+  "latency_rerun": "complete",
+  "previous_resource_hold": {
     "reason": "Physical free memory below reserve",
     "reading": {
       "time": 1792132408.5786629,
@@ -23,5 +24,9 @@
       "swapout_delta_bytes": 0
     },
     "checkpoints_preserved": true
-  }
+  },
+  "recorded_latency_calls": 6650,
+  "latency_cases_per_path": 190,
+  "latency_repeats": 5,
+  "completed_date_local": "2026-10-16"
 }

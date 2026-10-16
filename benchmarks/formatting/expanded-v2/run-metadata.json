@@ -367,6 +367,14 @@
         "first_inference_seconds": 4.799810874974355,
         "starting_count": 190,
         "peak_process_tree_rss_bytes": 2863972352
+      },
+      {
+        "started": "2026-10-15T23:49:54-0700",
+        "stage": 1000,
+        "load_seconds": 1.0481454590335488,
+        "first_inference_seconds": 4.765676750103012,
+        "starting_count": 983,
+        "peak_process_tree_rss_bytes": 2810953728
       }
     ]
   }

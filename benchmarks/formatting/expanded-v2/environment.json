@@ -98,6 +98,10 @@
   },
   "performance_limit": "Concurrent priority workload; latency is not an isolated hardware comparison.",
   "planned_quality_calls": 9660,
-  "recorded_quality_calls": 9643,
-  "status": "held_for_priority_workload"
+  "recorded_quality_calls": 9660,
+  "status": "complete",
+  "additional_latency_run": "190 cases x5 rounds x7 paths; peer experiment paused; normal CPU priority",
+  "completed_date_local": "2026-10-16",
+  "recorded_latency_calls": 6650,
+  "latency_memory_policy": "16GiB estimated available; normal pressure; zero new swap-outs; initial physical-free admission hold retained in history"
 }

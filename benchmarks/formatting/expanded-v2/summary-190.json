@@ -333,12 +333,14 @@
         "protected_failed_cases": 0,
         "protected_cases": 21,
         "acceptable_input_cases": 59,
-        "acceptable_input_damaged": 0,
+        "acceptable_input_off_reference": 0,
         "spoken_protected_spans": 3,
         "spoken_protected_failed": 3,
         "unstable_cases": 0,
         "warm_median_ms": 0.0,
         "warm_p95_ms": 0.0,
+        "case_median_latency_median_ms": 0.0,
+        "case_median_latency_p95_ms": 0.0,
         "limit_warning_cases": 0
       },
       "speech_by_voice": {
@@ -356,12 +358,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.0,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         },
         "Karen": {
@@ -378,12 +382,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 2,
           "spoken_protected_failed": 2,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.0,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         },
         "Rishi": {
@@ -400,12 +406,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 1,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.0,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         },
         "Samantha": {
@@ -422,12 +430,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 2,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 5,
           "spoken_protected_failed": 1,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.0,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         }
       },
@@ -446,12 +456,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 5,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 6,
           "spoken_protected_failed": 3,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.0,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         },
         "snr20": {
@@ -468,12 +480,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 1,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.0,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         }
       }
@@ -792,12 +806,14 @@
         "protected_failed_cases": 15,
         "protected_cases": 21,
         "acceptable_input_cases": 59,
-        "acceptable_input_damaged": 20,
+        "acceptable_input_off_reference": 20,
         "spoken_protected_spans": 3,
         "spoken_protected_failed": 3,
         "unstable_cases": 0,
         "warm_median_ms": 0.14,
         "warm_p95_ms": 0.23,
+        "case_median_latency_median_ms": 0.14,
+        "case_median_latency_p95_ms": 0.22,
         "limit_warning_cases": 0
       },
       "speech_by_voice": {
@@ -815,12 +831,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.12,
           "warm_p95_ms": 0.16,
+          "case_median_latency_median_ms": 0.12,
+          "case_median_latency_p95_ms": 0.16,
           "limit_warning_cases": 0
         },
         "Karen": {
@@ -837,12 +855,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 2,
           "spoken_protected_failed": 2,
           "unstable_cases": 0,
           "warm_median_ms": 0.14,
           "warm_p95_ms": 0.28,
+          "case_median_latency_median_ms": 0.15,
+          "case_median_latency_p95_ms": 0.28,
           "limit_warning_cases": 0
         },
         "Rishi": {
@@ -859,12 +879,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 1,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.12,
           "warm_p95_ms": 0.23,
+          "case_median_latency_median_ms": 0.12,
+          "case_median_latency_p95_ms": 0.2,
           "limit_warning_cases": 0
         },
         "Samantha": {
@@ -881,12 +903,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 2,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 5,
           "spoken_protected_failed": 1,
           "unstable_cases": 0,
           "warm_median_ms": 0.13,
           "warm_p95_ms": 0.2,
+          "case_median_latency_median_ms": 0.12,
+          "case_median_latency_p95_ms": 0.2,
           "limit_warning_cases": 0
         }
       },
@@ -905,12 +929,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 5,
-          "acceptable_input_damaged": 2,
+          "acceptable_input_off_reference": 2,
           "spoken_protected_spans": 6,
           "spoken_protected_failed": 3,
           "unstable_cases": 0,
           "warm_median_ms": 0.13,
           "warm_p95_ms": 0.23,
+          "case_median_latency_median_ms": 0.13,
+          "case_median_latency_p95_ms": 0.2,
           "limit_warning_cases": 0
         },
         "snr20": {
@@ -927,12 +953,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 1,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.12,
           "warm_p95_ms": 0.14,
+          "case_median_latency_median_ms": 0.12,
+          "case_median_latency_p95_ms": 0.13,
           "limit_warning_cases": 0
         }
       }
@@ -1251,12 +1279,14 @@
         "protected_failed_cases": 16,
         "protected_cases": 21,
         "acceptable_input_cases": 59,
-        "acceptable_input_damaged": 32,
+        "acceptable_input_off_reference": 32,
         "spoken_protected_spans": 3,
         "spoken_protected_failed": 3,
         "unstable_cases": 0,
         "warm_median_ms": 22.91,
         "warm_p95_ms": 76.4,
+        "case_median_latency_median_ms": 22.12,
+        "case_median_latency_p95_ms": 29.83,
         "limit_warning_cases": 0
       },
       "speech_by_voice": {
@@ -1274,12 +1304,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 22.69,
           "warm_p95_ms": 76.66,
+          "case_median_latency_median_ms": 22.48,
+          "case_median_latency_p95_ms": 23.28,
           "limit_warning_cases": 0
         },
         "Karen": {
@@ -1296,12 +1328,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 2,
           "spoken_protected_failed": 2,
           "unstable_cases": 0,
           "warm_median_ms": 22.92,
           "warm_p95_ms": 76.99,
+          "case_median_latency_median_ms": 22.79,
+          "case_median_latency_p95_ms": 24.39,
           "limit_warning_cases": 0
         },
         "Rishi": {
@@ -1318,12 +1352,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 1,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 22.12,
           "warm_p95_ms": 75.5,
+          "case_median_latency_median_ms": 21.76,
+          "case_median_latency_p95_ms": 22.82,
           "limit_warning_cases": 0
         },
         "Samantha": {
@@ -1340,12 +1376,14 @@
           "protected_failed_cases": 1,
           "protected_cases": 2,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 2,
+          "acceptable_input_off_reference": 2,
           "spoken_protected_spans": 5,
           "spoken_protected_failed": 4,
           "unstable_cases": 0,
           "warm_median_ms": 22.75,
           "warm_p95_ms": 75.33,
+          "case_median_latency_median_ms": 22.38,
+          "case_median_latency_p95_ms": 23.65,
           "limit_warning_cases": 0
         }
       },
@@ -1364,12 +1402,14 @@
           "protected_failed_cases": 1,
           "protected_cases": 1,
           "acceptable_input_cases": 5,
-          "acceptable_input_damaged": 4,
+          "acceptable_input_off_reference": 4,
           "spoken_protected_spans": 6,
           "spoken_protected_failed": 6,
           "unstable_cases": 0,
           "warm_median_ms": 22.69,
           "warm_p95_ms": 76.99,
+          "case_median_latency_median_ms": 22.36,
+          "case_median_latency_p95_ms": 23.28,
           "limit_warning_cases": 0
         },
         "snr20": {
@@ -1386,12 +1426,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 1,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 23.14,
           "warm_p95_ms": 76.07,
+          "case_median_latency_median_ms": 21.98,
+          "case_median_latency_p95_ms": 24.39,
           "limit_warning_cases": 0
         }
       }
@@ -1710,12 +1752,14 @@
         "protected_failed_cases": 0,
         "protected_cases": 21,
         "acceptable_input_cases": 59,
-        "acceptable_input_damaged": 3,
+        "acceptable_input_off_reference": 3,
         "spoken_protected_spans": 3,
         "spoken_protected_failed": 3,
         "unstable_cases": 0,
         "warm_median_ms": 0.0,
         "warm_p95_ms": 36.45,
+        "case_median_latency_median_ms": 0.0,
+        "case_median_latency_p95_ms": 23.99,
         "limit_warning_cases": 0
       },
       "speech_by_voice": {
@@ -1733,12 +1777,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.01,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         },
         "Karen": {
@@ -1755,12 +1801,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 2,
           "spoken_protected_failed": 2,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.01,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.01,
           "limit_warning_cases": 0
         },
         "Rishi": {
@@ -1777,12 +1825,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 1,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.01,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         },
         "Samantha": {
@@ -1799,12 +1849,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 2,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 5,
           "spoken_protected_failed": 1,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.01,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         }
       },
@@ -1823,12 +1875,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 5,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 6,
           "spoken_protected_failed": 3,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.01,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         },
         "snr20": {
@@ -1845,12 +1899,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 1,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 0.0,
           "warm_p95_ms": 0.01,
+          "case_median_latency_median_ms": 0.0,
+          "case_median_latency_p95_ms": 0.0,
           "limit_warning_cases": 0
         }
       }
@@ -2169,12 +2225,14 @@
         "protected_failed_cases": 0,
         "protected_cases": 21,
         "acceptable_input_cases": 59,
-        "acceptable_input_damaged": 9,
+        "acceptable_input_off_reference": 9,
         "spoken_protected_spans": 3,
         "spoken_protected_failed": 3,
         "unstable_cases": 0,
         "warm_median_ms": 72.95,
         "warm_p95_ms": 122.47,
+        "case_median_latency_median_ms": 73.03,
+        "case_median_latency_p95_ms": 119.93,
         "limit_warning_cases": 0
       },
       "speech_by_voice": {
@@ -2192,12 +2250,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 67.67,
           "warm_p95_ms": 94.68,
+          "case_median_latency_median_ms": 25.36,
+          "case_median_latency_p95_ms": 94.25,
           "limit_warning_cases": 0
         },
         "Karen": {
@@ -2214,12 +2274,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 2,
           "spoken_protected_failed": 2,
           "unstable_cases": 0,
           "warm_median_ms": 25.86,
           "warm_p95_ms": 95.38,
+          "case_median_latency_median_ms": 25.26,
+          "case_median_latency_p95_ms": 95.38,
           "limit_warning_cases": 0
         },
         "Rishi": {
@@ -2236,12 +2298,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 1,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 92.11,
           "warm_p95_ms": 109.18,
+          "case_median_latency_median_ms": 91.78,
+          "case_median_latency_p95_ms": 94.7,
           "limit_warning_cases": 0
         },
         "Samantha": {
@@ -2258,12 +2322,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 2,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 5,
           "spoken_protected_failed": 1,
           "unstable_cases": 0,
           "warm_median_ms": 69.68,
           "warm_p95_ms": 74.54,
+          "case_median_latency_median_ms": 70.49,
+          "case_median_latency_p95_ms": 73.46,
           "limit_warning_cases": 0
         }
       },
@@ -2282,12 +2348,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 5,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 6,
           "spoken_protected_failed": 3,
           "unstable_cases": 0,
           "warm_median_ms": 70.12,
           "warm_p95_ms": 97.32,
+          "case_median_latency_median_ms": 67.32,
+          "case_median_latency_p95_ms": 94.7,
           "limit_warning_cases": 0
         },
         "snr20": {
@@ -2304,12 +2372,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 1,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 25.97,
           "warm_p95_ms": 75.94,
+          "case_median_latency_median_ms": 25.97,
+          "case_median_latency_p95_ms": 71.34,
           "limit_warning_cases": 0
         }
       }
@@ -2628,12 +2698,14 @@
         "protected_failed_cases": 0,
         "protected_cases": 21,
         "acceptable_input_cases": 59,
-        "acceptable_input_damaged": 8,
+        "acceptable_input_off_reference": 8,
         "spoken_protected_spans": 3,
         "spoken_protected_failed": 3,
         "unstable_cases": 0,
         "warm_median_ms": 90.66,
         "warm_p95_ms": 226.92,
+        "case_median_latency_median_ms": 90.05,
+        "case_median_latency_p95_ms": 213.74,
         "limit_warning_cases": 0
       },
       "speech_by_voice": {
@@ -2651,12 +2723,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 78.69,
           "warm_p95_ms": 88.9,
+          "case_median_latency_median_ms": 79.75,
+          "case_median_latency_p95_ms": 88.9,
           "limit_warning_cases": 0
         },
         "Karen": {
@@ -2673,12 +2747,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 2,
           "spoken_protected_failed": 2,
           "unstable_cases": 0,
           "warm_median_ms": 88.77,
           "warm_p95_ms": 159.86,
+          "case_median_latency_median_ms": 88.77,
+          "case_median_latency_p95_ms": 130.04,
           "limit_warning_cases": 0
         },
         "Rishi": {
@@ -2695,12 +2771,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 1,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 80.38,
           "warm_p95_ms": 90.12,
+          "case_median_latency_median_ms": 82.68,
+          "case_median_latency_p95_ms": 87.0,
           "limit_warning_cases": 0
         },
         "Samantha": {
@@ -2717,12 +2795,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 2,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 5,
           "spoken_protected_failed": 1,
           "unstable_cases": 0,
           "warm_median_ms": 94.35,
           "warm_p95_ms": 134.78,
+          "case_median_latency_median_ms": 93.11,
+          "case_median_latency_p95_ms": 97.54,
           "limit_warning_cases": 0
         }
       },
@@ -2741,12 +2821,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 5,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 6,
           "spoken_protected_failed": 3,
           "unstable_cases": 0,
           "warm_median_ms": 84.7,
           "warm_p95_ms": 134.78,
+          "case_median_latency_median_ms": 83.79,
+          "case_median_latency_p95_ms": 119.45,
           "limit_warning_cases": 0
         },
         "snr20": {
@@ -2763,12 +2845,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 1,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 80.9,
           "warm_p95_ms": 101.34,
+          "case_median_latency_median_ms": 80.9,
+          "case_median_latency_p95_ms": 98.59,
           "limit_warning_cases": 0
         }
       }
@@ -3087,12 +3171,14 @@
         "protected_failed_cases": 14,
         "protected_cases": 21,
         "acceptable_input_cases": 59,
-        "acceptable_input_damaged": 30,
+        "acceptable_input_off_reference": 30,
         "spoken_protected_spans": 3,
         "spoken_protected_failed": 3,
         "unstable_cases": 1,
         "warm_median_ms": 139.71,
         "warm_p95_ms": 343.41,
+        "case_median_latency_median_ms": 116.02,
+        "case_median_latency_p95_ms": 303.76,
         "limit_warning_cases": 0
       },
       "speech_by_voice": {
@@ -3110,12 +3196,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 114.2,
           "warm_p95_ms": 225.25,
+          "case_median_latency_median_ms": 99.27,
+          "case_median_latency_p95_ms": 128.72,
           "limit_warning_cases": 0
         },
         "Karen": {
@@ -3132,12 +3220,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 2,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 2,
           "spoken_protected_failed": 2,
           "unstable_cases": 0,
           "warm_median_ms": 150.33,
           "warm_p95_ms": 302.18,
+          "case_median_latency_median_ms": 122.49,
+          "case_median_latency_p95_ms": 269.4,
           "limit_warning_cases": 0
         },
         "Rishi": {
@@ -3154,12 +3244,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 0,
           "acceptable_input_cases": 1,
-          "acceptable_input_damaged": 0,
+          "acceptable_input_off_reference": 0,
           "spoken_protected_spans": 0,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 130.26,
           "warm_p95_ms": 238.36,
+          "case_median_latency_median_ms": 113.01,
+          "case_median_latency_p95_ms": 139.71,
           "limit_warning_cases": 0
         },
         "Samantha": {
@@ -3176,12 +3268,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 2,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 5,
           "spoken_protected_failed": 1,
           "unstable_cases": 0,
           "warm_median_ms": 127.72,
           "warm_p95_ms": 246.27,
+          "case_median_latency_median_ms": 114.85,
+          "case_median_latency_p95_ms": 162.19,
           "limit_warning_cases": 0
         }
       },
@@ -3200,12 +3294,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 5,
-          "acceptable_input_damaged": 2,
+          "acceptable_input_off_reference": 2,
           "spoken_protected_spans": 6,
           "spoken_protected_failed": 3,
           "unstable_cases": 0,
           "warm_median_ms": 124.09,
           "warm_p95_ms": 266.09,
+          "case_median_latency_median_ms": 113.01,
+          "case_median_latency_p95_ms": 162.19,
           "limit_warning_cases": 0
         },
         "snr20": {
@@ -3222,12 +3318,14 @@
           "protected_failed_cases": 0,
           "protected_cases": 1,
           "acceptable_input_cases": 3,
-          "acceptable_input_damaged": 1,
+          "acceptable_input_off_reference": 1,
           "spoken_protected_spans": 1,
           "spoken_protected_failed": 0,
           "unstable_cases": 0,
           "warm_median_ms": 128.72,
           "warm_p95_ms": 302.18,
+          "case_median_latency_median_ms": 123.84,
+          "case_median_latency_p95_ms": 151.25,
           "limit_warning_cases": 0
         }
       }
@@ -3296,50 +3394,6 @@
       "tp": 20,
       "fp": 11,
       "fn": 46
-    }
-  },
-  "jfleg_gleu": {
-    "identity": {
-      "cases": 40,
-      "mean": 0.434215,
-      "reference_sampling_std": 0.036432,
-      "reference_sampling_interval": "(0.363,0.506)"
-    },
-    "rules": {
-      "cases": 40,
-      "mean": 0.440817,
-      "reference_sampling_std": 0.03661,
-      "reference_sampling_interval": "(0.369,0.513)"
-    },
-    "pcs": {
-      "cases": 40,
-      "mean": 0.451482,
-      "reference_sampling_std": 0.032769,
-      "reference_sampling_interval": "(0.387,0.516)"
-    },
-    "pcs_guarded": {
-      "cases": 40,
-      "mean": 0.440145,
-      "reference_sampling_std": 0.036478,
-      "reference_sampling_interval": "(0.369,0.512)"
-    },
-    "gector": {
-      "cases": 40,
-      "mean": 0.563383,
-      "reference_sampling_std": 0.033922,
-      "reference_sampling_interval": "(0.497,0.630)"
-    },
-    "coedit": {
-      "cases": 40,
-      "mean": 0.475296,
-      "reference_sampling_std": 0.033537,
-      "reference_sampling_interval": "(0.410,0.541)"
-    },
-    "bonsai": {
-      "cases": 40,
-      "mean": 0.53771,
-      "reference_sampling_std": 0.034382,
-      "reference_sampling_interval": "(0.470,0.605)"
     }
   },
   "wi_edit_uncertainty": {
@@ -3419,6 +3473,50 @@
         0.0,
         0.0
       ]
+    }
+  },
+  "jfleg_gleu": {
+    "identity": {
+      "cases": 40,
+      "mean": 0.434215,
+      "reference_sampling_std": 0.036432,
+      "reference_sampling_interval": "(0.363,0.506)"
+    },
+    "rules": {
+      "cases": 40,
+      "mean": 0.440817,
+      "reference_sampling_std": 0.03661,
+      "reference_sampling_interval": "(0.369,0.513)"
+    },
+    "pcs": {
+      "cases": 40,
+      "mean": 0.451482,
+      "reference_sampling_std": 0.032769,
+      "reference_sampling_interval": "(0.387,0.516)"
+    },
+    "pcs_guarded": {
+      "cases": 40,
+      "mean": 0.440145,
+      "reference_sampling_std": 0.036478,
+      "reference_sampling_interval": "(0.369,0.512)"
+    },
+    "gector": {
+      "cases": 40,
+      "mean": 0.563383,
+      "reference_sampling_std": 0.033922,
+      "reference_sampling_interval": "(0.497,0.630)"
+    },
+    "coedit": {
+      "cases": 40,
+      "mean": 0.475296,
+      "reference_sampling_std": 0.033537,
+      "reference_sampling_interval": "(0.410,0.541)"
+    },
+    "bonsai": {
+      "cases": 40,
+      "mean": 0.53771,
+      "reference_sampling_std": 0.034382,
+      "reference_sampling_interval": "(0.470,0.605)"
     }
   }
 }

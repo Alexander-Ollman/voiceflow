@@ -12,11 +12,11 @@ def snapshot():
     values={line.split(':')[0]:int(line.split(':')[1].strip().rstrip('.')) for line in vm.splitlines()[1:] if ':' in line}
     pressure=int(subprocess.check_output(['sysctl','-n','kern.memorystatus_vm_pressure_level'],text=True))
     return dict(time=time.time(),pressure=pressure,free_bytes=values['Pages free']*page_size,
-                swapout_bytes=values['Swapouts']*page_size)
+                swapout_bytes=values['Swapouts']*page_size,available_bytes=psutil.virtual_memory().available)
 
-def guard_reason(reading, reserve_gib=16, swapout_delta=0):
+def guard_reason(reading, reserve_gib=16, swapout_delta=0, memory_metric="free"):
     if reading['pressure'] != 1:return 'Non-normal memory pressure'
-    if reading['free_bytes'] < reserve_gib*2**30:return 'Physical free memory below reserve'
+    if reading[memory_metric+'_bytes'] < reserve_gib*2**30:return memory_metric.capitalize()+' memory below reserve'
     if swapout_delta > 0:return 'New swap-outs observed'
     return None
 
@@ -30,7 +30,7 @@ def hold(suite,reason,reading):
         workers=[]
         for child in children:
             try:
-                if any(name in ' '.join(child.cmdline()) for name in ['expanded_worker.py','expanded_score.py']):workers.append(child)
+                if any(name in ' '.join(child.cmdline()) for name in ['expanded_worker.py','expanded_score.py','expanded_latency.py']):workers.append(child)
             except psutil.Error:pass
         for child in workers:
             try:child.send_signal(signal.SIGINT);child.send_signal(signal.SIGCONT)
@@ -54,15 +54,15 @@ def hold(suite,reason,reading):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--suite-pid',type=int,required=True);parser.add_argument('--resume',action='store_true')
-    parser.add_argument('--reserve-gib',type=float,default=16);a=parser.parse_args()
+    parser.add_argument('--memory-metric',choices=['free','available'],default='free');parser.add_argument('--nice',type=int,choices=[0,19],default=19);parser.add_argument('--reserve-gib',type=float,default=16);a=parser.parse_args()
     suite=psutil.Process(a.suite_pid)
     if 'expanded_suite.py' not in ' '.join(suite.cmdline()):raise RuntimeError('Refusing to control an unrelated process')
     first=snapshot();previous=first
-    if guard_reason(first,a.reserve_gib):
-        hold(suite,guard_reason(first,a.reserve_gib),first);return
+    if guard_reason(first,a.reserve_gib,memory_metric=a.memory_metric):
+        hold(suite,guard_reason(first,a.reserve_gib,memory_metric=a.memory_metric),first);return
     for p in [suite]+suite.children(recursive=True):
         try:
-            p.nice(19)
+            p.nice(a.nice)
             if a.resume:p.send_signal(signal.SIGCONT)
         except psutil.Error:pass
     with (V2/'resource-watch.jsonl').open('a') as log:
@@ -72,11 +72,11 @@ def main():
                 hold(suite,'Resource sampling failed: '+type(exc).__name__,previous);raise
             reading['swapout_delta_bytes']=reading['swapout_bytes']-previous['swapout_bytes'];previous=reading
             log.write(json.dumps(reading)+'\n');log.flush()
-            reason=guard_reason(reading,a.reserve_gib,reading['swapout_delta_bytes'])
+            reason=guard_reason(reading,a.reserve_gib,reading['swapout_delta_bytes'],a.memory_metric)
             if reason:
                 hold(suite,reason,reading);return
             for p in suite.children(recursive=True):
-                try:p.nice(19)
+                try:p.nice(a.nice)
                 except psutil.Error:pass
             time.sleep(1)
     print('Resource watcher finished; benchmark tree exited.',flush=True)

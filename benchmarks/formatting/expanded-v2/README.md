@@ -94,8 +94,8 @@ only; no calibrated verifier or model is trained on them.
 ## Resource priority
 
 Another test has priority. The suite now starts its memory watcher before any
-worker and refuses unguarded execution. It runs one model at a time at low CPU
-priority. `watch_resources.py --suite-pid PID --resume` samples macOS pressure,
+worker and refuses unguarded execution. The quality pass runs one model at a time at low CPU
+priority; the separate latency pass uses normal priority. `watch_resources.py --suite-pid PID --resume` samples macOS pressure,
 physical free memory and swap-outs every second. It stops our scheduling,
 interrupts only this benchmark's workers and releases owned descendants if
 pressure is non-normal, physical free memory falls below 16GiB, or swap-outs
@@ -111,19 +111,44 @@ the scorer refuses to publish if that control fails. Per-call latency quantiles
 weight the190 repeated cases three times. Separate quantiles over each case's
 median give equal weight to all cases. Neither is time-to-paste latency.
 
-## Current checkpoint resumption
+## Completed inference and fresh latency pass
 
-The existing raw corpus/checkpoints are in the separate `voiceflow-pr-update`
-worktree's ignored build directory. Resume there after stable headroom returns;
-rebuilding a fresh corpus elsewhere does not recover those completed calls.
-From the original `voiceflow` checkout:
+All seven paths now completed the full1,000-case suite and final scoring. The
+saved quality matrix has9,660 measured formatter calls: three calls for each
+of the first190 cases, then one for each remaining810. The17 Bonsai cases held
+for resource priority were resumed from their exact checkpoint, not rerun.
+The earlier resource interruption is retained as history in `progress.json`.
+
+The competing experiment was then paused by the user. A separate timing pass
+uses the same frozen190-case prefix, five shuffled rounds per model, batch one,
+normal CPU priority, and one model loaded at a time. All models use the same
+per-round case ordering. The backend order is seeded/shuffled. This adds950
+measured calls per path (6,650 total), separate from the quality evaluation.
+Three priming calls precede measured rounds; the first-call duration and model
+initialization are recorded separately. No OS file-cache flush is performed.
 
 ```sh
-cd ../voiceflow-pr-update
-VoiceFlowApp/build/formatting-bench/venv/bin/python scripts/formatting_bench/expanded_suite.py --library ../voiceflow/target/release/libvoiceflow_ffi.dylib
+# In the existing voiceflow-pr-update worktree, using its benchmark venv:
+python scripts/formatting_bench/expanded_suite.py --latency-only --library ../voiceflow/target/release/libvoiceflow_ffi.dylib
 ```
 
-The suite automatically attaches the resource watcher before loading anything.
-Do not lower the reserve simply to finish the remaining17 cases. The190-case
-files are complete, the800-text exact checkpoint is complete, and final1,000-case
-scoring remains pending. Source/reference text and predictions stay local.
+Timing files are written under `latency-paused-peer/`. Every measured call has
+its case ID, round, wall-clock start, elapsed milliseconds, input/output lengths,
+error flag and model-invocation annotation. Raw model text stays in the ignored
+local cache. Completed timing artifacts are not silently overwritten; a new
+experiment requires a separate output location/version. This is a new timing
+sample, not a replacement of earlier measurements or a retuning of quality.
+
+The reserve remains16GiB with normal-pressure/no-new-swap checks. During the
+timing pass, investigation showed that physical free pages alone caused a
+false-conservative admission stop on macOS while approximately34GiB remained
+available. The latency-only watcher now uses `psutil.virtual_memory().available`
+(inactive + free on this installed macOS implementation), while retaining the
+pressure and swap-out guards. The original quality pass keeps its historical
+physical-free policy. The initial Bonsai admission stop produced no measured
+calls; completed CPU timing files were retained with their signatures checked. Timing uses
+normal CPU priority (`--nice 0` on the watcher), whereas the interrupted quality
+run switched to low CPU priority. The user-paused experiment removes that known
+competing inference load, but background apps, thermal state, asymmetric CPU/Metal
+backends and unnormalized quantization still prevent a universal speed ranking.
+These are formatter wall latencies, not full hotkey-to-paste measurements.

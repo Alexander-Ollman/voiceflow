@@ -1,0 +1,102 @@
+{
+  "backend": "pcs",
+  "cases": 190,
+  "repeats": 5,
+  "measured_calls": 950,
+  "cpu_nice": 0,
+  "peer_experiment": "user reports paused",
+  "started": "2026-10-15T23:53:59-0700",
+  "load_seconds": 1.2619575001299381,
+  "first_call_ms": 23.14849989488721,
+  "warmup_calls": 3,
+  "peak_process_tree_rss_bytes": 904364032,
+  "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+  "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+  "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+  "native_library_sha256": null,
+  "overall": {
+    "calls": 950,
+    "median_ms": 21.282917,
+    "p95_ms": 70.908583,
+    "min_ms": 19.095167,
+    "max_ms": 109.652917,
+    "errors": 0
+  },
+  "by_round": {
+    "0": {
+      "calls": 190,
+      "median_ms": 21.318854,
+      "p95_ms": 70.640333,
+      "min_ms": 19.458833,
+      "max_ms": 100.892334,
+      "errors": 0
+    },
+    "1": {
+      "calls": 190,
+      "median_ms": 21.2114795,
+      "p95_ms": 69.422416,
+      "min_ms": 19.095167,
+      "max_ms": 109.652917,
+      "errors": 0
+    },
+    "2": {
+      "calls": 190,
+      "median_ms": 21.198500000000003,
+      "p95_ms": 71.017458,
+      "min_ms": 19.32675,
+      "max_ms": 90.159208,
+      "errors": 0
+    },
+    "3": {
+      "calls": 190,
+      "median_ms": 21.563083,
+      "p95_ms": 71.684333,
+      "min_ms": 19.473375,
+      "max_ms": 101.999834,
+      "errors": 0
+    },
+    "4": {
+      "calls": 190,
+      "median_ms": 21.234896,
+      "p95_ms": 70.438792,
+      "min_ms": 19.18775,
+      "max_ms": 83.850083,
+      "errors": 0
+    }
+  },
+  "by_input_words": {
+    "1-10": {
+      "calls": 660,
+      "median_ms": 20.456916999999997,
+      "p95_ms": 70.405916,
+      "min_ms": 19.095167,
+      "max_ms": 109.652917,
+      "errors": 0
+    },
+    "11-25": {
+      "calls": 230,
+      "median_ms": 21.955833,
+      "p95_ms": 71.509,
+      "min_ms": 20.093084,
+      "max_ms": 82.725792,
+      "errors": 0
+    },
+    "26+": {
+      "calls": 60,
+      "median_ms": 23.264729,
+      "p95_ms": 71.6275,
+      "min_ms": 22.000041,
+      "max_ms": 101.999834,
+      "errors": 0
+    }
+  },
+  "model_invocation_calls": 950,
+  "model_invocation_latency": {
+    "calls": 950,
+    "median_ms": 21.282917,
+    "p95_ms": 70.908583,
+    "min_ms": 19.095167,
+    "max_ms": 109.652917,
+    "errors": 0
+  }
+}
