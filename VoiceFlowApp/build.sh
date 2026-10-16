@@ -196,6 +196,10 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
     <key>CFBundleExecutable</key>
     <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>
@@ -210,12 +214,22 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <string>2.7.1</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © Era Laboratories Inc. MIT License.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>VoiceFlow needs microphone access to transcribe your speech.</string>
     <key>NSScreenCaptureUsageDescription</key>
@@ -227,6 +241,11 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
 </dict>
 </plist>
 EOF
+
+# PkgInfo mirrors CFBundlePackageType + CFBundleSignature. Launch Services and
+# launchers that walk the bundle by hand (Spotlight importers, Raycast, Alfred)
+# expect it in every Xcode-produced .app; SwiftPM doesn't write one for us.
+printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 
 # Step 6: Code signing
 SIGN_IDENTITY="Developer ID Application: Era Laboratories Inc. (JVSQ3LCY64)"
