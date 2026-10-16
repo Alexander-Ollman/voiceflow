@@ -15,6 +15,10 @@ Bonsai for writing. A whole-utterance classifier returns a label or score; it ca
 replacement sentence that the existing redo endpoint also generates. Token-level
 edit taggers can reconstruct corrected text, as detailed in the follow-up below.
 
+The [expanded evaluation](reviews/expanded-formatting-benchmark-2026-10-15.md)
+adds a complete190-case comparison and a frozen1,000-case suite; its resource
+hold and remaining work are recorded explicitly.
+
 The [local formatter benchmark](reviews/formatting-benchmark-2026-10-15.md) now measures
 three candidates against Bonsai and rules-only controls, with a context-aware
 shadow verifier prototype. These are exploratory measurements, not a trained

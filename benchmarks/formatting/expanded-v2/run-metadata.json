@@ -1,0 +1,373 @@
+{
+  "identity": {
+    "backend": "identity",
+    "signature": {
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "41b709aedcc6d3fc654a1dc10ba6db7fd33a0063a6fe556d479e3d2ed408b647",
+      "models": {
+        "pcs": {
+          "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+          "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+          "license": "apache-2.0",
+          "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+        },
+        "gector": {
+          "repo": "gotutiyan/gector-roberta-base-5k",
+          "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+          "license": "non-commercial research only; not a shipping candidate",
+          "source": "https://github.com/gotutiyan/gector",
+          "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+          "role": "single RoBERTa-base edit tagger",
+          "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+        },
+        "coedit": {
+          "repo": "jbochi/coedit-small",
+          "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+          "license": "apache-2.0 as declared in model card",
+          "role": "small FLAN-T5 text editor"
+        }
+      },
+      "native_library_sha256": null,
+      "repeats": "3 per first190;1 per remaining810",
+      "encoder_threads": 4
+    },
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "sessions": [
+      {
+        "started": "2026-10-15T23:21:00-0700",
+        "stage": 190,
+        "load_seconds": 5.665933713316917e-06,
+        "first_inference_seconds": 2.62516550719738e-06,
+        "starting_count": 0,
+        "peak_process_tree_rss_bytes": 31080448
+      },
+      {
+        "started": "2026-10-15T23:26:43-0700",
+        "stage": 1000,
+        "load_seconds": 1.416075974702835e-06,
+        "first_inference_seconds": 4.1606836020946503e-07,
+        "starting_count": 190,
+        "peak_process_tree_rss_bytes": 35012608
+      }
+    ]
+  },
+  "rules": {
+    "backend": "rules",
+    "signature": {
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "41b709aedcc6d3fc654a1dc10ba6db7fd33a0063a6fe556d479e3d2ed408b647",
+      "models": {
+        "pcs": {
+          "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+          "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+          "license": "apache-2.0",
+          "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+        },
+        "gector": {
+          "repo": "gotutiyan/gector-roberta-base-5k",
+          "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+          "license": "non-commercial research only; not a shipping candidate",
+          "source": "https://github.com/gotutiyan/gector",
+          "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+          "role": "single RoBERTa-base edit tagger",
+          "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+        },
+        "coedit": {
+          "repo": "jbochi/coedit-small",
+          "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+          "license": "apache-2.0 as declared in model card",
+          "role": "small FLAN-T5 text editor"
+        }
+      },
+      "native_library_sha256": "cab766212808305078fd280a001a4c736791a5314850ffaf4277a9a566a73ea8",
+      "repeats": "3 per first190;1 per remaining810",
+      "encoder_threads": 4
+    },
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "sessions": [
+      {
+        "started": "2026-10-15T23:21:00-0700",
+        "stage": 190,
+        "load_seconds": 0.03567433310672641,
+        "first_inference_seconds": 0.0004352501127868891,
+        "starting_count": 0,
+        "peak_process_tree_rss_bytes": 172654592
+      },
+      {
+        "started": "2026-10-15T23:26:44-0700",
+        "stage": 1000,
+        "load_seconds": 0.004530541831627488,
+        "first_inference_seconds": 0.00019149994477629662,
+        "starting_count": 190,
+        "peak_process_tree_rss_bytes": 171737088
+      }
+    ]
+  },
+  "pcs": {
+    "backend": "pcs",
+    "signature": {
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "41b709aedcc6d3fc654a1dc10ba6db7fd33a0063a6fe556d479e3d2ed408b647",
+      "models": {
+        "pcs": {
+          "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+          "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+          "license": "apache-2.0",
+          "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+        },
+        "gector": {
+          "repo": "gotutiyan/gector-roberta-base-5k",
+          "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+          "license": "non-commercial research only; not a shipping candidate",
+          "source": "https://github.com/gotutiyan/gector",
+          "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+          "role": "single RoBERTa-base edit tagger",
+          "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+        },
+        "coedit": {
+          "repo": "jbochi/coedit-small",
+          "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+          "license": "apache-2.0 as declared in model card",
+          "role": "small FLAN-T5 text editor"
+        }
+      },
+      "native_library_sha256": null,
+      "repeats": "3 per first190;1 per remaining810",
+      "encoder_threads": 4
+    },
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "sessions": [
+      {
+        "started": "2026-10-15T23:21:06-0700",
+        "stage": 190,
+        "load_seconds": 5.079284958075732,
+        "first_inference_seconds": 0.25412774994038045,
+        "starting_count": 0,
+        "peak_process_tree_rss_bytes": 849248256
+      },
+      {
+        "started": "2026-10-15T23:26:45-0700",
+        "stage": 1000,
+        "load_seconds": 1.1464238329790533,
+        "first_inference_seconds": 0.06605404196307063,
+        "starting_count": 190,
+        "peak_process_tree_rss_bytes": 903086080
+      }
+    ]
+  },
+  "pcs_guarded": {
+    "backend": "pcs_guarded",
+    "signature": {
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "41b709aedcc6d3fc654a1dc10ba6db7fd33a0063a6fe556d479e3d2ed408b647",
+      "models": {
+        "pcs": {
+          "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+          "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+          "license": "apache-2.0",
+          "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+        },
+        "gector": {
+          "repo": "gotutiyan/gector-roberta-base-5k",
+          "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+          "license": "non-commercial research only; not a shipping candidate",
+          "source": "https://github.com/gotutiyan/gector",
+          "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+          "role": "single RoBERTa-base edit tagger",
+          "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+        },
+        "coedit": {
+          "repo": "jbochi/coedit-small",
+          "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+          "license": "apache-2.0 as declared in model card",
+          "role": "small FLAN-T5 text editor"
+        }
+      },
+      "native_library_sha256": null,
+      "repeats": "3 per first190;1 per remaining810",
+      "encoder_threads": 4
+    },
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "sessions": [
+      {
+        "started": "2026-10-15T23:21:31-0700",
+        "stage": 190,
+        "load_seconds": 1.58828483405523,
+        "first_inference_seconds": 7.933308370411396e-05,
+        "starting_count": 0,
+        "peak_process_tree_rss_bytes": 859996160
+      },
+      {
+        "started": "2026-10-15T23:27:17-0700",
+        "stage": 1000,
+        "load_seconds": 1.1319289579987526,
+        "first_inference_seconds": 7.604202255606651e-05,
+        "starting_count": 190,
+        "peak_process_tree_rss_bytes": 829489152
+      }
+    ]
+  },
+  "gector": {
+    "backend": "gector",
+    "signature": {
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "41b709aedcc6d3fc654a1dc10ba6db7fd33a0063a6fe556d479e3d2ed408b647",
+      "models": {
+        "pcs": {
+          "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+          "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+          "license": "apache-2.0",
+          "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+        },
+        "gector": {
+          "repo": "gotutiyan/gector-roberta-base-5k",
+          "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+          "license": "non-commercial research only; not a shipping candidate",
+          "source": "https://github.com/gotutiyan/gector",
+          "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+          "role": "single RoBERTa-base edit tagger",
+          "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+        },
+        "coedit": {
+          "repo": "jbochi/coedit-small",
+          "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+          "license": "apache-2.0 as declared in model card",
+          "role": "small FLAN-T5 text editor"
+        }
+      },
+      "native_library_sha256": null,
+      "repeats": "3 per first190;1 per remaining810",
+      "encoder_threads": 4
+    },
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "sessions": [
+      {
+        "started": "2026-10-15T23:21:51-0700",
+        "stage": 190,
+        "load_seconds": 16.656023040879518,
+        "first_inference_seconds": 0.043573208851739764,
+        "starting_count": 0,
+        "peak_process_tree_rss_bytes": 1727070208
+      },
+      {
+        "started": "2026-10-15T23:27:28-0700",
+        "stage": 1000,
+        "load_seconds": 6.167531333863735,
+        "first_inference_seconds": 0.02530295797623694,
+        "starting_count": 190,
+        "peak_process_tree_rss_bytes": 1728593920
+      }
+    ]
+  },
+  "coedit": {
+    "backend": "coedit",
+    "signature": {
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "41b709aedcc6d3fc654a1dc10ba6db7fd33a0063a6fe556d479e3d2ed408b647",
+      "models": {
+        "pcs": {
+          "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+          "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+          "license": "apache-2.0",
+          "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+        },
+        "gector": {
+          "repo": "gotutiyan/gector-roberta-base-5k",
+          "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+          "license": "non-commercial research only; not a shipping candidate",
+          "source": "https://github.com/gotutiyan/gector",
+          "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+          "role": "single RoBERTa-base edit tagger",
+          "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+        },
+        "coedit": {
+          "repo": "jbochi/coedit-small",
+          "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+          "license": "apache-2.0 as declared in model card",
+          "role": "small FLAN-T5 text editor"
+        }
+      },
+      "native_library_sha256": null,
+      "repeats": "3 per first190;1 per remaining810",
+      "encoder_threads": 4
+    },
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "sessions": [
+      {
+        "started": "2026-10-15T23:23:45-0700",
+        "stage": 190,
+        "load_seconds": 3.5967318331822753,
+        "first_inference_seconds": 0.7401697910390794,
+        "starting_count": 0,
+        "peak_process_tree_rss_bytes": 778649600
+      },
+      {
+        "started": "2026-10-15T23:28:29-0700",
+        "stage": 1000,
+        "load_seconds": 3.615732542006299,
+        "first_inference_seconds": 0.10049120802432299,
+        "starting_count": 190,
+        "peak_process_tree_rss_bytes": 787038208
+      }
+    ]
+  },
+  "bonsai": {
+    "backend": "bonsai",
+    "signature": {
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "41b709aedcc6d3fc654a1dc10ba6db7fd33a0063a6fe556d479e3d2ed408b647",
+      "models": {
+        "pcs": {
+          "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+          "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+          "license": "apache-2.0",
+          "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+        },
+        "gector": {
+          "repo": "gotutiyan/gector-roberta-base-5k",
+          "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+          "license": "non-commercial research only; not a shipping candidate",
+          "source": "https://github.com/gotutiyan/gector",
+          "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+          "role": "single RoBERTa-base edit tagger",
+          "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+        },
+        "coedit": {
+          "repo": "jbochi/coedit-small",
+          "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+          "license": "apache-2.0 as declared in model card",
+          "role": "small FLAN-T5 text editor"
+        }
+      },
+      "native_library_sha256": "cab766212808305078fd280a001a4c736791a5314850ffaf4277a9a566a73ea8",
+      "repeats": "3 per first190;1 per remaining810",
+      "encoder_threads": 4
+    },
+    "platform": "macOS-15.6-arm64-arm-64bit",
+    "sessions": [
+      {
+        "started": "2026-10-15T23:24:53-0700",
+        "stage": 190,
+        "load_seconds": 1.0486168749630451,
+        "first_inference_seconds": 4.778085291851312,
+        "starting_count": 0,
+        "peak_process_tree_rss_bytes": 2832973824
+      },
+      {
+        "started": "2026-10-15T23:30:08-0700",
+        "stage": 1000,
+        "load_seconds": 0.6261143339797854,
+        "first_inference_seconds": 4.799810874974355,
+        "starting_count": 190,
+        "peak_process_tree_rss_bytes": 2863972352
+      }
+    ]
+  }
+}

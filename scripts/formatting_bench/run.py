@@ -153,6 +153,7 @@ def adapter(name, library):
         tokenizer = AutoTokenizer.from_pretrained(paths['gector'])
         encode, decode = load_verb_dict(str(CACHE / 'verb-form-vocab.txt'))
         def infer(case):
+            infer.last_metadata = {'input_subwords_exceed_80': len(tokenizer(['$START'] + case['input'].split(' '), is_split_into_words=True)['input_ids']) > cfg.max_length}
             with contextlib.redirect_stdout(io.StringIO()), torch.inference_mode():
                 return predict(model, tokenizer, [case['input']], encode, decode, keep_confidence=.3, min_error_prob=.6, n_iteration=5, batch_size=1)[0]
         return infer, lambda: None
@@ -164,6 +165,7 @@ def adapter(name, library):
             batch = tokenizer('Fix grammatical errors in this sentence: ' + case['input'], return_tensors='pt')
             with torch.inference_mode():
                 result = model.generate(**batch, max_new_tokens=128, do_sample=False, num_beams=1)
+            infer.last_metadata = {'generation_limit_reached': int(result[0][-1]) != tokenizer.eos_token_id}
             return tokenizer.decode(result[0], skip_special_tokens=True)
         return infer, lambda: None
     raise ValueError(name)

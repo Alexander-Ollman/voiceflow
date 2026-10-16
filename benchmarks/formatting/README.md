@@ -1,5 +1,9 @@
 # Local formatting experiment
 
+The [expanded evaluation](expanded-v2/README.md) runs nested190- and1,000-case
+stages with human grammar data, four synthetic voices, edit/fluency metrics,
+resource guards and redacted evidence. The original pilot is retained below.
+
 Exploratory benchmark, not an application dependency or production model switch.
 See [results and recommendation](../../docs/reviews/formatting-benchmark-2026-10-15.md).
 All inputs are authored or synthetic speech. No dictation history is read.

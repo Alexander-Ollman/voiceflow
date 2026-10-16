@@ -7,6 +7,9 @@ tags: [inference, benchmark, formatting]
 
 # Formatting benchmark and context verification
 
+The [expanded evaluation](expanded-formatting-benchmark-2026-10-15.md) supersedes
+this pilot for sample size. The pilot measurements remain here for provenance.
+
 ## Recommendation
 
 Keep Bonsai available for contextual correction and writing. Build a conservative

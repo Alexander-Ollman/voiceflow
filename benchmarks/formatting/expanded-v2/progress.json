@@ -1,0 +1,27 @@
+{
+  "stage190": "complete",
+  "stage1000": "held_for_priority_workload",
+  "completed_cases": {
+    "identity": 1000,
+    "rules": 1000,
+    "pcs": 1000,
+    "pcs_guarded": 1000,
+    "gector": 1000,
+    "coedit": 1000,
+    "bonsai": 983
+  },
+  "recorded_call_count": 9643,
+  "planned_call_count": 9660,
+  "remaining_cases": 17,
+  "resource_hold": {
+    "reason": "Physical free memory below reserve",
+    "reading": {
+      "time": 1792132408.5786629,
+      "pressure": 1,
+      "free_bytes": 10386145280,
+      "swapout_bytes": 1354409803776,
+      "swapout_delta_bytes": 0
+    },
+    "checkpoints_preserved": true
+  }
+}
