@@ -204,7 +204,9 @@ Benchmark three alternatives against current Bonsai and a rules-only control:
 3. A small instruction editor as a generation-quality comparison.
 
 Evaluate ASR transcripts from the actual Parakeet version rather than only
-written-grammar benchmarks. Include correctly written text, ambiguous phonetic
+written-grammar benchmarks. Parakeet already emits punctuation and case; compare
+conditional repair against passing its output through rather than blindly
+stripping punctuation and restoring it. Include correctly written text, ambiguous phonetic
 mishears, partial sentences, negation, names, IDs, URLs, amounts, dates and code.
 Score punctuation/case accuracy, edit precision, unnecessary-edit rate, semantic
 preservation and exact preservation of protected spans. Report p50/p95 latency,
