@@ -39,7 +39,7 @@
 - **Voice snippets** &mdash; Custom trigger phrases that expand into any text
 - **AI voice commands** &mdash; Say "reply to this", "rewrite this", "proofread this", "continue writing", "summarize this" for context-aware AI actions on the current text field
 - **Repeat to replace** &mdash; Re-say a sentence (or just fix a word) and VoiceFlow replaces your last dictation instead of appending it. A deterministic pre-check &mdash; correction hotwords ("scratch that", "I meant…") plus word-overlap with your last output &mdash; gates the call, then Bonsai confirms redo-vs-new. Hold `⌥⇧ Space` to force a replace, or to speak an edit ("make it more formal")
-- **Menu bar app** &mdash; Minimal footprint, no dock icon, launch at login
+- **Native macOS app** &mdash; Dock and app-switcher presence by default, optional menu-bar-only mode, launch at login
 
 ## How It Works
 
@@ -305,6 +305,27 @@ Two zero-config systems pre-populate sensible defaults:
 - **Technical terms** &mdash; Configurable replacement dictionary
 
 ## Troubleshooting
+
+### Shortcuts respond but no text appears
+
+Open **Settings → Diagnostics → Test microphone, shortcut and insertion**.
+The same check runs during onboarding. Click its field and dictate; the last
+completed checkpoint identifies whether shortcut delivery, microphone input,
+speech recognition, writing, or insertion needs attention.
+
+- If **Test without shortcut** works but the shortcut does not, change the
+  binding and check other apps for the same shortcut (including ChatGPT).
+- If the input meter stays silent, check the microphone and input device.
+- If speech recognition fails or stalls, use **Restart speech service** and
+  open Logs for the actual error. Accessibility access alone cannot verify a
+  model or microphone is working.
+- If formatting succeeds but insertion does not, keep the test field focused
+  and check the running app's live Accessibility status.
+
+**Copy check summary** copies checkpoint and service status without test text
+or audio. Share it when requesting help. VoiceFlow now appears in the Dock and
+app switcher by default; **Settings → Startup** offers menu-bar-only mode.
+
 
 ### VoiceFlow doesn't show up in Raycast, Alfred or Spotlight
 

@@ -178,6 +178,11 @@ class ParakeetDaemon:
 
             expected_sr = int(model.preprocessor_config.sample_rate)
             audio = _decode_wav_to_float32(audio_bytes, expected_sr)
+            # Very short/cancelled captures can underflow the STFT window and
+            # trigger nonsensical Metal allocation sizes. They contain no useful
+            # dictation, so never send them into get_logmel/model.generate.
+            if len(audio) < int(expected_sr * 0.2):
+                return {"status": "ok", "text": "", "elapsed_ms": 0}
             audio_mx = mx.array(audio)
 
             start = time.monotonic()
@@ -476,6 +481,7 @@ def main():
             # MLX has GPU stream affinity to the thread that created tensors,
             # so all inference must stay on the load thread (this one).
             # Single-user dictation does not need per-connection parallelism.
+            conn.settimeout(30.0)
             handle_client(daemon, conn)
     finally:
         log.info("Daemon shutting down")

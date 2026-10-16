@@ -11,8 +11,9 @@ tags: [architecture, inference, performance]
 
 Keep deterministic routing first. Trial a small classifier for fixed decisions,
 starting with app classification, then redo-versus-new in shadow mode. Retain
-Bonsai for writing. A classifier returns a label or score; it cannot supply the
-replacement sentence that the existing redo endpoint also generates.
+Bonsai for writing. A whole-utterance classifier returns a label or score; it cannot supply the
+replacement sentence that the existing redo endpoint also generates. Token-level
+edit taggers can reconstruct corrected text, as detailed in the follow-up below.
 
 This is a code-informed proposal, not a trained model or a measured speedup.
 No inference behavior or model defaults change in this update.
@@ -26,7 +27,7 @@ No inference behavior or model defaults change in this update.
 | Redo versus new dictation | `RedoSignal` gates calls; `structured_edit.rs::assess_redo` returns decision AND replacement text | A pair classifier predicts append/redo/uncertain. Keep field, window, recency and exact insertion guards. Generate text separately only after a confident redo. |
 | Explicit change-X-to-Y edits | Intent classifier extracts `anchor_hint`; structured edits resolve a target | Prefer deterministic replacement when the anchor is exact and unique. Ambiguous edits still need generation or clarification. |
 | Snippets, dictionary replacements, number/voice-command normalization | Existing deterministic processing | Keep rules and direct lookup. No new model. |
-| Punctuation, contextual spelling and sentence cleanup | Bonsai generation | Keep generation for now. A dedicated punctuation/tagging model is a separate experiment with quality tradeoffs. |
+| Punctuation, contextual spelling and sentence cleanup | Bonsai generation | Evaluate punctuation/case heads and GECToR-style edit taggers; see the researched variants below. Retain generation until dictation-specific comparisons pass. |
 | Compose, rewrite, summarize, reply, semantic edits | Bonsai generates new text | Keep a generator; a decision classifier cannot replace these behaviors. |
 | Visible-text extraction | Existing OCR plus optional generative context helpers | Use existing OCR for literal extraction. Do not replace OCR with an intent classifier. |
 
@@ -108,3 +109,113 @@ Prioritize waveform CPU savings now, classification experiments next, then a
 separately scoped lazy-generator / lightweight Dictate mode for larger memory
 savings. Do not add a second transformer permanently beside Bonsai and assume
 the total application is lighter.
+
+## Follow-up research: models that actually format and correct text
+
+Checked October 15, 2026. A whole-utterance intent classifier only chooses an
+action, but a **token-level edit tagger** can change text by choosing an edit for
+each token. That makes the earlier classifier/generator split incomplete for
+formatting. These candidates have not been benchmarked or integrated here.
+
+| Candidate | What it can do | Fit for VoiceFlow | Main limitation |
+|---|---|---|---|
+| NVIDIA NeMo punctuation/capitalization | Joint token classification for punctuation and case | First formatting-only baseline | Limited punctuation labels; cannot repair semantic mishears or apply arbitrary writing styles. |
+| GECToR, single encoder / distilled student | Predict keep, delete, insertion, replacement and grammatical transforms | Best edit-tagger candidate for conservative grammar cleanup | Fixed edit vocabulary and possibly several passes; names/code require protection and ASR-specific evaluation. |
+| Google FELIX | Tag, reorder and insert using a masked language model | More flexible correction/reordering experiment | Two model stages and a training/export project, not a ready native formatter. |
+| FastCorrect / FastCorrect 2 / SoftCorrect | Non-autoregressive ASR error detection/correction | Relevant research for phonetic misrecognitions | Released examples are Chinese-focused; multi-candidate variants need ASR hypotheses our current API does not return. |
+| Community `jbochi/coedit-small` | Instruction-based grammar, fluency, formality and paraphrasing with FLAN-T5-small | A small generation baseline to compare against taggers | Autoregressive; thin model documentation and no demonstrated VoiceFlow/name-preservation quality. |
+| Official `grammarly/coedit-large` | Instruction-based text revision, 770M parameters | Useful research reference | Model card is CC-BY-NC-4.0; do not treat it as an unrestricted shipping replacement. |
+
+### Punctuation and capitalization
+
+NVIDIA's documented model attaches two classification heads to a BERT-like
+encoder, predicting punctuation after each word and whether it should be
+capitalized. Default punctuation covers comma, period and question mark. This is
+much narrower than free-form writing and is a plausible first Basic Dictate
+formatter. [NVIDIA architecture and inference documentation](https://docs.nvidia.com/nemo-framework/user-guide/24.12/nemotoolkit/nlp/punctuation_and_capitalization.html)
+
+Treat the pretrained BERT checkpoint as a baseline; a smaller/distilled encoder
+would need separate training and evaluation. Do not assume a ready DistilBERT
+checkpoint exists with equivalent quality. Model artifact terms are separate
+from the NeMo source license. The [NGC model page](https://catalog.ngc.nvidia.com/orgs/nvidia/nemo/models/punctuation_en_bert/-?_lr=1)
+points to NGC terms; verify the exact artifact before distribution.
+
+### GECToR and distilled variants
+
+GECToR provides BERT, RoBERTa and XLNet pretrained variants and an edit-tagging
+pipeline. It uses token transformations to reconstruct corrected text rather
+than freely regenerating every word. For this app, start with one encoder rather
+than an ensemble and preserve input when edit confidence is insufficient.
+The reference code has an older Python/AllenNLP stack, so shipping that stack
+unchanged would undermine the lightweight objective. [Official repository](https://github.com/grammarly/gector)
+
+Grammarly also demonstrated distilling an ensemble into a single GECToR tagger.
+This establishes a useful training strategy; it is not proof that an off-the-shelf
+small model matches Bonsai on dictated text. [Grammarly's distillation experiments](https://www.grammarly.com/blog/engineering/experimenting-with-gector/)
+
+### FELIX and ASR-specific correctors
+
+FELIX separates token selection/reordering from insertion using a masked language
+model. Both stages are non-autoregressive. Its reference implementation is
+TensorFlow 2 with BERT-based training examples. It is a more flexible research
+route when local edit tags prove too restrictive, but doubles the model-stage
+and export work. Published speedups concern the paper's hardware/tasks and are
+not Apple Silicon estimates. [Google architecture description](https://research.google/blog/introducing-felix-flexible-text-editing-through-tagging-and-insertion/),
+[official implementation](https://github.com/google-research/google-research/tree/master/felix).
+
+FastCorrect predicts edit alignment and corrected output non-autoregressively;
+its released pretrained example is Chinese-character based. FastCorrect 2 uses
+multiple ASR beam candidates, and SoftCorrect adds a soft error detector and
+constrained correction. Our daemon currently returns one transcript, so these
+are training/ASR-interface projects rather than drop-in English replacements.
+[FastCorrect](https://github.com/microsoft/NeuralSpeech/tree/master/FastCorrect),
+[FastCorrect 2](https://github.com/microsoft/NeuralSpeech/tree/master/FastCorrect2),
+[SoftCorrect](https://github.com/microsoft/NeuralSpeech/tree/master/SoftCorrect).
+
+### Small instruction-based editors
+
+The community `jbochi/coedit-small` is fine-tuned from FLAN-T5-small on the CoEdIT
+dataset and offers examples for grammar, coherence, formality and paraphrasing.
+Its card contains evaluation loss and ROUGE scores but leaves important intended
+use and training-data descriptions incomplete. Those metrics do not establish
+safe preservation of names, numbers, code or dictated intent.
+[Author's model card](https://huggingface.co/jbochi/coedit-small).
+
+FLAN-T5-small is listed at 77M parameters with Apache-2.0 licensing. Its raw
+weight payload is approximately 154 MB at FP16 or 77 MB at INT8, **before**
+quantization metadata, tokenizer, activations, caches and runtime overhead. These
+are arithmetic estimates, not measured Mac memory or latency.
+[Base model card](https://huggingface.co/google/flan-t5-small).
+
+The official CoEdIT-large checkpoint is 770M and uses CC-BY-NC-4.0. That license
+must not be inferred for every independently trained small variant: the
+community-small card declares Apache-2.0, and the CoEdIT dataset card also
+currently declares Apache-2.0. Check the exact weights and training provenance;
+source, base-model, dataset and fine-tuned-weight metadata are distinct.
+[Official large model](https://huggingface.co/grammarly/coedit-large),
+[dataset card](https://huggingface.co/datasets/grammarly/coedit).
+
+### Proposed comparison
+
+Benchmark three alternatives against current Bonsai and a rules-only control:
+
+1. Punctuation/case tagging for a conservative Basic Dictate mode.
+2. A single GECToR-style model for punctuation plus local grammar edits.
+3. A small instruction editor as a generation-quality comparison.
+
+Evaluate ASR transcripts from the actual Parakeet version rather than only
+written-grammar benchmarks. Include correctly written text, ambiguous phonetic
+mishears, partial sentences, negation, names, IDs, URLs, amounts, dates and code.
+Score punctuation/case accuracy, edit precision, unnecessary-edit rate, semantic
+preservation and exact preservation of protected spans. Report p50/p95 latency,
+peak RSS/Metal memory and cold startup on the same Mac. Retain Bonsai for Compose,
+style-heavy rewriting and ambiguous semantic repairs until results justify a
+change. No benchmark results are claimed by this research update.
+
+A native Core ML or ONNX implementation could avoid another Python/PyTorch
+runtime, but tokenizer parity, edit reconstruction, conversion support and
+quantization must all be validated. Existing ONNX packaging does not make a new
+model automatically compatible. Two uncompressed encoders can also erase much
+of the memory gain over Bonsai's aggressively quantized weights. The useful
+product outcome is a fully functioning basic mode with Bonsai unloaded, not
+simply adding another resident model alongside it.

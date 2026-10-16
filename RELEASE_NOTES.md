@@ -1,8 +1,11 @@
 # Release Notes
 
-## Unreleased — Desktop integration and recording waveform
+## Unreleased — Setup checks, reliable restart, and desktop integration
 
-- Show VoiceFlow in the Dock while Settings is open, with a live preference.
+- Add an onboarding setup check and a repeatable Settings diagnostic for hotkeys, microphone, recognition, formatting, and verified insertion.
+- Show VoiceFlow in the Dock and app switcher by default, with an optional menu-bar-only mode.
+- Keep the UI responsive during helper shutdown and native initialization/cleanup; wait for exit before relaunching.
+- Add short health-probe deadlines, owned-helper watchdogs, visible recognition errors, and a guard for very short audio clips.
 - Support Globe/fn dictation while preserving and restoring the system action.
 - Hide staged updates from Spotlight, register completed installs, and improve bundle metadata.
 - Preserve the previous installation if app relocation fails.

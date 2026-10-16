@@ -2058,6 +2058,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Guards one-time installation of the hotkey-rebind observers.
     private var hotkeyObserversInstalled = false
+    private var normalLaunchStarted = false
+    private var diagnosticSubscriptions = Set<AnyCancellable>()
     private var dockIconObserverInstalled = false
 
     // Moonshine streaming engine (Beta)
@@ -2227,8 +2229,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hide dock icon - menu bar only
-        NSApp.setActivationPolicy(.accessory)
+        ApplicationVisibility.apply()
+        ApplicationVisibility.installMenuIfNeeded(open: self, action: #selector(openSettings))
+        NotificationCenter.default.addObserver(forName: ApplicationVisibility.changed, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { ApplicationVisibility.apply() }
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { _ in
+            DispatchQueue.main.async { ApplicationVisibility.apply() }
+        }
 
         // Belt-and-suspenders: env is already seeded in VoiceFlowApp.init()
         // before VoiceFlowBridge is constructed, but re-apply here in case the
@@ -2338,7 +2346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let response = alert.runModal()
 
         // Restore menu-bar-only mode
-        NSApp.setActivationPolicy(.accessory)
+        ApplicationVisibility.apply()
 
         guard response == .alertFirstButtonReturn else { return }
 
@@ -2420,7 +2428,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showSetupWizard() {
-        let controller = SetupWizardController()
+        let controller = SetupWizardController(preparePractice: { [weak self] in
+            self?.proceedWithNormalLaunch()
+        })
         wizardController = controller
         controller.show { [weak self] in
             self?.wizardController = nil
@@ -2428,7 +2438,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func configureDictationCheck() {
+        let check = DictationDiagnostics.shared
+        check.startRecording = { [weak self] in self?.startRecording() }
+        check.cancelRecording = { [weak self] in self?.cancelActiveRecording() }
+        check.stopRecording = { [weak self] in self?.stopRecordingAndPaste() }
+        check.restartSpeech = { [weak self] in
+            guard let self else { return }
+            check.failedSpeech("Speech service is restarting. Reset the check when it is ready.")
+            await self.parakeetEngine.stopDaemon()
+            await self.parakeetEngine.loadModel()
+            if self.parakeetEngine.state == .ready {
+                check.recoveryMessage = "Speech service restarted. Click Reset check and try again."
+            } else {
+                check.recoveryMessage = "Speech service could not restart. Open Logs for the failure details."
+            }
+        }
+        audioRecorder.$audioLevel.sink { level in
+            check.audioLevel(level)
+        }.store(in: &diagnosticSubscriptions)
+        parakeetEngine.$state.sink { state in
+            switch state {
+            case .unloaded: check.speechState = "Not started"
+            case .starting: check.speechState = "Starting"
+            case .loadingModel: check.speechState = "Loading model"
+            case .ready: check.speechState = "Ready"
+            case .error(let message): check.speechState = "Error: \(message)"
+            }
+        }.store(in: &diagnosticSubscriptions)
+        voiceFlow.$isInitialized.combineLatest(llamaServer.$state).sink { initialized, state in
+            check.formatterReady = initialized && state == .ready
+        }.store(in: &diagnosticSubscriptions)
+    }
+
     private func proceedWithNormalLaunch() {
+        guard !normalLaunchStarted else { return }
+        normalLaunchStarted = true
+        configureDictationCheck()
         setupStatusItem()
         setupHotkey()
         installHotkeyObserversIfNeeded()
@@ -2614,6 +2660,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[VoiceFlow] Bonsai pre-warm: %.0fms (model resident in Metal, persona prefix cached)", ms)
     }
 
+    private var terminationInProgress = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationInProgress else { return .terminateLater }
+        terminationInProgress = true
+        suspendHotkeys()
+        cancelLiveFormat()
+        if isRecording { _ = audioRecorder.stopRecording(); isRecording = false }
+        Task { @MainActor in
+            await parakeetEngine.stopDaemon()
+            await llamaServer.stop()
+            await voiceFlow.cleanup()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // If an update is staged, swap it in now (we're quitting anyway — no
         // relaunch). Touches only the app bundle, so user stats/settings persist.
@@ -2628,17 +2691,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Clean up streaming engine
         moonshineEngine.unloadModel()
 
-        // Stop Parakeet daemon if it's running
-        if useParakeet {
-            parakeetEngine.stopDaemon()
-        }
-
-        // Stop llama-server (only if we spawned it).
-        llamaServer.stop()
-
-        // Clean up resources before termination to prevent memory leaks
-        // This ensures the Rust side properly releases all model memory
-        voiceFlow.cleanup()
+        // Native cleanup already received a bounded background opportunity
+        // during applicationShouldTerminate, before AppKit agreed to exit.
 
         // Log final memory state for debugging
         let memUsage = VoiceFlowBridge.getMemoryUsage()
@@ -2893,10 +2947,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func leaveDockIfNoWindowsOpen() {
         let settingsVisible = settingsWindow?.isVisible ?? false
         let wizardOpen = wizardController != nil
-        guard !settingsVisible, !wizardOpen else { return }
+        guard !ApplicationVisibility.alwaysShow, !settingsVisible, !wizardOpen else { return }
         guard NSApp.activationPolicy() == .regular else { return }
         let shouldRestoreFocus = NSApp.isActive
-        NSApp.setActivationPolicy(.accessory)
+        ApplicationVisibility.apply()
         // Switching to .accessory leaves us "active" with no menu bar; hand
         // focus back to whatever the user was in before opening Settings.
         let previous = appToReactivateAfterSettings
@@ -2915,7 +2969,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.activate(ignoringOtherApps: true)
             }
         } else if wizardController == nil, NSApp.activationPolicy() == .regular {
-            NSApp.setActivationPolicy(.accessory)
+            ApplicationVisibility.apply()
             // Keep the window in front: dropping the policy would otherwise
             // leave it behind the previously active app.
             settingsWindow?.makeKeyAndOrderFront(nil)
@@ -3660,9 +3714,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startRecording() {
         guard !isRecording else { return }
+        if DictationDiagnostics.shared.running { return }
 
         do {
             try audioRecorder.startRecording()
+            DictationDiagnostics.shared.captureStarted()
             isRecording = true
             recordingMenuItem?.title = "Recording... (release \(dictateHotkeyLabel))"
 
@@ -3814,6 +3870,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         } catch {
+            DictationDiagnostics.shared.captureFailed(error.localizedDescription)
             showAlert(title: "Recording Error", message: error.localizedDescription)
         }
     }
@@ -4148,7 +4205,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let rawTranscript = await parakeetEngine.transcribe(audio: audio),
                       !rawTranscript.isEmpty else {
                     await MainActor.run { hideOverlay() }
-                    showNotification(title: "No Speech", body: "No speech was detected")
+                    if useParakeet, case .error = parakeetEngine.state {
+                        showNotification(title: "Speech recognition failed", body: "Open Settings → Diagnostics to restart the speech service or run the setup check.")
+                    } else {
+                        showNotification(title: "No Speech", body: "No speech was detected")
+                    }
                     return
                 }
 
@@ -4999,6 +5060,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try audioRecorder.startRecording()
+            DictationDiagnostics.shared.captureStarted()
             isRecording = true
             isEditMode = true
             recordingMenuItem?.title = "Recording edit... (release ⌥⇧Space)"
@@ -5015,6 +5077,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isEditMode = false
             NSLog("[VoiceFlow] Edit recording failed to start: %@",
                   error.localizedDescription)
+            DictationDiagnostics.shared.captureFailed(error.localizedDescription)
             showAlert(title: "Recording Error", message: error.localizedDescription)
         }
     }
@@ -5214,7 +5277,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Accessibility permission we already hold, so it's both simpler and one
     /// fewer permission class to get wrong.
     private func simulatePaste() {
+        if !DictationDiagnostics.shared.preparePaste(NSPasteboard.general.string(forType: .string) ?? "") { return }
+
         guard AXIsProcessTrusted() else {
+            DictationDiagnostics.shared.insertionFailed("Accessibility is not currently trusted by this running app. Open Privacy & Security and retry.")
             print("Accessibility not granted - cannot auto-paste")
             return
         }
@@ -5464,7 +5530,8 @@ final class GlobalHotkeyManager {
         GlobalHotkeyManager.cancelHandlers[id] = onCancel
 
         if let modifier = binding.modifierOnly {
-            modifierHotkeys[id] = modifier
+            MainActor.assumeIsolated { DictationDiagnostics.shared.registered(id: id, status: 0) }
+        modifierHotkeys[id] = modifier
             installModifierEventMonitorsIfNeeded()
             return
         }
@@ -5498,6 +5565,7 @@ final class GlobalHotkeyManager {
 
                     let kind = GetEventKind(event)
                     if kind == UInt32(kEventHotKeyPressed) {
+                        MainActor.assumeIsolated { DictationDiagnostics.shared.receivedHotkey(id: hotkeyID.id) }
                         GlobalHotkeyManager.pressHandlers[hotkeyID.id]?()
                     } else if kind == UInt32(kEventHotKeyReleased) {
                         GlobalHotkeyManager.releaseHandlers[hotkeyID.id]?()
@@ -5517,7 +5585,7 @@ final class GlobalHotkeyManager {
         hotKeyID.id = id
 
         var ref: EventHotKeyRef?
-        RegisterEventHotKey(
+        let registrationStatus = RegisterEventHotKey(
             keyCode,
             binding.modifiers,
             hotKeyID,
@@ -5526,7 +5594,8 @@ final class GlobalHotkeyManager {
             &ref
         )
 
-        if let ref = ref {
+        MainActor.assumeIsolated { DictationDiagnostics.shared.registered(id: id, status: registrationStatus) }
+        if registrationStatus == noErr, let ref = ref {
             hotKeyRefs[id] = ref
         }
     }
@@ -5569,6 +5638,7 @@ final class GlobalHotkeyManager {
                         // key back to emoji/dictation since we last checked.
                         MainActor.assumeIsolated { GlobeKeyController.shared.claim() }
                     }
+                    MainActor.assumeIsolated { DictationDiagnostics.shared.receivedHotkey(id: id) }
                     GlobalHotkeyManager.pressHandlers[id]?()
                 } else if !isPressed && wasPressed {
                     activeModifierHotkeys.remove(id)
@@ -5592,6 +5662,7 @@ final class GlobalHotkeyManager {
     /// Unregister a single hotkey so it can be re-bound at runtime. Clears the
     /// Carbon ref and the stored handlers for that id.
     func unregister(id: UInt32) {
+        MainActor.assumeIsolated { DictationDiagnostics.shared.unregister(id: id) }
         if let ref = hotKeyRefs[id] {
             UnregisterEventHotKey(ref)
             hotKeyRefs.removeValue(forKey: id)
@@ -7592,8 +7663,10 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var voiceFlow: VoiceFlowBridge
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showLogs = false
+    @State private var showDictationCheck = false
     @State private var showTips = false
     @AppStorage("avoidBluetoothMic") private var avoidBluetoothMic = true
+    @AppStorage(ApplicationVisibility.preferenceKey) private var alwaysShowInDock = true
     @AppStorage(AppDelegate.dockIconWhileSettingsOpenKey) private var dockIconWhileSettingsOpen = true
 
     var body: some View {
@@ -7620,6 +7693,14 @@ struct GeneralSettingsView: View {
                 }
 
                 cardSection(title: "Startup", icon: "power") {
+                    Toggle("Show VoiceFlow in Dock and app switcher", isOn: $alwaysShowInDock)
+                        .toggleStyle(.switch)
+                        .onChange(of: alwaysShowInDock) { _ in
+                            NotificationCenter.default.post(name: ApplicationVisibility.changed, object: nil)
+                        }
+                    Text("Keep VoiceFlow easy to reopen, pin to the Dock, or find in Force Quit. Turn this off for menu-bar-only use.")
+                        .font(.caption).foregroundStyle(.secondary)
+
                     Toggle("Launch VoiceFlow at login", isOn: $launchAtLogin)
                         .onChange(of: launchAtLogin) { newValue in
                             if newValue {
@@ -7704,6 +7785,8 @@ struct GeneralSettingsView: View {
                 }
 
                 cardSection(title: "Diagnostics", icon: "doc.text.magnifyingglass") {
+                    Button("Test microphone, shortcut and insertion…") { showDictationCheck = true }
+                        .buttonStyle(VFOutlinePillStyle())
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Logs")
@@ -7754,6 +7837,12 @@ struct GeneralSettingsView: View {
                 .padding(.top, 4)
             }
             .padding(24)
+        }
+        .sheet(isPresented: $showDictationCheck) {
+            VStack(spacing: 0) {
+                DictationCheckView()
+                Button("Done") { showDictationCheck = false }.padding(.bottom, 16)
+            }.frame(width: 620, height: 700)
         }
         .sheet(isPresented: $showLogs) {
             LogConsoleView()
@@ -7825,16 +7914,17 @@ struct GeneralSettingsView: View {
     private func restartApp() {
         let bundlePath = Bundle.main.bundlePath
 
-        // Use /bin/sh -c with nohup + disown so the relaunch survives our termination
-        let script = "sleep 1 && open \"\(bundlePath)\" &"
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", script]
+        task.arguments = ["-c", """
+        /usr/bin/nohup /bin/sh -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open "$2"' voiceflow-relaunch "$1" "$2" >/dev/null 2>&1 &
+        """, "voiceflow-restart", String(ProcessInfo.processInfo.processIdentifier), bundlePath]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
-        // Setting qualityOfService to .background helps the process survive parent exit
-        task.qualityOfService = .background
-        try? task.run()
+        do { try task.run() } catch {
+            NSLog("[VoiceFlow] Could not schedule restart: %@", error.localizedDescription)
+            return
+        }
 
         // Terminate after a brief delay to let the shell process detach
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
