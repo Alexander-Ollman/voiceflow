@@ -1,0 +1,107 @@
+{
+  "date_local": "2026-10-15",
+  "hardware": "Apple M4 Max, Mac16,5, 128 GiB unified RAM",
+  "platform": "macOS-15.6-arm64-arm-64bit",
+  "packages": {
+    "torch": "2.10.0",
+    "transformers": "5.1.0",
+    "numpy": "2.4.2",
+    "tokenizers": "0.22.2",
+    "huggingface-hub": "1.4.1",
+    "psutil": "7.2.2",
+    "safetensors": "0.7.0",
+    "onnxruntime": "1.22.0",
+    "sentencepiece": "0.2.1",
+    "punctuators": "0.0.5",
+    "errant": "3.0.2",
+    "spacy": "3.8.16",
+    "en-core-web-sm": "3.8.0",
+    "sacremoses": "0.1.1",
+    "scipy": "1.17.0"
+  },
+  "artifacts": {
+    "pcs": [
+      {
+        "filename": "punct_cap_seg_en.onnx",
+        "bytes": 209532928,
+        "sha256": "dd922d459da618cd324280889740608b76fb3e9e61d3f402291be1251f91421b"
+      }
+    ],
+    "gector": [
+      {
+        "filename": "model.safetensors",
+        "bytes": 511640212,
+        "sha256": "30c85a299eb788a443f20a7c5b77c6076bd271459f48a4c8bb8bbfb8ac8a6dba"
+      }
+    ],
+    "coedit": [
+      {
+        "filename": "model.safetensors",
+        "bytes": 307867048,
+        "sha256": "2a0cfd1c2d4ccc75603ebef353177cdd387a60ac7cdc8891a41c6bea3bd7ec8a"
+      }
+    ],
+    "native_ffi": {
+      "filename": "libvoiceflow_ffi.dylib",
+      "bytes": 125371584,
+      "sha256": "cab766212808305078fd280a001a4c736791a5314850ffaf4277a9a566a73ea8"
+    },
+    "llama_server": {
+      "filename": "llama-server",
+      "bytes": 1938848,
+      "sha256": "12e49e67d9eb9da0c77b835831f29ed601aa158ff1d3ce3b423d124985dc1649"
+    },
+    "bonsai": {
+      "filename": "Bonsai-8B-Q1_0.gguf",
+      "bytes": 1158654496,
+      "sha256": "284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54"
+    },
+    "default_prompt": {
+      "filename": "default.txt",
+      "bytes": 14700,
+      "sha256": "5d24953857e825b6227d10d2ff68d4d427e6527975d79d5f4da8bae0e7138db0"
+    },
+    "parakeet_source": {
+      "filename": "parakeet_asr_daemon.py",
+      "bytes": 18155,
+      "sha256": "ea8f0da29144b0089282bba4da03e82218cf802ffc5c49f905f8e469e5ac470b"
+    }
+  },
+  "encoder_threads": 4,
+  "encoder_provider": "CPU",
+  "bonsai_backend": "Metal, 99 GPU layers, 16384 context, q8_0 KV, server seed42, native default temperature0.3",
+  "asr": "mlx-community/parakeet-tdt-0.6b-v2 via cached parakeet-mlx; Samantha en_US synthetic speech; 16kHz mono PCM",
+  "notes": [
+    "ASR fixtures are synthetic, not human recordings or private logs.",
+    "Native FFI is a cached binary identified by SHA256; Rust was not rebuilt.",
+    "RSS includes Python, Torch and child server, not a native ONNX/Core ML deployment measurement."
+  ],
+  "asr_revision": "8ae155301e23d820d82aa60d24817c900e69e487",
+  "asr_packages": {
+    "parakeet-mlx": "0.5.1",
+    "mlx": "0.31.2",
+    "numpy": "2.4.6"
+  },
+  "native_prompt_bytes_present_in_binary": true,
+  "suite": "expanded-v2",
+  "tier_counts": [
+    190,
+    1000
+  ],
+  "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+  "resource_policy": {
+    "reserve_physical_free_gib": 16,
+    "pressure": "normal only",
+    "swapout_delta": "zero",
+    "cpu_nice": 19,
+    "priority": "other experiment"
+  },
+  "performance_limit": "Concurrent priority workload; latency is not an isolated hardware comparison.",
+  "planned_quality_calls": 9660,
+  "recorded_quality_calls": 9660,
+  "status": "complete",
+  "additional_latency_run": "190 cases x5 rounds x7 paths; peer experiment paused; normal CPU priority",
+  "completed_date_local": "2026-10-16",
+  "recorded_latency_calls": 6650,
+  "latency_memory_policy": "16GiB estimated available; normal pressure; zero new swap-outs; initial physical-free admission hold retained in history"
+}

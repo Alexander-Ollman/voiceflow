@@ -1,0 +1,159 @@
+{
+  "status": "complete text-only cohort; full1000 suite also complete",
+  "backends": {
+    "identity": {
+      "cases": 800,
+      "exact": 247,
+      "by_source": {
+        "authored": {
+          "cases": 43,
+          "exact": 18
+        },
+        "controlled": {
+          "cases": 357,
+          "exact": 128
+        },
+        "jfleg": {
+          "cases": 200,
+          "exact": 56
+        },
+        "wi-dev": {
+          "cases": 200,
+          "exact": 45
+        }
+      }
+    },
+    "rules": {
+      "cases": 800,
+      "exact": 187,
+      "by_source": {
+        "authored": {
+          "cases": 43,
+          "exact": 14
+        },
+        "controlled": {
+          "cases": 357,
+          "exact": 79
+        },
+        "jfleg": {
+          "cases": 200,
+          "exact": 53
+        },
+        "wi-dev": {
+          "cases": 200,
+          "exact": 41
+        }
+      }
+    },
+    "pcs": {
+      "cases": 800,
+      "exact": 131,
+      "by_source": {
+        "authored": {
+          "cases": 43,
+          "exact": 14
+        },
+        "controlled": {
+          "cases": 357,
+          "exact": 49
+        },
+        "jfleg": {
+          "cases": 200,
+          "exact": 34
+        },
+        "wi-dev": {
+          "cases": 200,
+          "exact": 34
+        }
+      }
+    },
+    "pcs_guarded": {
+      "cases": 800,
+      "exact": 274,
+      "by_source": {
+        "authored": {
+          "cases": 43,
+          "exact": 25
+        },
+        "controlled": {
+          "cases": 357,
+          "exact": 150
+        },
+        "jfleg": {
+          "cases": 200,
+          "exact": 57
+        },
+        "wi-dev": {
+          "cases": 200,
+          "exact": 42
+        }
+      }
+    },
+    "gector": {
+      "cases": 800,
+      "exact": 325,
+      "by_source": {
+        "authored": {
+          "cases": 43,
+          "exact": 25
+        },
+        "controlled": {
+          "cases": 357,
+          "exact": 192
+        },
+        "jfleg": {
+          "cases": 200,
+          "exact": 51
+        },
+        "wi-dev": {
+          "cases": 200,
+          "exact": 57
+        }
+      }
+    },
+    "coedit": {
+      "cases": 800,
+      "exact": 339,
+      "by_source": {
+        "authored": {
+          "cases": 43,
+          "exact": 29
+        },
+        "controlled": {
+          "cases": 357,
+          "exact": 203
+        },
+        "jfleg": {
+          "cases": 200,
+          "exact": 52
+        },
+        "wi-dev": {
+          "cases": 200,
+          "exact": 55
+        }
+      }
+    },
+    "bonsai": {
+      "cases": 800,
+      "exact": 348,
+      "by_source": {
+        "authored": {
+          "cases": 43,
+          "exact": 26
+        },
+        "controlled": {
+          "cases": 357,
+          "exact": 207
+        },
+        "jfleg": {
+          "cases": 200,
+          "exact": 66
+        },
+        "wi-dev": {
+          "cases": 200,
+          "exact": 49
+        }
+      }
+    }
+  }
+}

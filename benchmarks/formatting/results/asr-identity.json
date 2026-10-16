@@ -1,0 +1,639 @@
+{
+  "backend": "identity",
+  "load_seconds": 1.7499551177024841e-06,
+  "first_inference_seconds": 4.169996827840805e-07,
+  "peak_process_tree_rss_bytes": 24772608,
+  "repeats": 3,
+  "fixture_sha256": "bf592cd84f7a14ba58b835eb7ad27c3a3555b90b27ef3f5efd79542cb8405da0",
+  "native_library_sha256": null,
+  "python": "3.12.12 (main, Oct  9 2025, 11:07:00) [Clang 17.0.0 (clang-1700.4.4.1)]",
+  "platform": "macOS-15.6-arm64-arm-64bit",
+  "rows": [
+    {
+      "id": "asr-preserve-01",
+      "category": "preserve",
+      "source": "synthetic_tts_parakeet",
+      "input": "Please send a report by Friday.",
+      "references": [
+        "Please send the report by Friday."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "Please send the report by Friday.",
+      "audio_sha256": "8303d2483c2bb9ca7d2f5282d7024bfc2f1f757555e8492ca75f1e98aa40aa2d",
+      "asr_elapsed_ms": 403,
+      "output": "Please send a report by Friday.",
+      "outputs": [
+        "Please send a report by Friday.",
+        "Please send a report by Friday.",
+        "Please send a report by Friday."
+      ],
+      "latency_ms": [
+        0.000250060111284256,
+        0.000250060111284256,
+        0.000125030055642128
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-preserve-02",
+      "category": "preserve",
+      "source": "synthetic_tts_parakeet",
+      "input": "I do not want to delete the backup.",
+      "references": [
+        "I do not want to delete the backup."
+      ],
+      "protected": [
+        "not"
+      ],
+      "tts": true,
+      "context": "",
+      "spoken_input": "I do not want to delete the backup.",
+      "audio_sha256": "5a8d91d668b07084df97e71fb5638897b93aaeb2791b4d7a59d5171cfc14a1dd",
+      "asr_elapsed_ms": 37,
+      "output": "I do not want to delete the backup.",
+      "outputs": [
+        "I do not want to delete the backup.",
+        "I do not want to delete the backup.",
+        "I do not want to delete the backup."
+      ],
+      "latency_ms": [
+        0.00037509016692638397,
+        8.405186235904694e-05,
+        4.190951585769653e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-preserve-03",
+      "category": "preserve",
+      "source": "synthetic_tts_parakeet",
+      "input": "The meeting starts at 3.30 p.m.",
+      "references": [
+        "The meeting starts at 3:30 PM."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "The meeting starts at 3:30 PM.",
+      "audio_sha256": "27c56c6b2ed80bc0490b63f727e310aece8bfbc41d20bfa1017bb175b5a69acb",
+      "asr_elapsed_ms": 41,
+      "output": "The meeting starts at 3.30 p.m.",
+      "outputs": [
+        "The meeting starts at 3.30 p.m.",
+        "The meeting starts at 3.30 p.m.",
+        "The meeting starts at 3.30 p.m."
+      ],
+      "latency_ms": [
+        8.312053978443146e-05,
+        4.190951585769653e-05,
+        4.190951585769653e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-preserve-04",
+      "category": "preserve",
+      "source": "synthetic_tts_parakeet",
+      "input": "The invoice total is $5,000.",
+      "references": [
+        "The invoice total is $5,000."
+      ],
+      "protected": [
+        "$5,000"
+      ],
+      "tts": true,
+      "context": "",
+      "spoken_input": "The invoice total is $5,000.",
+      "audio_sha256": "792b094ccf768402df03b63e6177fd85ef637632027fd86ff7d5b459a7ecbb55",
+      "asr_elapsed_ms": 41,
+      "output": "The invoice total is $5,000.",
+      "outputs": [
+        "The invoice total is $5,000.",
+        "The invoice total is $5,000.",
+        "The invoice total is $5,000."
+      ],
+      "latency_ms": [
+        4.190951585769653e-05,
+        8.312053978443146e-05,
+        4.21423465013504e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-01",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "Hello how are you?",
+      "references": [
+        "Hello, how are you?"
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "hello how are you",
+      "audio_sha256": "4b1f26a5b4e18695dff47e2cae8677288672ae644e1a12cae173b87cb27a8793",
+      "asr_elapsed_ms": 29,
+      "output": "Hello how are you?",
+      "outputs": [
+        "Hello how are you?",
+        "Hello how are you?",
+        "Hello how are you?"
+      ],
+      "latency_ms": [
+        4.21423465013504e-05,
+        4.21423465013504e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-02",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "Can you send the report by Friday?",
+      "references": [
+        "Can you send the report by Friday?"
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "can you send the report by friday",
+      "audio_sha256": "2401197af3805705b2250d747a6bab1939424f57e9a9e00ffcf1e6e576455c00",
+      "asr_elapsed_ms": 36,
+      "output": "Can you send the report by Friday?",
+      "outputs": [
+        "Can you send the report by Friday?",
+        "Can you send the report by Friday?",
+        "Can you send the report by Friday?"
+      ],
+      "latency_ms": [
+        8.288770914077759e-05,
+        4.0978193283081055e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-03",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "I will call you tomorrow.",
+      "references": [
+        "I will call you tomorrow."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "i will call you tomorrow",
+      "audio_sha256": "0c77c79729205f6a42fbd9d43283432d677cf54a4885d66db12f864cd70ea6d4",
+      "asr_elapsed_ms": 33,
+      "output": "I will call you tomorrow.",
+      "outputs": [
+        "I will call you tomorrow.",
+        "I will call you tomorrow.",
+        "I will call you tomorrow."
+      ],
+      "latency_ms": [
+        4.190951585769653e-05,
+        8.288770914077759e-05,
+        4.21423465013504e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-04",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "Yes that works for me.",
+      "references": [
+        "Yes, that works for me."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "yes that works for me",
+      "audio_sha256": "752f48c97a2d7912056b2bb551944c869ebedb9e45a2be55cf4504eaf2b94101",
+      "asr_elapsed_ms": 30,
+      "output": "Yes that works for me.",
+      "outputs": [
+        "Yes that works for me.",
+        "Yes that works for me.",
+        "Yes that works for me."
+      ],
+      "latency_ms": [
+        4.0978193283081055e-05,
+        8.312053978443146e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-05",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "We finished the test now we can deploy.",
+      "references": [
+        "We finished the test. Now we can deploy."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "we finished the test now we can deploy",
+      "audio_sha256": "a1b7042e6cfc20cfb16b99e3db71f011448ed608860ccb236a764d63a081f674",
+      "asr_elapsed_ms": 37,
+      "output": "We finished the test now we can deploy.",
+      "outputs": [
+        "We finished the test now we can deploy.",
+        "We finished the test now we can deploy.",
+        "We finished the test now we can deploy."
+      ],
+      "latency_ms": [
+        8.405186235904694e-05,
+        4.190951585769653e-05,
+        8.288770914077759e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-06",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "When will the meeting start?",
+      "references": [
+        "When will the meeting start?"
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "when will the meeting start",
+      "audio_sha256": "a0f1fa158076c884b16ccaaa65e24a09f6918d20b20fd2abc18aa01fd68d1273",
+      "asr_elapsed_ms": 30,
+      "output": "When will the meeting start?",
+      "outputs": [
+        "When will the meeting start?",
+        "When will the meeting start?",
+        "When will the meeting start?"
+      ],
+      "latency_ms": [
+        8.405186235904694e-05,
+        4.21423465013504e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-07",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "Thanks for your help.",
+      "references": [
+        "Thanks for your help."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "thanks for your help",
+      "audio_sha256": "d6a26526978c4365d6d29238c5eefb27ae665806bf0c240d62476edf999e8417",
+      "asr_elapsed_ms": 30,
+      "output": "Thanks for your help.",
+      "outputs": [
+        "Thanks for your help.",
+        "Thanks for your help.",
+        "Thanks for your help."
+      ],
+      "latency_ms": [
+        4.21423465013504e-05,
+        4.190951585769653e-05,
+        8.381903171539307e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-punctuation-08",
+      "category": "punctuation",
+      "source": "synthetic_tts_parakeet",
+      "input": "I live in Seattle.",
+      "references": [
+        "I live in Seattle."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "i live in seattle",
+      "audio_sha256": "edae878bd282441dffac7d279223311b6c6085d8345a1fc13194692c8ef7dd7a",
+      "asr_elapsed_ms": 33,
+      "output": "I live in Seattle.",
+      "outputs": [
+        "I live in Seattle.",
+        "I live in Seattle.",
+        "I live in Seattle."
+      ],
+      "latency_ms": [
+        8.405186235904694e-05,
+        4.21423465013504e-05,
+        4.190951585769653e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-01",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "These as the wrong settings.",
+      "references": [
+        "These are the wrong settings."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "These is the wrong settings.",
+      "audio_sha256": "7a4cb20aea96f6183a2e7ef16991690e70f5dddbb2bf545f6621ecfe0f4a09b4",
+      "asr_elapsed_ms": 34,
+      "output": "These as the wrong settings.",
+      "outputs": [
+        "These as the wrong settings.",
+        "These as the wrong settings.",
+        "These as the wrong settings."
+      ],
+      "latency_ms": [
+        8.288770914077759e-05,
+        8.312053978443146e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-02",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "She go to the office every day.",
+      "references": [
+        "She goes to the office every day."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "She go to the office every day.",
+      "audio_sha256": "f9638fb6c9366124c9ffcb3f11e263ee1299d10cad1ea0f6f1ef28723c6f4920",
+      "asr_elapsed_ms": 38,
+      "output": "She go to the office every day.",
+      "outputs": [
+        "She go to the office every day.",
+        "She go to the office every day.",
+        "She go to the office every day."
+      ],
+      "latency_ms": [
+        8.405186235904694e-05,
+        4.190951585769653e-05,
+        8.405186235904694e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-03",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "I has two questions.",
+      "references": [
+        "I have two questions."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "I has two questions.",
+      "audio_sha256": "d0e07f8959184e4d4f721c7202ce8a7826dcb596b97d6a64c8d1549c302a3dd2",
+      "asr_elapsed_ms": 33,
+      "output": "I has two questions.",
+      "outputs": [
+        "I has two questions.",
+        "I has two questions.",
+        "I has two questions."
+      ],
+      "latency_ms": [
+        0.00016693957149982452,
+        4.190951585769653e-05,
+        4.190951585769653e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-04",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "We was ready yesterday.",
+      "references": [
+        "We were ready yesterday."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "We was ready yesterday.",
+      "audio_sha256": "e3bd771b639aa60138bcc74d91dd206faaa86502c1579803bcd85562b7b00c21",
+      "asr_elapsed_ms": 34,
+      "output": "We was ready yesterday.",
+      "outputs": [
+        "We was ready yesterday.",
+        "We was ready yesterday.",
+        "We was ready yesterday."
+      ],
+      "latency_ms": [
+        8.288770914077759e-05,
+        4.0978193283081055e-05,
+        8.312053978443146e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-05",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "There are a problem with the microphone.",
+      "references": [
+        "There is a problem with the microphone."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "There are a problem with the microphone.",
+      "audio_sha256": "2d4f7ab51c2d0876506cfbc5e6c6b1c68e2d2dee9b01dc6607a4c9b0e80d797a",
+      "asr_elapsed_ms": 35,
+      "output": "There are a problem with the microphone.",
+      "outputs": [
+        "There are a problem with the microphone.",
+        "There are a problem with the microphone.",
+        "There are a problem with the microphone."
+      ],
+      "latency_ms": [
+        8.312053978443146e-05,
+        8.312053978443146e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-06",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "He did not went to the meeting.",
+      "references": [
+        "He did not go to the meeting."
+      ],
+      "protected": [
+        "not"
+      ],
+      "tts": true,
+      "context": "",
+      "spoken_input": "He did not went to the meeting.",
+      "audio_sha256": "1ba94431783787c3a1b03c669da17cecc11a96d4f39f3bc83e4560eed3bd057c",
+      "asr_elapsed_ms": 35,
+      "output": "He did not went to the meeting.",
+      "outputs": [
+        "He did not went to the meeting.",
+        "He did not went to the meeting.",
+        "He did not went to the meeting."
+      ],
+      "latency_ms": [
+        8.288770914077759e-05,
+        4.190951585769653e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-07",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "These are the correct files.",
+      "references": [
+        "These are the correct files."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "This are the correct files.",
+      "audio_sha256": "eadcc8cae467cf984bc2d6543c08ccbb71133e4eaf9943cff4496cd8da1c3ee0",
+      "asr_elapsed_ms": 45,
+      "output": "These are the correct files.",
+      "outputs": [
+        "These are the correct files.",
+        "These are the correct files.",
+        "These are the correct files."
+      ],
+      "latency_ms": [
+        4.21423465013504e-05,
+        4.190951585769653e-05,
+        4.0978193283081055e-05
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "asr-grammar-08",
+      "category": "grammar",
+      "source": "synthetic_tts_parakeet",
+      "input": "I look forward to hear from you.",
+      "references": [
+        "I look forward to hearing from you."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "spoken_input": "I look forward to hear from you.",
+      "audio_sha256": "f86bc1810b2924637bcf71e6d8a40dadf430ce736acc589028c708787b6bde78",
+      "asr_elapsed_ms": 32,
+      "output": "I look forward to hear from you.",
+      "outputs": [
+        "I look forward to hear from you.",
+        "I look forward to hear from you.",
+        "I look forward to hear from you."
+      ],
+      "latency_ms": [
+        4.190951585769653e-05,
+        4.0978193283081055e-05,
+        8.288770914077759e-05
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    }
+  ]
+}
