@@ -15,8 +15,10 @@ Bonsai for writing. A whole-utterance classifier returns a label or score; it ca
 replacement sentence that the existing redo endpoint also generates. Token-level
 edit taggers can reconstruct corrected text, as detailed in the follow-up below.
 
-This is a code-informed proposal, not a trained model or a measured speedup.
-No inference behavior or model defaults change in this update.
+The [local formatter benchmark](reviews/formatting-benchmark-2026-10-15.md) now measures
+three candidates against Bonsai and rules-only controls, with a context-aware
+shadow verifier prototype. These are exploratory measurements, not a trained
+routing model. No inference behavior or model defaults change in this update.
 
 ## Where to use each approach
 
@@ -115,7 +117,9 @@ the total application is lighter.
 Checked October 15, 2026. A whole-utterance intent classifier only chooses an
 action, but a **token-level edit tagger** can change text by choosing an edit for
 each token. That makes the earlier classifier/generator split incomplete for
-formatting. These candidates have not been benchmarked or integrated here.
+formatting. The [follow-up benchmark](reviews/formatting-benchmark-2026-10-15.md) measures
+a NeMo-derived ONNX checkpoint, one GECToR checkpoint, and community CoEdIT-small.
+None is integrated into the shipping application.
 
 | Candidate | What it can do | Fit for VoiceFlow | Main limitation |
 |---|---|---|---|
@@ -195,7 +199,7 @@ source, base-model, dataset and fine-tuned-weight metadata are distinct.
 [Official large model](https://huggingface.co/grammarly/coedit-large),
 [dataset card](https://huggingface.co/datasets/grammarly/coedit).
 
-### Proposed comparison
+### Comparison scope
 
 Benchmark three alternatives against current Bonsai and a rules-only control:
 
@@ -212,7 +216,9 @@ Score punctuation/case accuracy, edit precision, unnecessary-edit rate, semantic
 preservation and exact preservation of protected spans. Report p50/p95 latency,
 peak RSS/Metal memory and cold startup on the same Mac. Retain Bonsai for Compose,
 style-heavy rewriting and ambiguous semantic repairs until results justify a
-change. No benchmark results are claimed by this research update.
+change. The follow-up report records exact-match and preservation results, latency,
+and process RSS. It does not establish calibrated confidence, edit precision,
+or semantic safety on real-world dictation.
 
 A native Core ML or ONNX implementation could avoid another Python/PyTorch
 runtime, but tokenizer parity, edit reconstruction, conversion support and

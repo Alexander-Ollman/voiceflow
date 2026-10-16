@@ -52,7 +52,7 @@ import traceback
 import uuid
 import wave
 
-LOG_PATH = "/tmp/voiceflow_parakeet_daemon.log"
+LOG_PATH = os.environ.get("VOICEFLOW_PARAKEET_LOG", "/tmp/voiceflow_parakeet_daemon.log")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",

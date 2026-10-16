@@ -1,0 +1,23 @@
+{
+  "pcs": {
+    "repo": "1-800-BAD-CODE/punctuation_fullstop_truecase_english",
+    "revision": "b26fd1c40e88678859048898218ea4edcc24c84a",
+    "license": "apache-2.0",
+    "role": "punctuation, capitalization, segmentation; NeMo-derived ONNX"
+  },
+  "gector": {
+    "repo": "gotutiyan/gector-roberta-base-5k",
+    "revision": "adaac6fb919431fb5a038b1e449055ae638613a4",
+    "license": "non-commercial research only; not a shipping candidate",
+    "source": "https://github.com/gotutiyan/gector",
+    "source_revision": "a4a342ed7c4733a34263443b605b7edffbef7099",
+    "role": "single RoBERTa-base edit tagger",
+    "verb_dictionary_revision": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd"
+  },
+  "coedit": {
+    "repo": "jbochi/coedit-small",
+    "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+    "license": "apache-2.0 as declared in model card",
+    "role": "small FLAN-T5 text editor"
+  }
+}
