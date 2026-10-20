@@ -285,6 +285,23 @@ Two zero-config systems pre-populate sensible defaults:
 - **Spelled-out words** &mdash; "S M O L L M" → "SMOLLM"
 - **Technical terms** &mdash; Configurable replacement dictionary
 
+## Troubleshooting
+
+### VoiceFlow doesn't show up in Raycast, Alfred or Spotlight
+
+Launchers index `/Applications` through Spotlight and cache what they learn about each bundle **by file identity**, not by path. If the cached record for `/Applications/VoiceFlow.app` went stale — for example it was first seen half-copied, or a staged update with the same bundle id was indexed from `~/Library` — the launcher keeps hiding the app even though the bundle on disk is fine. (Newer builds stage updates in a `.noindex` folder and install atomically to avoid this.) To force a fresh record without reinstalling, give the bundle a new file identity:
+
+```bash
+osascript -e 'quit app "VoiceFlow"'
+ditto /Applications/VoiceFlow.app /Applications/.VoiceFlow-fresh   # exact copy, keeps the signature
+mv /Applications/VoiceFlow.app ~/.Trash/VoiceFlow-old.app
+mv /Applications/.VoiceFlow-fresh /Applications/VoiceFlow.app
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/VoiceFlow.app
+open -a VoiceFlow
+```
+
+If that still doesn't do it, the launcher's own index is the problem: in Raycast, open **Settings → Extensions → Applications** and remove and re-add the `/Applications` folder (or quit Raycast, delete `~/Library/Application Support/com.raycast.macos/app_index.db*`, and relaunch it).
+
 ## Building from Source
 
 ### Prerequisites

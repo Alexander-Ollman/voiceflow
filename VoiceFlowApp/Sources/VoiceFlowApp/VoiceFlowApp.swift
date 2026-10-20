@@ -2342,22 +2342,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let fm = FileManager.default
-            // Remove existing copy if present
+            // Copy into /Applications under a temporary, non-.app name first,
+            // then rename into place. A 600 MB bundle takes seconds to copy;
+            // Spotlight, Raycast and Launch Services all watch /Applications
+            // and would otherwise index a half-copied VoiceFlow.app (no
+            // executable yet, no signature) and can cache that verdict. The
+            // rename is atomic, so the bundle only ever appears fully formed.
+            // (Source may be on a read-only volume, hence copy rather than move.)
+            let stagingPath = (applicationsDir as NSString)
+                .appendingPathComponent(".\(appName).installing-\(ProcessInfo.processInfo.processIdentifier)")
+            try? fm.removeItem(atPath: stagingPath)
+            try fm.copyItem(atPath: appPath, toPath: stagingPath)
+
+            // Strip quarantine xattr so macOS doesn't re-prompt (and doesn't
+            // translocate the copy on first launch).
+            let stripProcess = Process()
+            stripProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            stripProcess.arguments = ["-dr", "com.apple.quarantine", stagingPath]
+            try? stripProcess.run()
+            stripProcess.waitUntilExit()
+
+            // Replace any existing copy and move the finished bundle into place.
             if fm.fileExists(atPath: destPath) {
                 try fm.removeItem(atPath: destPath)
             }
-            // Copy to /Applications (source may be on a read-only volume)
-            try fm.copyItem(atPath: appPath, toPath: destPath)
+            try fm.moveItem(atPath: stagingPath, toPath: destPath)
 
             // Best-effort cleanup of the original (fails silently on read-only volumes)
             try? fm.removeItem(atPath: appPath)
 
-            // Strip quarantine xattr so macOS doesn't re-prompt
-            let stripProcess = Process()
-            stripProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-            stripProcess.arguments = ["-dr", "com.apple.quarantine", destPath]
-            try? stripProcess.run()
-            stripProcess.waitUntilExit()
+            // Tell Launch Services about the new bundle right away rather than
+            // waiting for its next scan.
+            Self.registerWithLaunchServices(path: destPath)
 
             // Relaunch from /Applications after a short delay to let this instance exit
             let script = """
@@ -2379,6 +2395,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             errAlert.alertStyle = .warning
             errAlert.addButton(withTitle: "OK")
             errAlert.runModal()
+        }
+    }
+
+    /// Force Launch Services to (re)read a bundle that was just installed or
+    /// swapped at `path`, so Spotlight-backed launchers pick it up without a
+    /// logout. `LSRegisterURL` is the public API for exactly this.
+    static func registerWithLaunchServices(path: String) {
+        let url = URL(fileURLWithPath: path) as CFURL
+        let status = LSRegisterURL(url, true)
+        if status != noErr {
+            NSLog("[VoiceFlow] LSRegisterURL(%@) failed: %d", path, status)
         }
     }
 
