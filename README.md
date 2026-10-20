@@ -110,6 +110,25 @@ See [Building from Source](#building-from-source) below — note you'll also nee
 2. **Hold `⌥ Space`** &mdash; Start speaking
 3. **Release `⌥ Space`** &mdash; Text is transcribed by Parakeet, formatted by Bonsai with the right persona for your current app, and pasted at your cursor
 
+### Hotkeys
+
+All four shortcuts are customisable under **Settings → Hotkeys**: click **Record**, then press the keys you want.
+
+| Action | Default | Style |
+|--------|---------|-------|
+| Dictate | `⌥ Space` | Hold to record, release to paste |
+| Dictate with screen context | `⌃⌥ Space` | Hold; adds a screenshot of your screen as context |
+| Edit / repeat last dictation | `⌥⇧ Space` | Hold and re-say, or speak an instruction |
+| Cycle formatting level | `⌃⌥⇧ Space` | Tap |
+
+**Single-key triggers.** A shortcut doesn't have to be a chord — you can bind a single key on its own and just hold it to talk:
+
+- **🌐 fn (Globe)** &mdash; the little key at the bottom-left of Apple keyboards. Hold it to dictate, release to paste, exactly like Apple's built-in dictation but running fully locally. macOS normally uses this key for Emoji & Symbols or Dictation ("Press 🌐 key to" in System Settings › Keyboard); while it's a VoiceFlow hotkey, VoiceFlow sets that system action to **Do Nothing** and restores your original choice when you change the hotkey or quit.
+- **A single modifier** &mdash; right `⌘`, right `⌥`, left `⌃`, etc. Left and right keys are distinguished, so you can keep the other side for normal shortcuts.
+- **A function key** &mdash; `F1`…`F20` may be bound bare (other keys need at least one of `⌃ ⌥ ⌘`).
+
+Pressing any other key while a single-key hotkey is held cancels the recording, so `fn`+arrow or `⌘`+`C` still do what they always did.
+
 ### Editing & repeating
 
 VoiceFlow can replace your **last** dictation in place instead of always appending:
