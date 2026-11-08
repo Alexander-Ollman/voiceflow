@@ -43,12 +43,18 @@ final class SystemIslandGeometry: ObservableObject {
     @Published var leftExtra: CGFloat = 0
     @Published var rightExtra: CGFloat = 0
 
+    /// Measured expansion of the system island while a privacy indicator shows.
+    static let expandedLeft: CGFloat = 38
+    static let expandedRight: CGFloat = 49
+    static let trailingPastIndicator: CGFloat = 25
+
     /// Re-measure against `housing` (screen coordinates) on `screen`.
     func refresh(housing: CGRect, screen: NSScreen) {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
         let screenTopCG = primaryHeight - screen.frame.maxY          // CG coords: origin top-left
         let search = housing.insetBy(dx: -90, dy: 0)
         var minX = housing.minX, maxX = housing.maxX
+        var indicatorMaxX: CGFloat?
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
         for window in windows {
             guard (window[kCGWindowOwnerName as String] as? String) == "Window Server",
@@ -60,8 +66,19 @@ final class SystemIslandGeometry: ObservableObject {
                   x < search.maxX, x + w > search.minX else { continue }
             minX = min(minX, x)
             maxX = max(maxX, x + w)
+            indicatorMaxX = max(indicatorMaxX ?? 0, x + w)
         }
-        let left = (housing.minX - minX).rounded(), right = (maxX - housing.maxX).rounded()
+        // The indicator window is only the dot. Around it, the system expands
+        // the island itself (drawn by the Window Server, not enumerable). On a
+        // Mac17,13 / macOS 27.2 with the mic in use it spans 38 pt left of the
+        // cutout and ~25 pt right of the dot (49 pt right of the cutout).
+        if let indicatorMaxX {
+            minX = min(minX, housing.minX - Self.expandedLeft)
+            maxX = max(maxX, indicatorMaxX + Self.trailingPastIndicator, housing.maxX + Self.expandedRight)
+        }
+        // A little air between the system pill and our wing content.
+        let margin: CGFloat = indicatorMaxX == nil ? 0 : 6
+        let left = (housing.minX - minX + margin).rounded(), right = (maxX - housing.maxX + margin).rounded()
         if left != leftExtra { leftExtra = left }
         if right != rightExtra { rightExtra = right }
     }
