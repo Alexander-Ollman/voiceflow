@@ -1,31 +1,57 @@
 import SwiftUI
 
-/// A fluid, layered waveform for the voice overlay.
+/// Colour swatches for the voice waveform. One gradient runs across the bars
+/// (edges → center → edges); the center stop is the brightest.
+enum WaveformPalette: String, CaseIterable, Identifiable {
+    case glacier, lagoon, aurora, ember, mono
+
+    var id: String { rawValue }
+
+    /// Edge colour, center colour.
+    var stops: (edge: Color, center: Color) {
+        switch self {
+        case .glacier: return (Color(red: 0.45, green: 0.68, blue: 1.00), Color(red: 0.88, green: 0.96, blue: 1.00))
+        case .lagoon:  return (Color(red: 0.05, green: 0.62, blue: 0.70), Color(red: 0.55, green: 1.00, blue: 0.86))
+        case .aurora:  return (Color(red: 0.36, green: 0.86, blue: 0.80), Color(red: 0.78, green: 0.70, blue: 1.00))
+        case .ember:   return (Color(red: 1.00, green: 0.45, blue: 0.40), Color(red: 1.00, green: 0.84, blue: 0.55))
+        case .mono:    return (Color.white.opacity(0.55), Color.white)
+        }
+    }
+
+    static let preferenceKey = "waveformPalette"
+    static let `default`: WaveformPalette = .glacier
+}
+
+/// The voice overlay's waveform: rounded "liquid" bars that rise from the
+/// center line. Each bar is a small spring chasing a target height, so motion
+/// is quick on syllables with a soft, fluid settle.
 ///
-/// The shape is driven by real microphone history: the newest level sits in
-/// the center and older levels spread toward both edges, so speech visibly
-/// ripples outward. Three translucent lens layers with slowly drifting phase
-/// give it a liquid feel. Silence settles to a calm, thin line.
+/// - Listening: bar heights come from real microphone history (~47 Hz):
+///   the newest level drives the center bars, slightly older levels the outer
+///   bars, so speech visibly pushes outward.
+/// - Silence: a faint ripple keeps the object alive without faking speech.
+/// - Thinking: a travelling wave while recognition/formatting runs.
 ///
-/// With Reduce Motion the phase drift stops; the shape still follows the
-/// microphone (that is information, not decoration).
+/// Reduce Motion turns the springs into direct jumps and stops the idle and
+/// thinking motion; the bars still follow the microphone.
 struct LiquidWaveformView: View {
     enum Mode: Equatable {
-        case listening   // driven by the microphone
-        case thinking    // recognizer/formatter busy: low, gently shimmering
+        case listening
+        case thinking
     }
 
     @ObservedObject var history: RecordingWaveformHistory
     var mode: Mode = .listening
+    var palette: WaveformPalette = WaveformPalette(
+        rawValue: UserDefaults.standard.string(forKey: WaveformPalette.preferenceKey) ?? "") ?? .default
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var smoother = LevelSmoother()
+    @State private var physics = BarPhysics()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             Canvas { context, size in
-                let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
-                draw(in: &context, size: size, time: t)
+                draw(in: &context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
             }
         }
         .accessibilityHidden(true)
@@ -33,129 +59,106 @@ struct LiquidWaveformView: View {
 
     // MARK: - Drawing
 
-    private struct Layer {
-        let color: Color
-        let frequency: Double   // wave cycles across the width
-        let speed: Double       // radians per second
-        let gain: Double        // relative height
-        let offset: Double      // phase offset
+    private func draw(in context: inout GraphicsContext, size: CGSize, time: Double) {
+        let pitch: CGFloat = 7          // bar + gap
+        let barWidth: CGFloat = 3.6
+        let count = max(7, Int(size.width / pitch) | 1)   // odd, so one bar sits on center
+        let mid = size.height / 2
+        let maxHalf = size.height / 2
+        let minHalf: CGFloat = barWidth / 2
+
+        let targets = (0..<count).map { target(index: $0, count: count, time: time) }
+        let heights = physics.step(targets: targets, now: time, snap: reduceMotion)
+
+        let used = CGFloat(count) * pitch
+        let originX = (size.width - used) / 2 + (pitch - barWidth) / 2
+        var bars = Path()
+        for (i, h) in heights.enumerated() {
+            let half = minHalf + (maxHalf - minHalf) * CGFloat(min(1, h))
+            let rect = CGRect(x: originX + CGFloat(i) * pitch, y: mid - half, width: barWidth, height: half * 2)
+            bars.addRoundedRect(in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
+        }
+
+        let (edge, center) = palette.stops
+        let shading = GraphicsContext.Shading.linearGradient(
+            Gradient(stops: [
+                .init(color: edge, location: 0),
+                .init(color: center, location: 0.5),
+                .init(color: edge, location: 1),
+            ]),
+            startPoint: CGPoint(x: originX, y: mid),
+            endPoint: CGPoint(x: originX + used - pitch + barWidth, y: mid))
+
+        // Soft glow underneath, then the crisp bars.
+        var glow = context
+        glow.addFilter(.blur(radius: 6))
+        glow.opacity = 0.55
+        glow.fill(bars, with: shading)
+        context.fill(bars, with: shading)
     }
 
-    private static let layers: [Layer] = [
-        Layer(color: VF.Palette.iris,  frequency: 1.15, speed: 4.8, gain: 0.85, offset: 0.0),
-        Layer(color: VF.Palette.lagoon, frequency: 1.65, speed: -6.4, gain: 1.0, offset: 1.7),
-        Layer(color: VF.Palette.mint,  frequency: 2.20, speed: 8.2, gain: 0.7, offset: 3.1),
-    ]
+    /// Target height 0…1 for bar `index`.
+    private func target(index: Int, count: Int, time: Double) -> Double {
+        let center = Double(count - 1) / 2
+        let distance = abs(Double(index) - center) / max(center, 1)   // 0 center … 1 edge
+        let envelope = 1 - 0.45 * distance * distance                  // taller in the middle
+        let motion = reduceMotion ? 0.0 : 1.0
 
-    private func draw(in context: inout GraphicsContext, size: CGSize, time: Double) {
-        let levels = history.levels
-        let mid = size.height / 2
-        let halfHeight = Double(size.height / 2) - 0.5
-
-        let level: Double
         switch mode {
         case .listening:
-            level = smoother.next(Double(Self.energy(levels.last ?? 0)))
+            // Newest level at the center, ~0.4 s old at the edges.
+            let speech = Self.sample(history.levels, age: distance * 0.5)
+            let idle = 0.05 + 0.035 * motion * sin(time * 5.5 - distance * 7)
+            return min(1, max(idle, speech * envelope))
         case .thinking:
-            level = smoother.next(0.24 + 0.06 * sin(time * 4.0))
+            let wave = 0.5 + 0.5 * sin(time * 7.0 * motion - distance * 6)
+            return 0.08 + 0.32 * wave * envelope
         }
-        // Flow faster while speaking: phase advances with a level-scaled clock.
-        let phaseTime = smoother.advancePhase(now: time, level: level)
-
-        let samples = max(24, Int(size.width / 3))
-        context.blendMode = .plusLighter
-
-        for layer in Self.layers {
-            var top: [CGPoint] = []
-            top.reserveCapacity(samples + 1)
-            for i in 0...samples {
-                let x = Double(i) / Double(samples)
-                // Taper to zero at both ends so each layer reads as a liquid lens.
-                let window = pow(sin(.pi * x), 1.6)
-                let local: Double
-                switch mode {
-                case .listening:
-                    // Mirror recent history around the center: newest in the
-                    // middle, ~1 s old at the edges (levels arrive ~12 Hz).
-                    let distance = abs(x - 0.5) * 2               // 0 center … 1 edge
-                    let age = distance * Self.visibleHistoryFraction(levels.count)
-                    local = min(1, 0.5 * level + 0.7 * Self.sample(levels, age: age))
-                case .thinking:
-                    // A soft highlight travelling across the line.
-                    let sweep = (sin(time * 3.2) + 1) / 2
-                    local = level * (0.6 + 0.8 * exp(-pow((x - sweep) * 5, 2)))
-                }
-                let carrier = sin(2 * .pi * layer.frequency * x + layer.speed * phaseTime + layer.offset)
-                let amplitude = max(0.05, local) * layer.gain * window
-                let y = Double(mid) - halfHeight * amplitude * (0.55 + 0.45 * carrier)
-                top.append(CGPoint(x: x * Double(size.width), y: y))
-            }
-
-            var path = Path()
-            path.move(to: top[0])
-            for p in top.dropFirst() { path.addLine(to: p) }
-            // Mirror below the center line for a symmetric lens.
-            for p in top.reversed() { path.addLine(to: CGPoint(x: p.x, y: 2 * mid - p.y)) }
-            path.closeSubpath()
-
-            context.fill(path, with: .linearGradient(
-                Gradient(colors: [layer.color.opacity(0.15), layer.color.opacity(0.95), layer.color.opacity(0.15)]),
-                startPoint: CGPoint(x: 0, y: mid), endPoint: CGPoint(x: size.width, y: mid)))
-        }
-
-        // A bright core line keeps the object legible during silence.
-        context.blendMode = .normal
-        var core = Path()
-        core.move(to: CGPoint(x: size.width * 0.06, y: mid))
-        core.addLine(to: CGPoint(x: size.width * 0.94, y: mid))
-        context.stroke(core, with: .linearGradient(
-            Gradient(colors: [.white.opacity(0), .white.opacity(0.55 - 0.35 * min(1, level * 2)), .white.opacity(0)]),
-            startPoint: CGPoint(x: 0, y: mid), endPoint: CGPoint(x: size.width, y: mid)),
-            lineWidth: 1.2)
     }
 
-    /// Perceptual mapping shared with the bar waveform: quiet speech still moves.
-    static func energy(_ level: Float) -> Float {
+    /// Perceptual mapping: quiet speech still moves the bars.
+    static func energy(_ level: Float) -> Double {
         guard level.isFinite else { return 0 }
-        return pow(min(1, max(0, level) * 3.6), 0.72)
+        return pow(Double(min(1, max(0, level) * 3.6)), 0.72)
     }
 
-    /// Share of the history shown center-to-edge: about one second of audio.
-    private static func visibleHistoryFraction(_ count: Int) -> Double {
-        guard count > 1 else { return 1 }
-        return min(1, 12.0 / Double(count - 1))
-    }
-
-    /// Interpolated level by age (0 = newest, 1 = oldest in the history).
+    /// Interpolated energy by age (0 = newest, 1 = oldest in the history).
     private static func sample(_ levels: [Float], age: Double) -> Double {
-        guard levels.count > 1 else { return Double(energy(levels.first ?? 0)) }
+        guard levels.count > 1 else { return energy(levels.first ?? 0) }
         let position = (1 - age) * Double(levels.count - 1)
         let lower = Int(position.rounded(.down))
         let upper = min(levels.count - 1, lower + 1)
         let fraction = position - Double(lower)
-        let a = Double(energy(levels[lower])), b = Double(energy(levels[upper]))
+        let a = energy(levels[lower]), b = energy(levels[upper])
         return a + (b - a) * fraction
     }
 }
 
-/// Fast attack, slow release, so syllables pop and pauses settle smoothly.
-/// A reference type so the Canvas closure can advance it per frame.
-final class LevelSmoother {
-    private var value: Double = 0
-    private var phase: Double = 0
+/// Per-bar springs, advanced once per rendered frame. A reference type so the
+/// Canvas closure can keep state between frames.
+final class BarPhysics {
+    private var heights: [Double] = []
+    private var velocities: [Double] = []
     private var lastTime: Double?
 
-    /// A clock that runs at 1× in silence and up to ~1.8× while speaking.
-    func advancePhase(now: Double, level: Double) -> Double {
-        defer { lastTime = now }
-        guard let lastTime, now > lastTime, now - lastTime < 0.25 else { return phase }
-        phase += (now - lastTime) * (1 + 0.8 * min(1, level * 1.5))
-        return phase
-    }
-
-    func next(_ target: Double) -> Double {
-        let rate = target > value ? 0.45 : 0.08
-        value += (target - value) * rate
-        return value
+    func step(targets: [Double], now: Double, snap: Bool) -> [Double] {
+        if heights.count != targets.count {
+            heights = targets
+            velocities = Array(repeating: 0, count: targets.count)
+        }
+        let dt = min(1.0 / 30.0, max(0, now - (lastTime ?? now)))
+        lastTime = now
+        if snap || dt == 0 {
+            heights = targets
+            return heights
+        }
+        // Stiff, slightly under-damped: fast rise, a small fluid overshoot.
+        let stiffness = 520.0, damping = 26.0
+        for i in heights.indices {
+            let force = stiffness * (targets[i] - heights[i]) - damping * velocities[i]
+            velocities[i] += force * dt
+            heights[i] = min(1.15, max(0, heights[i] + velocities[i] * dt))
+        }
+        return heights
     }
 }

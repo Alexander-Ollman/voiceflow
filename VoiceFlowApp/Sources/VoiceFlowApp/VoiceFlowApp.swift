@@ -2487,8 +2487,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
-        // Check accessibility permission (required for auto-paste)
-        checkAccessibilityPermission()
+        // Check accessibility permission (required for auto-paste). Deferred
+        // to the next run-loop turn: the alert is modal, and running it inline
+        // blocked the rest of launch (speech/LLM startup) until dismissed while
+        // hotkeys were already live, so dictations recorded and then failed
+        // with "transcribe called but state is unloaded".
+        DispatchQueue.main.async { [weak self] in self?.checkAccessibilityPermission() }
 
         // Request microphone permission (entitlements ensure the system dialog appears)
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
@@ -2713,6 +2717,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Open Settings")
             alert.addButton(withTitle: "Later")
 
+            // Launched in the background, the alert could sit hidden behind
+            // other windows; bring it forward so the user can see it.
+            NSApp.activate(ignoringOtherApps: true)
             let response = alert.runModal()
 
             if response == .alertFirstButtonReturn {
@@ -3855,10 +3862,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // showOverlay(state: .recording)  -- handled above
 
             // Subscribe to audio level changes
-            audioLevelCancellable = audioRecorder.$audioLevel
+            audioLevelCancellable = audioRecorder.meterLevels
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] level in
-                    self?.overlayState.audioLevel = level
+                .sink { [weak self] levels in
+                    for level in levels { self?.overlayState.audioLevel = level }
                 }
 
             // Visual context: capture screenshot when using Control+Option+Space hotkey
@@ -5076,10 +5083,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingMenuItem?.title = "Recording edit... (release ⌥⇧Space)"
             showOverlay(state: .recording)
 
-            audioLevelCancellable = audioRecorder.$audioLevel
+            audioLevelCancellable = audioRecorder.meterLevels
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] level in
-                    self?.overlayState.audioLevel = level
+                .sink { [weak self] levels in
+                    for level in levels { self?.overlayState.audioLevel = level }
                 }
             NSLog("[VoiceFlow] Edit recording started (target=%@)",
                   target.localizedName ?? "?")

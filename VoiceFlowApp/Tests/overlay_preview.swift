@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Live preview of the voice overlay over whatever is on screen.
 /// Loops: listening → live text → formatting → transcribing → AI command.
+/// Pass --palette glacier|lagoon|aurora|ember|mono to pick a swatch.
 /// Pass --mic to drive the waveform from the real microphone instead of a
 /// synthetic speech envelope. Quit with Ctrl-C.
 @MainActor final class OverlayPreview {
@@ -14,6 +15,9 @@ import SwiftUI
     let words = "Hey team, quick update on the release. The onboarding check is merged and the new overlay is ready for review, so please try it on your machines today and tell me what feels off".split(separator: " ")
 
     func start() {
+        if let i = CommandLine.arguments.firstIndex(of: "--palette"), i + 1 < CommandLine.arguments.count {
+            UserDefaults.standard.set(CommandLine.arguments[i + 1], forKey: WaveformPalette.preferenceKey)
+        }
         let screen = NSScreen.main!.visibleFrame
         let size = NSSize(width: RecordingOverlayView.cardWidth + RecordingOverlayView.envelopeMargin * 2,
                           height: RecordingOverlayView.maxTextHeight + 46 + 32 + RecordingOverlayView.envelopeMargin * 2)
@@ -29,9 +33,9 @@ import SwiftUI
         panel.contentView = NSHostingView(rootView: RecordingOverlayView(state: state))
         panel.orderFrontRegardless()
         if useMic { recorder.start() }
-        // ~12 Hz, matching AudioRecorder's 4096-frame tap at 48 kHz, so the
-        // preview moves exactly as the app does.
-        Timer.scheduledTimer(withTimeInterval: 1.0 / 12.0, repeats: true) { _ in
+        // ~47 Hz, matching AudioRecorder.meterLevels (4 slices per 4096-frame
+        // tap at 48 kHz), so the preview moves exactly as the app does.
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 47.0, repeats: true) { _ in
             MainActor.assumeIsolated { self.step() }
         }
     }
@@ -44,8 +48,8 @@ import SwiftUI
 
     func step() {
         tick += 1
-        let t = Double(tick % 192) / 12.0   // 16s loop
-        let level = useMic ? recorder.level : syntheticLevel(Double(tick) / 12.0)
+        let t = Double(tick % 752) / 47.0   // 16s loop
+        let level = useMic ? recorder.level : syntheticLevel(Double(tick) / 47.0)
         switch t {
         case ..<3: state.state = .recording; state.audioLevel = level
         case ..<9:
