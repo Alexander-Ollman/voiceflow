@@ -209,9 +209,9 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <key>CFBundleDisplayName</key>
     <string>VoiceFlow</string>
     <key>CFBundleVersion</key>
-    <string>2.7.1</string>
+    <string>3.0.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.7.1</string>
+    <string>3.0.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>

@@ -1,16 +1,31 @@
 # Release Notes
 
-## Unreleased — Setup checks, reliable restart, and desktop integration
+## v3.0.0 — A new look, a voice overlay that shows it heard you, and Dynamic Island support
 
-- Add an onboarding setup check and a repeatable Settings diagnostic for hotkeys, microphone, recognition, formatting, and verified insertion.
-- Show VoiceFlow in the Dock and app switcher by default, with an optional menu-bar-only mode.
-- Keep the UI responsive during helper shutdown and native initialization/cleanup; wait for exit before relaunching.
-- Add short health-probe deadlines, owned-helper watchdogs, visible recognition errors, and a guard for very short audio clips.
-- Support Globe/fn dictation while preserving and restoring the system action.
-- Hide staged updates from Spotlight, register completed installs, and improve bundle metadata.
-- Preserve the previous installation if app relocation fails.
-- Center a wider waveform on a restrained recording surface; render bounded microphone history without a waveform timer.
-- Add an assessment of lightweight decision models; inference defaults remain unchanged.
+### A new voice overlay
+- One small glass capsule replaces the old pill and gradient cards. Native Liquid Glass on macOS 26 and later.
+- The waveform responds to your voice in real time: fine bars that rise from the center at your display's full frame rate.
+- When you release the shortcut, a quick flare shows you were heard, then a soft glide while VoiceFlow works.
+- **Green** when your text lands; **amber** when nothing was inserted, so a failure no longer looks like the overlay just vanished.
+- Choose the waveform colour in Settings → Voice overlay: Glacier, Lagoon, Aurora, Ember or Mono.
+
+### Dynamic Island and notch
+- New **Position** setting: show the overlay beside the Dynamic Island or notch instead of the bottom of the screen.
+- It makes room for macOS's microphone indicator, never covers menu-bar items, and falls back to the bottom of the screen on displays without a camera housing.
+
+### One consistent design
+- Setup, Settings, Logs, Tips and the AI result panel share one dark-glass look and the VoiceFlow aqua palette.
+- Settings polish: switches line up, App Profiles show real app icons, and the speech model reports its real size.
+
+### Onboarding
+- A setup check confirms your shortcut, microphone, recognition, formatting and insertion, and stays available in Settings → Diagnostics.
+- A new **Try it out** step lets you dictate, fix it by voice and change the style before you start.
+
+### Reliability
+- Fixed: dictation could record but never paste after launch if VoiceFlow was waiting for Accessibility permission.
+- Fixed: the first-run model download slowed to a crawl whenever the setup window was behind another app.
+- Restart and quit stay responsive while helpers shut down; short-clip and stalled-helper guards.
+- Hold the 🌐 fn (Globe) key to dictate; VoiceFlow can show in the Dock and app switcher; installs and updates stay discoverable by Spotlight, Raycast and Alfred; a failed install relocation keeps your previous copy.
 
 ## v2.7.0 — Keep Bluetooth headphones in high-quality audio while dictating
 
