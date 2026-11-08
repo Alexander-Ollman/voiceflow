@@ -7617,7 +7617,7 @@ struct VoiceOverlaySettings: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white.opacity(0.9))
                     Text(hasHousing
-                         ? "Dynamic Island and Notch grow out of the camera housing. Displays without one use the bottom of the screen."
+                         ? "Dynamic Island and Notch attach just below the camera, leaving the menu bar and the system's microphone indicator uncovered. Displays without a camera housing use the bottom of the screen."
                          : "This Mac's displays have no camera housing, so the overlay appears at the bottom of the screen.")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.55))

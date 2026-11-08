@@ -35,23 +35,31 @@ extension NSScreen {
     }
 }
 
-/// The voice overlay drawn around the camera housing. Pure black so it merges
-/// with the housing on OLED and mini-LED panels; nothing is drawn over the
-/// housing itself. Waveform in the leading wing, status in the trailing wing,
-/// live text expands below.
+/// The voice overlay attached to the camera housing.
+///
+/// The housing band itself is never drawn over: on Dynamic Island Macs the
+/// system owns the island (it expands for the microphone indicator and other
+/// activity), and on notched Macs the notch is fixed hardware with menu-bar
+/// items and indicators on both sides. So everything here hangs *below* it:
+/// - Island: a separate black pill just under the island.
+/// - Notch: the shape is exactly notch-wide inside the menu-bar band (black
+///   hardware there anyway), then widens only below the menu bar.
+/// Waveform on the left, status on the right; live text expands below.
 struct IslandOverlayView: View {
     @ObservedObject var state: OverlayState
     let style: OverlayPlacement          // .island or .notch
     /// Housing size in points (from NSScreen.cameraHousingFrame).
     let housing: CGSize
 
-    static let wing: CGFloat = 76
+    static let compactWidth: CGFloat = 196
+    static let rowHeight: CGFloat = 34
     static let expandedWidth: CGFloat = 420
     static let maxTextHeight: CGFloat = 180
+    static let islandGap: CGFloat = 6
     /// Panel size: room for the widest/tallest state plus a shadow margin.
     static func panelSize(housing: CGSize) -> CGSize {
-        CGSize(width: max(expandedWidth, housing.width + wing * 2) + 40,
-               height: housing.height + maxTextHeight + 70)
+        CGSize(width: expandedWidth + 40,
+               height: housing.height + islandGap + rowHeight + maxTextHeight + 70)
     }
 
     private var text: String {
@@ -61,13 +69,7 @@ struct IslandOverlayView: View {
         }
     }
     private var expanded: Bool { !text.isEmpty }
-
-    /// Island floats just below the top edge and reaches slightly past the
-    /// housing band so it fully covers the system's own island shape; notch is
-    /// flush to the top.
-    private var topInset: CGFloat { style == .island ? 3 : 0 }
-    private var bandHeight: CGFloat { style == .island ? housing.height + 3 : housing.height }
-    private var compactWidth: CGFloat { housing.width + Self.wing * 2 }
+    private var bodyWidth: CGFloat { expanded ? Self.expandedWidth : Self.compactWidth }
 
     private var waveMode: LiquidWaveformView.Mode {
         switch state.state {
@@ -80,20 +82,25 @@ struct IslandOverlayView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .top) {
-                shape
-                    .fill(Color.black)
-                    .shadow(color: .black.opacity(expanded ? 0.35 : 0), radius: 12, y: 6)
+            if style == .island {
+                Color.clear.frame(height: housing.height + Self.islandGap)
+                content
+                    .background(
+                        RoundedRectangle(cornerRadius: expanded ? 22 : Self.rowHeight / 2, style: .continuous)
+                            .fill(Color.black)
+                            .shadow(color: .black.opacity(0.3), radius: 10, y: 4))
+            } else {
                 VStack(spacing: 0) {
-                    wings.frame(height: bandHeight)
-                    if expanded {
-                        transcript.transition(.opacity)
-                    }
+                    Color.clear.frame(width: bodyWidth, height: housing.height)
+                    content
                 }
+                .fixedSize()
+                .background(
+                    NotchDropShape(neckWidth: housing.width, neckHeight: housing.height,
+                                   bottomRadius: expanded ? 22 : 16)
+                        .fill(Color.black)
+                        .shadow(color: .black.opacity(expanded ? 0.3 : 0), radius: 10, y: 4))
             }
-            .frame(width: expanded ? Self.expandedWidth : compactWidth)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, topInset)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -103,23 +110,21 @@ struct IslandOverlayView: View {
         .accessibilityLabel(accessibilityText)
     }
 
-    private var shape: some Shape {
-        style == .notch
-            ? AnyShape(NotchShape(bottomRadius: expanded ? 22 : 14, earRadius: 6))
-            : AnyShape(RoundedRectangle(cornerRadius: expanded ? 24 : bandHeight / 2, style: .continuous))
-    }
-
-    /// Left wing: waveform. Middle: the housing (left empty). Right wing: status.
-    private var wings: some View {
-        HStack(spacing: 0) {
-            LiquidWaveformView(history: state.waveform, mode: waveMode)
-                .frame(width: Self.wing - 22, height: 14)
-                .frame(width: Self.wing)
-            Color.clear.frame(width: housing.width)
-            IslandStatus(state: state)
-                .frame(width: Self.wing)
+    private var content: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                LiquidWaveformView(history: state.waveform, mode: waveMode)
+                    .frame(width: 110, height: 18)
+                IslandStatus(state: state)
+                    .frame(width: 34, alignment: .trailing)
+            }
+            .frame(height: Self.rowHeight)
+            if expanded {
+                transcript.transition(.opacity)
+            }
         }
-        .frame(maxWidth: .infinity)
+        .frame(width: bodyWidth)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var transcript: some View {
@@ -130,10 +135,10 @@ struct IslandOverlayView: View {
                 .lineSpacing(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.top, 14)
+        .padding(.top, 10)
         .clipped()
         .mask(VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 10)
             Color.black
         })
         .padding(.horizontal, 20)
@@ -154,7 +159,7 @@ struct IslandOverlayView: View {
     }
 }
 
-/// Trailing-wing status: a recording timer, a sparkle while working, then a
+/// Status beside the waveform: a recording timer, a sparkle while working, then a
 /// check or warning for the outcome.
 private struct IslandStatus: View {
     @ObservedObject var state: OverlayState
@@ -197,29 +202,40 @@ private struct IslandStatus: View {
     }
 }
 
-/// Flush-top shape that extends the notch: square top meeting the screen edge
-/// with small concave "ears", rounded bottom corners.
-struct NotchShape: Shape {
+/// Notch extension: exactly notch-wide through the menu-bar band (the
+/// "neck"), then a wider body below it joined by concave fillets, with
+/// rounded bottom corners. Nothing is drawn beside the notch in the band.
+struct NotchDropShape: Shape {
+    var neckWidth: CGFloat
+    var neckHeight: CGFloat
     var bottomRadius: CGFloat
-    var earRadius: CGFloat
 
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get { AnimatablePair(bottomRadius, earRadius) }
-        set { bottomRadius = newValue.first; earRadius = newValue.second }
+    var animatableData: CGFloat {
+        get { bottomRadius }
+        set { bottomRadius = newValue }
     }
 
     func path(in rect: CGRect) -> Path {
-        let e = earRadius, r = min(bottomRadius, rect.height / 2)
+        let neckMinX = rect.midX - neckWidth / 2, neckMaxX = rect.midX + neckWidth / 2
+        let top = rect.minY, shoulder = rect.minY + neckHeight
+        let fillet = max(0, min(8, (rect.width - neckWidth) / 2, neckHeight))
+        let corner = min(6, (rect.width - neckWidth) / 2)        // body's top outer corners
+        let r = min(bottomRadius, (rect.maxY - shoulder) / 2, rect.width / 2)
         var p = Path()
-        p.move(to: CGPoint(x: rect.minX - e, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.maxX + e, y: rect.minY))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + e), control: CGPoint(x: rect.maxX, y: rect.minY))
+        p.move(to: CGPoint(x: neckMinX, y: top))
+        p.addLine(to: CGPoint(x: neckMaxX, y: top))
+        p.addLine(to: CGPoint(x: neckMaxX, y: shoulder - fillet))
+        p.addQuadCurve(to: CGPoint(x: neckMaxX + fillet, y: shoulder), control: CGPoint(x: neckMaxX, y: shoulder))
+        p.addLine(to: CGPoint(x: rect.maxX - corner, y: shoulder))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: shoulder + corner), control: CGPoint(x: rect.maxX, y: shoulder))
         p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
         p.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
         p.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
         p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - r), control: CGPoint(x: rect.minX, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + e))
-        p.addQuadCurve(to: CGPoint(x: rect.minX - e, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.minX, y: shoulder + corner))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + corner, y: shoulder), control: CGPoint(x: rect.minX, y: shoulder))
+        p.addLine(to: CGPoint(x: neckMinX - fillet, y: shoulder))
+        p.addQuadCurve(to: CGPoint(x: neckMinX, y: shoulder - fillet), control: CGPoint(x: neckMinX, y: shoulder))
         p.closeSubpath()
         return p
     }
