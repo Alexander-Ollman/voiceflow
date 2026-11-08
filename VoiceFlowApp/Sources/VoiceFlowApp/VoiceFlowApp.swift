@@ -2039,6 +2039,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overlayHostingView: NSHostingView<RecordingOverlayView>?
     var overlayState = OverlayState()
     private var overlayActivity: NSObjectProtocol?
+    private var overlayOutcomeTimer: DispatchWorkItem?
+    private var overlayAwaitingPaste = false
+    private var overlayPastedThisSession = false
     var settingsWindow: NSWindow?
     var wizardController: SetupWizardController?
     /// The app that was frontmost when Settings opened, so focus can be handed
@@ -3159,6 +3162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showAIResult(command: AICommand, text: String, targetApp: NSRunningApplication?) {
+        noteOverlayPasted()  // a shown result is a successful outcome too
         pendingAICommand = command
         pendingAITargetApp = targetApp
         aiResultState.show(title: command.resultTitle, text: text, hint: command.pasteHint)
@@ -3287,6 +3291,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOverlay(state: OverlayState.RecordingState) {
+        // A new session supersedes any pending done/failed animation.
+        overlayOutcomeTimer?.cancel()
+        overlayOutcomeTimer = nil
+        overlayAwaitingPaste = false
+        if state.isRecording && !overlayState.state.isRecording { overlayPastedThisSession = false }
         overlayState.state = state
         repositionOverlay()
         overlayPanel?.orderFront(nil)
@@ -3299,7 +3308,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Hide the overlay. If VoiceFlow was working (recognizing, formatting,
+    /// running a command), wait briefly for the paste that normally follows
+    /// (~100 ms later): a paste plays the green "done" ripple, no paste plays
+    /// amber. Cancelling while still recording hides immediately.
     private func hideOverlay() {
+        guard overlayPanel?.isVisible == true, overlayState.state.isWorking else {
+            finishHidingOverlay()
+            return
+        }
+        // Some paths (corrections, redo-replacement) insert before hiding.
+        if overlayPastedThisSession {
+            playOverlayOutcome(success: true)
+            return
+        }
+        overlayOutcomeTimer?.cancel()
+        overlayAwaitingPaste = true
+        let noPaste = DispatchWorkItem { [weak self] in self?.playOverlayOutcome(success: false) }
+        overlayOutcomeTimer = noPaste
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: noPaste)
+    }
+
+    /// Called when text was actually inserted (pasted or typed).
+    private func noteOverlayPasted() {
+        overlayPastedThisSession = true
+        guard overlayAwaitingPaste else { return }
+        overlayOutcomeTimer?.cancel()
+        playOverlayOutcome(success: true)
+    }
+
+    private func playOverlayOutcome(success: Bool) {
+        overlayAwaitingPaste = false
+        overlayState.state = success ? .succeeded : .failed
+        let finish = DispatchWorkItem { [weak self] in self?.finishHidingOverlay() }
+        overlayOutcomeTimer = finish
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: finish)
+    }
+
+    private func finishHidingOverlay() {
+        overlayOutcomeTimer?.cancel()
+        overlayOutcomeTimer = nil
+        overlayAwaitingPaste = false
+        overlayPastedThisSession = false
         overlayPanel?.orderOut(nil)
         overlayState.state = .idle
         if let activity = overlayActivity {
@@ -5318,6 +5368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyDown.post(tap: .cgSessionEventTap)
         usleep(10000)  // 10ms between down/up
         keyUp.post(tap: .cgSessionEventTap)
+        noteOverlayPasted()
     }
 
     /// Simulate Cmd+A (Select All) via CGEvent (works from background apps)
@@ -5378,6 +5429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyUp.post(tap: .cgSessionEventTap)
             usleep(2000) // 2ms between chunks
         }
+        if !utf16.isEmpty { noteOverlayPasted() }
     }
 
     /// Send `count` backspace keystrokes to delete characters before cursor.

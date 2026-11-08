@@ -36,9 +36,15 @@ enum WaveformPalette: String, CaseIterable, Identifiable {
 /// thinking motion; the bars still follow the microphone.
 struct LiquidWaveformView: View {
     enum Mode: Equatable {
-        case listening
-        case thinking
+        case listening   // driven by the microphone
+        case thinking    // key released: a quick "heard you" flare, then a gliding highlight
+        case success     // text landed: one green ripple outward
+        case failure     // nothing inserted: one amber ripple
     }
+
+    /// Outcome colours (edge, center).
+    static let successStops = (Color(red: 0.18, green: 0.74, blue: 0.44), Color(red: 0.66, green: 1.00, blue: 0.74))
+    static let failureStops = (Color(red: 0.98, green: 0.56, blue: 0.20), Color(red: 1.00, green: 0.84, blue: 0.48))
 
     @ObservedObject var history: RecordingWaveformHistory
     var mode: Mode = .listening
@@ -47,6 +53,7 @@ struct LiquidWaveformView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var physics = BarPhysics()
+    @State private var clock = ModeClock()
 
     var body: some View {
         // .animation with no interval: display rate (up to 120 Hz on ProMotion).
@@ -69,35 +76,71 @@ struct LiquidWaveformView: View {
         let maxHalf = size.height / 2
         let minHalf: CGFloat = barWidth / 2
 
-        let targets = (0..<count).map { target(index: $0, count: count, time: time) }
+        let elapsed = clock.elapsed(in: mode, now: time)
+        let targets = (0..<count).map { target(index: $0, count: count, time: time, elapsed: elapsed) }
         let heights = physics.step(targets: targets, now: time, snap: reduceMotion)
 
         let used = CGFloat(count) * pitch
         let originX = (size.width - used) / 2 + (pitch - barWidth) / 2
         var bars = Path()
+        var barRects: [CGRect] = []
         for (i, h) in heights.enumerated() {
             let half = minHalf + (maxHalf - minHalf) * CGFloat(min(1, h))
             let rect = CGRect(x: originX + CGFloat(i) * pitch, y: mid - half, width: barWidth, height: half * 2)
+            barRects.append(rect)
             bars.addRoundedRect(in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
         }
 
-        let (edge, center) = palette.stops
-        let shading = GraphicsContext.Shading.linearGradient(
-            Gradient(stops: [
-                .init(color: edge, location: 0),
-                .init(color: center, location: 0.5),
-                .init(color: edge, location: 1),
-            ]),
-            startPoint: CGPoint(x: originX, y: mid),
-            endPoint: CGPoint(x: originX + used - pitch + barWidth, y: mid))
+        func shading(_ stops: (Color, Color)) -> GraphicsContext.Shading {
+            .linearGradient(
+                Gradient(stops: [
+                    .init(color: stops.0, location: 0),
+                    .init(color: stops.1, location: 0.5),
+                    .init(color: stops.0, location: 1),
+                ]),
+                startPoint: CGPoint(x: originX, y: mid),
+                endPoint: CGPoint(x: originX + used - pitch + barWidth, y: mid))
+        }
 
-        context.fill(bars, with: shading)
+        switch mode {
+        case .listening, .thinking:
+            context.fill(bars, with: shading(palette.stops))
+        case .success, .failure:
+            // Cross-fade from the palette into the outcome colour (~100 ms).
+            let blend = reduceMotion ? 1 : min(1, elapsed / 0.1)
+            var base = context
+            base.opacity = 1 - blend
+            base.fill(bars, with: shading(palette.stops))
+            var outcome = context
+            outcome.opacity = blend
+            outcome.fill(bars, with: shading(mode == .success ? Self.successStops : Self.failureStops))
+        }
+
+        // While thinking, a soft white highlight rides the gliding bump.
+        if mode == .thinking, !reduceMotion {
+            let center = Double(count - 1) / 2
+            for (i, rect) in barRects.enumerated() {
+                let x = (Double(i) - center) / max(center, 1)
+                let glow = Self.thinkingBump(x: x, elapsed: elapsed)
+                guard glow > 0.05 else { continue }
+                var highlight = context
+                highlight.opacity = 0.55 * glow
+                highlight.fill(Path(roundedRect: rect, cornerRadius: barWidth / 2), with: .color(.white))
+            }
+        }
+    }
+
+    /// The thinking highlight: a soft bump gliding back and forth (x in -1…1).
+    private static func thinkingBump(x: Double, elapsed: Double) -> Double {
+        let position = 0.78 * sin(elapsed * 2.8 - .pi / 2)   // starts at the left edge
+        return exp(-pow((x - position) / 0.3, 2))
     }
 
     /// Target height 0…1 for bar `index`.
-    private func target(index: Int, count: Int, time: Double) -> Double {
+    private func target(index: Int, count: Int, time: Double, elapsed: Double) -> Double {
         let center = Double(count - 1) / 2
-        let distance = abs(Double(index) - center) / max(center, 1)   // 0 center … 1 edge
+        let signed = (Double(index) - center) / max(center, 1)         // -1 left … 1 right
+        let distance = abs(signed)                                     // 0 center … 1 edge
         let envelope = 1 - 0.45 * distance * distance                  // taller in the middle
         let motion = reduceMotion ? 0.0 : 1.0
 
@@ -114,8 +157,22 @@ struct LiquidWaveformView: View {
             let idle = 0.04 + 0.02 * motion * sin(time * 3.0 - distance * 5)
             return min(1, max(idle, speech * envelope))
         case .thinking:
-            let wave = 0.5 + 0.5 * sin(time * 4.5 * motion - distance * 5)
-            return 0.06 + 0.30 * wave * envelope
+            if reduceMotion { return 0.10 + 0.18 * envelope }
+            // "Heard you": a quick flare that gathers into the center (~320 ms)…
+            let flareProgress = min(1, elapsed / 0.32)
+            let flare = (1 - flareProgress) * (1 - flareProgress)
+                * 1.0 * exp(-distance * (0.8 + 5 * flareProgress))
+            // …then a soft bump gliding back and forth while we work.
+            let glide = min(1, max(0, (elapsed - 0.12) / 0.2))
+            let bump = 0.06 + 0.40 * glide * Self.thinkingBump(x: signed, elapsed: elapsed) * envelope
+            return max(flare, bump)
+        case .success, .failure:
+            if reduceMotion { return 0.14 * envelope }
+            // One ripple running from the center to the edges (~380 ms).
+            let radius = elapsed / 0.38
+            let ring = exp(-pow((distance - radius) / 0.2, 2))
+            let peak = mode == .success ? 0.85 : 0.6
+            return 0.05 + peak * ring * (1 - 0.35 * distance)
         }
     }
 
@@ -187,5 +244,18 @@ final class BarPhysics {
             heights[i] = min(1, max(0, heights[i]))
         }
         return heights
+    }
+}
+
+/// Seconds since the waveform entered its current mode.
+final class ModeClock {
+    private var mode: LiquidWaveformView.Mode?
+    private var since: Double = 0
+    func elapsed(in mode: LiquidWaveformView.Mode, now: Double) -> Double {
+        if mode != self.mode {
+            self.mode = mode
+            since = now
+        }
+        return now - since
     }
 }

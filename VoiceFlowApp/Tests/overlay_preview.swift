@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Live preview of the voice overlay over whatever is on screen.
-/// Loops: listening → live text → formatting → transcribing → AI command.
+/// Loops: listen → release (flare, glide) → done (green); live text →
+/// formatting → nothing inserted (amber); AI command → done.
 /// Pass --palette glacier|lagoon|aurora|ember|mono to pick a swatch.
 /// Pass --mic to drive the waveform from the real microphone instead of a
 /// synthetic speech envelope. Quit with Ctrl-C.
@@ -51,14 +52,18 @@ import SwiftUI
         let t = Double(tick % 752) / 47.0   // 16s loop
         let level = useMic ? recorder.level : syntheticLevel(Double(tick) / 47.0)
         switch t {
-        case ..<3: state.state = .recording; state.audioLevel = level
-        case ..<9:
-            let n = min(words.count, Int((t - 3) * 5))
+        case ..<3: state.state = .recording; state.audioLevel = level           // speak
+        case ..<4.6: state.state = .processing                                  // release → flare → glide
+        case ..<5.2: state.state = .succeeded                                   // pasted → green ripple
+        case ..<6.2: state.state = .idle; panel.orderOut(nil); return
+        case ..<10:
+            let n = min(words.count, Int((t - 6.2) * 5))
             state.state = .streaming(words.prefix(n).joined(separator: " ")); state.audioLevel = level
-        case ..<11: state.state = .formatting("Hey team, quick update on the release: the onboarding check is merged, and the new overlay is ready for review.")
-        case ..<12.5: state.state = .processing
-        case ..<14.5: state.state = .aiProcessing("Summarizing...")
-        default: state.state = .idle; panel.orderOut(nil); return
+        case ..<12: state.state = .formatting("Hey team, quick update on the release: the onboarding check is merged, and the new overlay is ready for review.")
+        case ..<12.6: state.state = .failed                                     // nothing inserted → amber
+        case ..<13.6: state.state = .idle; panel.orderOut(nil); return
+        case ..<15.4: state.state = .aiProcessing("Summarizing...")
+        default: state.state = .succeeded
         }
         if !panel.isVisible { panel.orderFrontRegardless() }
     }

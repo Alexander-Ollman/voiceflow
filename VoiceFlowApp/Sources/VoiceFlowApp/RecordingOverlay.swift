@@ -10,6 +10,15 @@ class OverlayState: ObservableObject {
         case processing
         case formatting(String)     // LLM tokens appearing word-by-word
         case aiProcessing(String)   // label text like "Summarizing..."
+        case succeeded              // text landed: brief green ripple, then hide
+        case failed                 // work ended without output: brief amber ripple
+
+        var isWorking: Bool {
+            switch self {
+            case .processing, .formatting, .aiProcessing: return true
+            default: return false
+            }
+        }
 
         var isRecording: Bool {
             if case .recording = self { return true }
@@ -75,7 +84,12 @@ struct RecordingOverlayView: View {
     }
 
     private var waveMode: LiquidWaveformView.Mode {
-        state.state.isRecording ? .listening : .thinking
+        switch state.state {
+        case .recording, .streaming: return .listening
+        case .succeeded: return .success
+        case .failed: return .failure
+        default: return .thinking
+        }
     }
 
     /// The waveform is a fixed small object in every state.
@@ -164,6 +178,8 @@ struct RecordingOverlayView: View {
         case .processing: return "Working"
         case .formatting(let t): return t
         case .aiProcessing(let l): return l
+        case .succeeded: return "Done"
+        case .failed: return "Nothing was inserted"
         }
     }
 }
