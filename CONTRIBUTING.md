@@ -10,6 +10,32 @@ Thank you for your interest in contributing to VoiceFlow! This document provides
 - **Xcode Command Line Tools** - `xcode-select --install`
 - **Swift 5.9+** - Included with Xcode
 
+### Fresh-Mac checklist
+
+These are needed beyond the prerequisites above. All were found setting up a clean Mac:
+
+- **Full Xcode, not only the Command Line Tools.** The CLT Swift toolchain can lack the
+  SwiftUI macro plugin (`plugin for module 'SwiftUIMacros' not found`). Either
+  `sudo xcode-select -s /Applications/Xcode.app` or prefix builds with
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+- **Metal Toolchain** for the `mistralrs` feature's shaders:
+  `xcodebuild -downloadComponent MetalToolchain`.
+- **cmake** for llama.cpp (`brew install cmake`, or `pip install cmake` in a venv on `PATH`).
+  With cmake 4, set `CMAKE_POLICY_VERSION_MINIMUM=3.5`.
+- **The patched `llama-cpp-rs` sibling checkout** that `Cargo.toml`'s `[patch.crates-io]`
+  points at (`../llama-cpp-rs`): utilityai/llama-cpp-rs tag `0.1.139` with the
+  `llama-cpp-sys-2/llama.cpp` submodule at llama.cpp tag `b8390`. Against b8390, the crate also
+  needs `mtmd_get_audio_bitrate` renamed to `mtmd_get_audio_sample_rate`
+  (`llama-cpp-2/src/mtmd.rs`), and `config.define("LLAMA_OPENSSL", "OFF")` in
+  `llama-cpp-sys-2/build.rs`, so llama.cpp doesn't link Homebrew's OpenSSL. After changing that
+  build script, delete `target/release/build/llama-cpp-sys-2-*` or CMake reuses its cache.
+- **`ort` version:** `Cargo.lock` is not committed, and `ort` 2.0.0-rc.15 changed
+  `Session::builder`. Pin it with `cargo update -p ort --precise 2.0.0-rc.12`.
+- **Stable local signing (recommended):** run `VoiceFlowApp/scripts/create-dev-signing-identity.sh`
+  once. `build.sh` then signs local builds with this "VoiceFlow Dev" identity when the Developer
+  ID isn't available. Accessibility and Microphone grants then survive rebuilds; an ad-hoc
+  signature changes on every build and resets them.
+
 ### Clone and Build
 
 ```bash

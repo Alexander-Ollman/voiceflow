@@ -249,6 +249,7 @@ printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
 
 # Step 6: Code signing
 SIGN_IDENTITY="Developer ID Application: Era Laboratories Inc. (JVSQ3LCY64)"
+DEV_SIGN_IDENTITY="${VOICEFLOW_DEV_SIGN_IDENTITY:-VoiceFlow Dev}"
 SIGNED=false
 if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
     echo "Step 6: Signing app bundle..."
@@ -289,8 +290,22 @@ if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
     codesign --verify --deep --strict "$APP_BUNDLE"
     echo "  Signed and verified."
     SIGNED=true
+elif security find-identity -p codesigning | grep -q "\"$DEV_SIGN_IDENTITY\""; then
+    # Local development: a stable self-signed identity keeps macOS privacy
+    # grants (Accessibility, Microphone) across rebuilds. Ad-hoc signatures
+    # change every build, so each rebuild looked like a new app to TCC.
+    # Create one with: VoiceFlowApp/scripts/create-dev-signing-identity.sh
+    echo "Step 6: Signing with local development identity \"$DEV_SIGN_IDENTITY\" (not for distribution)"
+    xattr -cr "$APP_BUNDLE"
+    for dylib in "$APP_BUNDLE/Contents/Frameworks/"*.dylib; do
+        [ -L "$dylib" ] && continue
+        codesign --force --sign "$DEV_SIGN_IDENTITY" "$dylib"
+    done
+    [ -f "$APP_BUNDLE/Contents/MacOS/llama-server" ] && codesign --force --sign "$DEV_SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/llama-server"
+    codesign --force --sign "$DEV_SIGN_IDENTITY" "$APP_BUNDLE"
+    codesign --verify "$APP_BUNDLE" && echo "  Signed (development)."
 else
-    echo "Step 6: Skipping code signing (Developer ID certificate not found in keychain)"
+    echo "Step 6: Skipping code signing (no Developer ID or \"$DEV_SIGN_IDENTITY\" identity in keychain)"
 fi
 
 # Step 7: Create distributable ZIP and notarize
