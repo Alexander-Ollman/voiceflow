@@ -79,7 +79,7 @@ struct RecordingOverlayView: View {
     }
 
     /// The waveform is a fixed small object in every state.
-    static let waveSize = CGSize(width: 88, height: 14)
+    static let waveSize = CGSize(width: 110, height: 18)
 
     /// Animate the morph on layout changes only, never on every token.
     private var layoutKey: String { "\(isCard)-\(label ?? "")" }
@@ -96,7 +96,7 @@ struct RecordingOverlayView: View {
     }
 
     private var glassObject: some View {
-        let shape = RoundedRectangle(cornerRadius: isCard ? VF.Radius.panel : 14, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: isCard ? VF.Radius.panel : 17.5, style: .continuous)
         return VStack(spacing: 0) {
             if isCard {
                 transcript
@@ -151,9 +151,9 @@ struct RecordingOverlayView: View {
             LiquidWaveformView(history: state.waveform, mode: waveMode)
                 .frame(width: Self.waveSize.width, height: Self.waveSize.height)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 17)
         .frame(maxWidth: isCard ? .infinity : nil)
-        .frame(height: isCard ? 34 : 28)
+        .frame(height: isCard ? 40 : 35)
     }
 
     private var accessibilityText: String {

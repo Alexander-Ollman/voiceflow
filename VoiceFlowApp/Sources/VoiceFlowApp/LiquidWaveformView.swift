@@ -49,7 +49,8 @@ struct LiquidWaveformView: View {
     @State private var physics = BarPhysics()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+        // .animation with no interval: display rate (up to 120 Hz on ProMotion).
+        TimelineView(.animation) { timeline in
             Canvas { context, size in
                 draw(in: &context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
             }
@@ -60,8 +61,8 @@ struct LiquidWaveformView: View {
     // MARK: - Drawing
 
     private func draw(in context: inout GraphicsContext, size: CGSize, time: Double) {
-        let pitch: CGFloat = 4.6        // bar + gap
-        let barWidth: CGFloat = 2.2
+        let pitch: CGFloat = 5.75       // bar + gap
+        let barWidth: CGFloat = 2.75
         let fit = Int(size.width / pitch)
         let count = max(5, fit % 2 == 0 ? fit - 1 : fit)  // odd, so one bar sits on center
         let mid = size.height / 2
@@ -102,8 +103,14 @@ struct LiquidWaveformView: View {
 
         switch mode {
         case .listening:
-            // Newest level at the center, ~0.3 s old at the edges.
-            let speech = Self.smoothedSample(history.levels, age: distance * 0.38)
+            // Newest level at the center, ~0.3 s old at the edges. Ease into
+            // each new reading over its ~21 ms gap rather than stepping to it:
+            // shift the read position back by the unelapsed part of the gap.
+            let levels = history.levels
+            let step = levels.count > 1 ? 1.0 / Double(levels.count - 1) : 0
+            let eased = min(1, max(0, (time - history.lastAppend) / Self.levelInterval))
+            let age = distance * 0.38 + (1 - eased) * step
+            let speech = Self.smoothedSample(levels, age: min(1, age))
             let idle = 0.04 + 0.02 * motion * sin(time * 3.0 - distance * 5)
             return min(1, max(idle, speech * envelope))
         case .thinking:
@@ -111,6 +118,9 @@ struct LiquidWaveformView: View {
             return 0.06 + 0.30 * wave * envelope
         }
     }
+
+    /// Spacing of AudioRecorder.meterLevels readings (1024 frames at 48 kHz).
+    static let levelInterval = 1024.0 / 48_000.0
 
     /// Perceptual mapping: quiet speech still moves the bars.
     static func energy(_ level: Float) -> Double {
@@ -122,7 +132,7 @@ struct LiquidWaveformView: View {
     /// slices don't make bars twitch.
     private static func smoothedSample(_ levels: [Float], age: Double) -> Double {
         let step = levels.count > 1 ? 1.0 / Double(levels.count - 1) : 0
-        let taps = [-2.0, -1.0, 0.0, 1.0, 2.0], weights = [1.0, 2.0, 3.0, 2.0, 1.0]
+        let taps = [-1.0, 0.0, 1.0], weights = [1.0, 2.0, 1.0]
         var total = 0.0
         for (tap, weight) in zip(taps, weights) {
             total += weight * sample(levels, age: min(1, max(0, age + tap * step)))
@@ -154,18 +164,27 @@ final class BarPhysics {
             heights = targets
             velocities = Array(repeating: 0, count: targets.count)
         }
-        let dt = min(1.0 / 30.0, max(0, now - (lastTime ?? now)))
+        let dt = min(1.0 / 20.0, max(0, now - (lastTime ?? now)))
         lastTime = now
         if snap || dt == 0 {
             heights = targets
             return heights
         }
-        // Critically damped: quick but no bounce, so motion reads as fluid.
-        let stiffness = 170.0, damping = 2 * stiffness.squareRoot()
+        // Critically damped (no bounce): a fast rise so syllables register
+        // immediately, a softer fall so the release reads as fluid. Integrated
+        // in small substeps so the stiff spring stays stable at any frame rate.
+        let substeps = max(1, Int((dt / (1.0 / 240.0)).rounded(.up)))
+        let h = dt / Double(substeps)
         for i in heights.indices {
-            let force = stiffness * (targets[i] - heights[i]) - damping * velocities[i]
-            velocities[i] += force * dt
-            heights[i] = min(1, max(0, heights[i] + velocities[i] * dt))
+            let rising = targets[i] > heights[i]
+            let stiffness = rising ? 900.0 : 260.0
+            let damping = 2 * stiffness.squareRoot()
+            for _ in 0..<substeps {
+                let force = stiffness * (targets[i] - heights[i]) - damping * velocities[i]
+                velocities[i] += force * h
+                heights[i] += velocities[i] * h
+            }
+            heights[i] = min(1, max(0, heights[i]))
         }
         return heights
     }

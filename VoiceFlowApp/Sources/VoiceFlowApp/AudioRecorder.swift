@@ -148,7 +148,15 @@ final class AudioRecorder: ObservableObject {
         }
         DispatchQueue.main.async {
             self.audioLevel = min(1.0, rms * 10)
-            self.meterLevels.send(slices)
+        }
+        // Release the slices at their real spacing (~21 ms at 48 kHz) instead
+        // of as one burst per 85 ms buffer, so the visualizer gets a steady
+        // stream rather than a visible step every buffer.
+        let sliceInterval = Double(sliceLength) / max(1, inputSampleRate)
+        for (index, level) in slices.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + sliceInterval * Double(index)) {
+                self.meterLevels.send([level])
+            }
         }
 
         // Resample to 16kHz if needed
