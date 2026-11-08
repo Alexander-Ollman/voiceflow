@@ -54,6 +54,17 @@ cd VoiceFlowApp
 cargo test --workspace
 ```
 
+### Releasing
+
+1. Bump `CFBundleVersion` / `CFBundleShortVersionString` in `VoiceFlowApp/build.sh` and add release notes; merge to `main`.
+2. Create a **draft** GitHub release `v<version>` with the notes.
+3. On a Mac with the Era Laboratories Developer ID and a `notarytool` keychain profile:
+   `NOTARIZE_KEYCHAIN_PROFILE=<profile> VoiceFlowApp/scripts/release.sh <version>`.
+   This builds, signs, and notarizes `VoiceFlow.zip` (used by the in-app updater, which only
+   accepts team JVSQ3LCY64) and `VoiceFlow.dmg` (used by the website's Download button). It then
+   verifies both with Gatekeeper and uploads them to the draft.
+4. Review the draft, then publish it, or pass `--publish` in step 3.
+
 ### Download Models
 
 Before running, you need to download the ML models:

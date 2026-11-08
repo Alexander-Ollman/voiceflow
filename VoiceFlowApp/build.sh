@@ -353,12 +353,41 @@ if [ "$SIGNED" = true ]; then
     fi
 fi
 
+# Step 8: Create the disk image the website's Download button links to
+# (releases/latest/download/VoiceFlow.dmg). Same layout as earlier releases:
+# compressed UDZO, volume "VoiceFlow", the app plus an Applications shortcut.
+DMG_PATH="$DIST_DIR/VoiceFlow.dmg"
+echo "Step 8: Creating disk image..."
+DMG_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/voiceflow-dmg.XXXXXX")"
+ditto "$APP_BUNDLE" "$DMG_STAGING/$APP_NAME.app"     # the stapled app, if notarized
+ln -s /Applications "$DMG_STAGING/Applications"
+rm -f "$DMG_PATH"
+hdiutil create -volname "VoiceFlow" -srcfolder "$DMG_STAGING" -fs HFS+ -format UDZO -ov "$DMG_PATH" -quiet
+rm -rf "$DMG_STAGING"
+
+if [ "$SIGNED" = true ]; then
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+    if [ -n "${NOTARIZE_KEYCHAIN_PROFILE:-}" ]; then
+        echo "  Notarizing disk image with keychain profile '$NOTARIZE_KEYCHAIN_PROFILE'..."
+        xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARIZE_KEYCHAIN_PROFILE" --wait
+        xcrun stapler staple "$DMG_PATH"
+        echo "  Disk image notarized and stapled."
+    elif [ -n "${NOTARIZE_APPLE_ID:-}" ]; then
+        echo "  Notarizing disk image with Apple ID..."
+        xcrun notarytool submit "$DMG_PATH" --apple-id "$NOTARIZE_APPLE_ID" --team-id "JVSQ3LCY64" --wait
+        xcrun stapler staple "$DMG_PATH"
+        echo "  Disk image notarized and stapled."
+    fi
+fi
+
 ZIP_SIZE=$(du -h "$ZIP_PATH" | awk '{print $1}')
+DMG_SIZE=$(du -h "$DMG_PATH" | awk '{print $1}')
 
 echo ""
 echo "Build complete!"
 echo "App bundle: $APP_BUNDLE"
 echo "Distributable: $ZIP_PATH ($ZIP_SIZE)"
+echo "Disk image:    $DMG_PATH ($DMG_SIZE)"
 echo ""
 echo "To run: open $APP_BUNDLE"
-echo "To distribute: upload $ZIP_PATH"
+echo "To distribute: VoiceFlowApp/scripts/release.sh <version> (uploads both files)"
