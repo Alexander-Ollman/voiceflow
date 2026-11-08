@@ -67,8 +67,8 @@ struct RecordingOverlayView: View {
 
     private var label: String? {
         switch state.state {
-        case .processing: return "Transcribing"
-        case .formatting: return "Formatting"
+        // Recognition and formatting need no words: the waveform's working
+        // motion says it. Only AI commands name what they're doing.
         case .aiProcessing(let l): return l.trimmingCharacters(in: CharacterSet(charactersIn: ". …"))
         default: return nil
         }
@@ -78,7 +78,8 @@ struct RecordingOverlayView: View {
         state.state.isRecording ? .listening : .thinking
     }
 
-    private var capsuleWidth: CGFloat { label == nil ? 232 : 300 }
+    /// The waveform is a fixed small object in every state.
+    static let waveSize = CGSize(width: 88, height: 14)
 
     /// Animate the morph on layout changes only, never on every token.
     private var layoutKey: String { "\(isCard)-\(label ?? "")" }
@@ -95,7 +96,7 @@ struct RecordingOverlayView: View {
     }
 
     private var glassObject: some View {
-        let shape = RoundedRectangle(cornerRadius: isCard ? VF.Radius.panel : 28, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: isCard ? VF.Radius.panel : 14, style: .continuous)
         return VStack(spacing: 0) {
             if isCard {
                 transcript
@@ -103,7 +104,8 @@ struct RecordingOverlayView: View {
             }
             footer
         }
-        .frame(width: isCard ? Self.cardWidth : capsuleWidth)
+        .frame(width: isCard ? Self.cardWidth : nil)
+        .fixedSize(horizontal: !isCard, vertical: false)
         .vfGlass(in: shape, tint: Color.black.opacity(isCard ? 0.55 : 0.30))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
@@ -134,23 +136,24 @@ struct RecordingOverlayView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if let label {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(VF.glowGradient)
                 Text(label)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)
                     .fixedSize()
                     .transition(.opacity)
             }
             LiquidWaveformView(history: state.waveform, mode: waveMode)
-                .frame(height: isCard ? 30 : 40)
+                .frame(width: Self.waveSize.width, height: Self.waveSize.height)
         }
-        .padding(.horizontal, 18)
-        .frame(height: isCard ? 46 : 56)
+        .padding(.horizontal, 14)
+        .frame(maxWidth: isCard ? .infinity : nil)
+        .frame(height: isCard ? 34 : 28)
     }
 
     private var accessibilityText: String {
@@ -158,8 +161,8 @@ struct RecordingOverlayView: View {
         case .idle: return ""
         case .recording: return "VoiceFlow is listening"
         case .streaming(let t): return t.isEmpty ? "VoiceFlow is listening" : "Listening: \(t)"
-        case .processing: return "Transcribing"
-        case .formatting(let t): return "Formatting: \(t)"
+        case .processing: return "Working"
+        case .formatting(let t): return t
         case .aiProcessing(let l): return l
         }
     }
