@@ -42,7 +42,11 @@ import SwiftUI
             panel.setFrame(NSRect(x: housing.midX - size.width / 2, y: screen.frame.maxY - size.height,
                                   width: size.width, height: size.height), display: true)
             panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 2)
-            panel.contentView = NSHostingView(rootView: IslandOverlayView(state: state, style: style, housing: housing.size))
+            let system = SystemIslandGeometry()
+            panel.contentView = NSHostingView(rootView: IslandOverlayView(state: state, style: style, housing: housing.size, system: system))
+            Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                MainActor.assumeIsolated { system.refresh(housing: housing, screen: screen) }
+            }
         }
         panel.orderFrontRegardless()
         if useMic { recorder.start() }

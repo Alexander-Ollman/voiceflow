@@ -2040,6 +2040,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overlayState = OverlayState()
     private var overlayActivity: NSObjectProtocol?
     private var islandPanel: NSPanel?
+    private let systemIsland = SystemIslandGeometry()
+    private var systemIslandTimer: Timer?
     /// Placement used by the overlay currently on screen.
     private var activeOverlayPlacement: OverlayPlacement = .bottom
     private var overlayOutcomeTimer: DispatchWorkItem?
@@ -3156,6 +3158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.hasShadow = false
             panel.ignoresMouseEvents = true
             panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+            panel.animationBehavior = .none
             islandPanel = panel
         }
         guard let panel = islandPanel else { return }
@@ -3163,11 +3166,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let key = "\(style.rawValue)-\(housing.width)x\(housing.height)"
         if panel.identifier?.rawValue != key {
             panel.contentView = NSHostingView(rootView: IslandOverlayView(
-                state: overlayState, style: style, housing: housing.size))
+                state: overlayState, style: style, housing: housing.size, system: systemIsland))
             panel.identifier = NSUserInterfaceItemIdentifier(key)
         }
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
+
+        // Track the system island (e.g. the mic indicator appearing ~100 ms
+        // after recording starts) so our wings make room for it.
+        if style == .island {
+            systemIsland.refresh(housing: housing, screen: screen)
+            if systemIslandTimer == nil {
+                let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.islandPanel?.isVisible == true,
+                              let screen = self.islandPanel?.screen, let housing = screen.cameraHousingFrame else { return }
+                        self.systemIsland.refresh(housing: housing, screen: screen)
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                systemIslandTimer = timer
+            }
+        }
     }
 
     /// Snaps the overlay panel to bottom-center of the active screen's visible area.
@@ -3405,6 +3425,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayPastedThisSession = false
         overlayPanel?.orderOut(nil)
         islandPanel?.orderOut(nil)
+        systemIslandTimer?.invalidate()
+        systemIslandTimer = nil
         overlayState.state = .idle
         if let activity = overlayActivity {
             ProcessInfo.processInfo.endActivity(activity)
@@ -7617,7 +7639,7 @@ struct VoiceOverlaySettings: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white.opacity(0.9))
                     Text(hasHousing
-                         ? "Dynamic Island and Notch attach just below the camera, leaving the menu bar and the system's microphone indicator uncovered. Displays without a camera housing use the bottom of the screen."
+                         ? "Dynamic Island wraps the island and makes room for the system's microphone indicator. Notch extends down from the notch without covering menu bar items. Displays without a camera housing use the bottom of the screen."
                          : "This Mac's displays have no camera housing, so the overlay appears at the bottom of the screen.")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.55))

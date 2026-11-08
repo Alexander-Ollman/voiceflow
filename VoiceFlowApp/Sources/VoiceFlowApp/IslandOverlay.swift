@@ -35,21 +35,58 @@ extension NSScreen {
     }
 }
 
+/// Space the system is using around the camera housing right now, as extra
+/// width beyond the housing on each side. macOS draws privacy indicators
+/// (e.g. the microphone dot while VoiceFlow records) as small Window Server
+/// windows beside the Dynamic Island; we keep our wings outside them.
+final class SystemIslandGeometry: ObservableObject {
+    @Published var leftExtra: CGFloat = 0
+    @Published var rightExtra: CGFloat = 0
+
+    /// Re-measure against `housing` (screen coordinates) on `screen`.
+    func refresh(housing: CGRect, screen: NSScreen) {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let screenTopCG = primaryHeight - screen.frame.maxY          // CG coords: origin top-left
+        let search = housing.insetBy(dx: -90, dy: 0)
+        var minX = housing.minX, maxX = housing.maxX
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        for window in windows {
+            guard (window[kCGWindowOwnerName as String] as? String) == "Window Server",
+                  let layer = window[kCGWindowLayer as String] as? Int, layer > 1000,
+                  let b = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let y = b["Y"], let w = b["Width"], let h = b["Height"],
+                  w > 2, w < 200, h > 2,
+                  y - screenTopCG < housing.height + 4,                 // within the band
+                  x < search.maxX, x + w > search.minX else { continue }
+            minX = min(minX, x)
+            maxX = max(maxX, x + w)
+        }
+        let left = (housing.minX - minX).rounded(), right = (maxX - housing.maxX).rounded()
+        if left != leftExtra { leftExtra = left }
+        if right != rightExtra { rightExtra = right }
+    }
+}
+
 /// The voice overlay attached to the camera housing.
 ///
-/// The housing band itself is never drawn over: on Dynamic Island Macs the
-/// system owns the island (it expands for the microphone indicator and other
-/// activity), and on notched Macs the notch is fixed hardware with menu-bar
-/// items and indicators on both sides. So everything here hangs *below* it:
-/// - Island: a separate black pill just under the island.
-/// - Notch: the shape is exactly notch-wide inside the menu-bar band (black
-///   hardware there anyway), then widens only below the menu bar.
-/// Waveform on the left, status on the right; live text expands below.
+/// - Island: wings either side of the Dynamic Island, sized around the live
+///   extent of the system's own island content (SystemIslandGeometry), so the
+///   microphone privacy indicator is never covered; one black pill sits
+///   behind the system island and the system draws above it.
+/// - Notch: the notch is fixed hardware with menu-bar items beside it, so the
+///   shape is exactly notch-wide inside the menu-bar band, then widens below.
+/// Waveform left, status right; live text expands below.
 struct IslandOverlayView: View {
     @ObservedObject var state: OverlayState
     let style: OverlayPlacement          // .island or .notch
     /// Housing size in points (from NSScreen.cameraHousingFrame).
     let housing: CGSize
+    /// Live extent of the system's own island content (island style only).
+    @ObservedObject var system: SystemIslandGeometry
+
+    /// Island style: the system island band sits ~5–43 pt below the top edge.
+    static let islandTop: CGFloat = 5
+    static let islandWing: CGFloat = 72
 
     static let compactWidth: CGFloat = 196
     static let rowHeight: CGFloat = 34
@@ -83,12 +120,7 @@ struct IslandOverlayView: View {
     var body: some View {
         VStack(spacing: 0) {
             if style == .island {
-                Color.clear.frame(height: housing.height + Self.islandGap)
-                content
-                    .background(
-                        RoundedRectangle(cornerRadius: expanded ? 22 : Self.rowHeight / 2, style: .continuous)
-                            .fill(Color.black)
-                            .shadow(color: .black.opacity(0.3), radius: 10, y: 4))
+                islandBody
             } else {
                 VStack(spacing: 0) {
                     Color.clear.frame(width: bodyWidth, height: housing.height)
@@ -109,6 +141,50 @@ struct IslandOverlayView: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
     }
+
+    // MARK: Island: wings beside the system island
+
+    /// Width the system is using: the housing plus any indicator beside it.
+    private var occupiedWidth: CGFloat { housing.width + system.leftExtra + system.rightExtra }
+    private var bandHeight: CGFloat { housing.height - 2 }
+
+    /// One black pill behind the system island with our wings on either side;
+    /// the system draws its indicators above it, so they are never hidden.
+    private var islandBody: some View {
+        let compactWidth = occupiedWidth + Self.islandWing * 2
+        return VStack(spacing: 6) {
+            // The pill stays pill-sized in the menu-bar band, so it never
+            // covers menu items…
+            HStack(spacing: 0) {
+                LiquidWaveformView(history: state.waveform, mode: waveMode)
+                    .frame(width: Self.islandWing - 20, height: 16)
+                    .frame(width: Self.islandWing)
+                Color.clear.frame(width: occupiedWidth)
+                IslandStatus(state: state)
+                    .frame(width: Self.islandWing)
+            }
+            .frame(width: compactWidth, height: bandHeight)
+            .background(Capsule(style: .continuous).fill(Color.black))
+            // Keep the gap centred on what the system occupies, not on the housing.
+            .offset(x: (system.rightExtra - system.leftExtra) / 2)
+
+            // …and live text drops into its own card below the menu bar.
+            if expanded {
+                transcript
+                    .frame(width: Self.expandedWidth)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(Color.black)
+                            .shadow(color: .black.opacity(0.3), radius: 10, y: 4))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.top, Self.islandTop)
+        .animation(VF.Motion.morph, value: system.leftExtra)
+        .animation(VF.Motion.morph, value: system.rightExtra)
+    }
+
+    // MARK: Notch: body below the notch
 
     private var content: some View {
         VStack(spacing: 0) {
