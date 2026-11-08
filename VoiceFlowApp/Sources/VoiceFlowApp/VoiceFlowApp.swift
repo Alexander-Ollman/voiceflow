@@ -3042,17 +3042,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Overlay Setup
 
+    /// Glass card width plus the transparent margin that holds its shadow.
+    static let overlayEnvelopeSize = NSSize(
+        width: RecordingOverlayView.cardWidth + RecordingOverlayView.envelopeMargin * 2,
+        height: RecordingOverlayView.maxTextHeight + 46 + 32 + RecordingOverlayView.envelopeMargin * 2)
+    /// The glass sits 80pt above the visible area's bottom edge, as before.
+    static let overlayBottomInset: CGFloat = 80 - RecordingOverlayView.envelopeMargin
+
     private func setupOverlay() {
-        // Card envelope: 420 wide, up to 40% of screen height + padding for status bar
+        // One fixed transparent envelope for every overlay state: the glass
+        // object morphs inside it, so the panel never resizes mid-animation.
         let screen = NSScreen.main
-        let screenHeight = screen?.visibleFrame.height ?? 800
-        let panelWidth: CGFloat = 420
-        let panelHeight: CGFloat = screenHeight * 0.4 + 80
+        let panelSize = Self.overlayEnvelopeSize
+        let panelWidth = panelSize.width
+        let panelHeight = panelSize.height
 
         // Position at bottom center of screen, above the dock
         let screenFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let panelX = screenFrame.midX - panelWidth / 2
-        let panelY = screenFrame.minY + 80  // bottom edge 80pt above dock area
+        let panelY = screenFrame.minY + Self.overlayBottomInset
 
         let panel = NSPanel(
             contentRect: NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight),
@@ -3065,6 +3073,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
+        panel.ignoresMouseEvents = true  // display-only; never block clicks behind the envelope
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = false
         panel.titlebarAppearsTransparent = true
@@ -3106,7 +3115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let screenFrame = screen.visibleFrame
         let panelFrame = panel.frame
         let x = screenFrame.midX - panelFrame.width / 2
-        let y = screenFrame.minY + 80  // 80pt above dock area
+        let y = screenFrame.minY + Self.overlayBottomInset
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
@@ -3267,17 +3276,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showOverlay(state: OverlayState.RecordingState) {
         overlayState.state = state
-        // Resize panel based on state
-        switch state {
-        case .streaming, .formatting:
-            // Card mode: large transparent envelope — SwiftUI handles visible size
-            let maxH = (activeScreen()?.visibleFrame.height ?? 800) * 0.4 + 80
-            overlayPanel?.setContentSize(NSSize(width: 420, height: maxH))
-        case .aiProcessing:
-            overlayPanel?.setContentSize(NSSize(width: 260, height: 70))
-        default:
-            overlayPanel?.setContentSize(NSSize(width: 200, height: 70))
-        }
         repositionOverlay()
         overlayPanel?.orderFront(nil)
     }
@@ -5785,192 +5783,6 @@ struct ScreenRecordingPermissionButton: View {
         .onAppear {
             isGranted = CGPreflightScreenCaptureAccess()
         }
-    }
-}
-
-// MARK: - VF Design System
-
-/// Color and shape tokens for the dark-vibrant "Liquid Glass" look.
-enum VF {
-    static let cardCorner: CGFloat = 16
-    static let pillCorner: CGFloat = 18
-
-    // Sidebar selection.
-    static let sidebarHover = Color.white.opacity(0.05)
-    static let sidebarSelected = Color.white.opacity(0.10)
-
-    // Accent gradient used for primary CTAs.
-    static let accentGradient = LinearGradient(
-        colors: [Color(red: 0.34, green: 0.46, blue: 1.0),
-                 Color(red: 0.55, green: 0.36, blue: 1.0)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-
-    /// Specular highlight stroke for glass surfaces — brighter at top.
-    static let glassStroke = LinearGradient(
-        colors: [Color.white.opacity(0.28), Color.white.opacity(0.06)],
-        startPoint: .top,
-        endPoint: .bottom
-    )
-
-    /// Inner top highlight — adds a subtle gleam at the top edge of cards.
-    static let glassGleam = LinearGradient(
-        colors: [Color.white.opacity(0.10), Color.white.opacity(0.0)],
-        startPoint: .top,
-        endPoint: .center
-    )
-}
-
-/// NSVisualEffectView wrapper. Gives windows a vibrant dark backdrop.
-struct VisualEffectBackground: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .hudWindow
-    var blending: NSVisualEffectView.BlendingMode = .behindWindow
-    var emphasized: Bool = false
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = material
-        v.blendingMode = blending
-        v.state = .active
-        v.isEmphasized = emphasized
-        v.appearance = NSAppearance(named: .vibrantDark)
-        return v
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blending
-        nsView.isEmphasized = emphasized
-    }
-}
-
-/// Frosted "Liquid Glass" rounded card surface.
-/// Layers: ultraThinMaterial base + faint white tint + top-edge gleam + gradient highlight stroke.
-struct VFCard<Content: View>: View {
-    var padding: CGFloat = 18
-    var corner: CGFloat = VF.cardCorner
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        content()
-            .padding(padding)
-            .background {
-                ZStack {
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .fill(VF.glassGleam)
-                        .blendMode(.plusLighter)
-                        .opacity(0.6)
-                }
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .strokeBorder(VF.glassStroke, lineWidth: 1)
-            }
-            .shadow(color: Color.black.opacity(0.25), radius: 18, x: 0, y: 8)
-    }
-}
-
-/// Page header: large title + caption subtitle, optional trailing slot.
-struct VFPageHeader<Trailing: View>: View {
-    let title: String
-    let subtitle: String?
-    @ViewBuilder var trailing: () -> Trailing
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 22, weight: .bold))
-                if let s = subtitle, !s.isEmpty {
-                    Text(s)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            }
-            Spacer()
-            trailing()
-        }
-    }
-}
-
-extension VFPageHeader where Trailing == EmptyView {
-    init(title: String, subtitle: String? = nil) {
-        self.title = title
-        self.subtitle = subtitle
-        self.trailing = { EmptyView() }
-    }
-}
-
-/// Section header within a page — caption-sized, breaks up cards.
-struct VFSectionHeader: View {
-    let title: String
-    var icon: String? = nil
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-            }
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.8)
-                .foregroundColor(.secondary)
-        }
-    }
-}
-
-/// Filled pill button — primary action on a row or in a header.
-struct VFFilledPillStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(
-                Capsule()
-                    .fill(VF.accentGradient)
-                    .opacity(configuration.isPressed ? 0.85 : 1.0)
-            )
-    }
-}
-
-/// Outlined pill button — secondary action ("Open", "Install").
-struct VFOutlinePillStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.white.opacity(0.92))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                    .background(
-                        Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.10 : 0.04))
-                    )
-            )
-    }
-}
-
-/// Small ghost pill — caption sized, used inline with body text.
-struct VFGhostPillStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 11, weight: .medium))
-            .foregroundColor(.white.opacity(0.75))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(
-                Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.12 : 0.06))
-            )
     }
 }
 
@@ -9980,297 +9792,3 @@ private final class TokenAccumulator {
     var text: String = ""
 }
 
-// MARK: - Overlay State
-
-class OverlayState: ObservableObject {
-    enum RecordingState {
-        case idle
-        case recording
-        case streaming(String)      // partial transcript text from real-time STT
-        case processing
-        case formatting(String)     // LLM tokens appearing word-by-word
-        case aiProcessing(String)   // label text like "Summarizing..."
-
-        var isRecording: Bool {
-            if case .recording = self { return true }
-            if case .streaming = self { return true }
-            return false
-        }
-
-        var isProcessing: Bool {
-            if case .processing = self { return true }
-            if case .formatting = self { return true }
-            return false
-        }
-
-        var isStreaming: Bool {
-            if case .streaming = self { return true }
-            return false
-        }
-    }
-
-    let waveform = RecordingWaveformHistory()
-    @Published var state: RecordingState = .idle {
-        didSet {
-            if state.isRecording && !oldValue.isRecording { waveform.reset() }
-        }
-    }
-    @Published var audioLevel: Float = 0 {
-        didSet { waveform.append(audioLevel) }
-    }
-}
-
-// MARK: - Recording Overlay View
-
-struct RecordingOverlayView: View {
-    @ObservedObject var state: OverlayState
-    @State private var animateGradient = false
-
-    // Brand colors from logo
-    private let gradientColors: [Color] = [
-        Color(red: 0.0, green: 0.85, blue: 0.85),   // Cyan
-        Color(red: 0.2, green: 0.6, blue: 0.9),    // Blue
-        Color(red: 0.4, green: 0.8, blue: 0.7),    // Teal
-        Color(red: 0.0, green: 0.7, blue: 0.9),    // Light blue
-        Color(red: 0.0, green: 0.85, blue: 0.85),   // Cyan (loop)
-    ]
-
-    private let cardWidth: CGFloat = 420
-    private let pillHeight: CGFloat = 66
-    private let statusBarHeight: CGFloat = 50
-    private let maxTextAreaHeight: CGFloat = 300
-
-    // MARK: - Mode Detection
-
-    private var isCardMode: Bool {
-        switch state.state {
-        case .streaming(let t) where !t.isEmpty: return true
-        case .formatting: return true  // Always card mode — keeps card visible during STT→formatting transition
-        default: return false
-        }
-    }
-
-    private var currentText: String {
-        switch state.state {
-        case .streaming(let t): return t
-        case .formatting(let t): return t
-        default: return ""
-        }
-    }
-
-    private var isFormattingPhase: Bool {
-        if case .formatting = state.state { return true }
-        return false
-    }
-
-    private var pillWidth: CGFloat {
-        if case .aiProcessing = state.state { return 260 }
-        return 264
-    }
-
-    // MARK: - Body
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-
-            if isCardMode {
-                cardView
-                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
-            } else {
-                pillView
-                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isCardMode)
-        .onAppear {
-            withAnimation(.linear(duration: 3.0).repeatForever(autoreverses: false)) {
-                animateGradient = true
-            }
-        }
-    }
-
-    // MARK: - Card View
-
-    private var cardView: some View {
-        VStack(spacing: 0) {
-            if !currentText.isEmpty {
-                textArea
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.15))
-                    .frame(height: 1)
-            }
-
-            statusBar
-        }
-        .frame(width: cardWidth)
-        .background(cardBackground)
-    }
-
-    private var textArea: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                Text(currentText)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .id("textBottom")
-            }
-            .onChange(of: currentText) { _ in
-                withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo("textBottom", anchor: .bottom)
-                }
-            }
-        }
-        .frame(maxHeight: maxTextAreaHeight)
-    }
-
-    private var statusBar: some View {
-        HStack(spacing: 10) {
-            if isFormattingPhase {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 16))
-                    .foregroundColor(.white)
-                Text("Formatting...")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
-                Spacer()
-                PulsingDotsView()
-                    .frame(width: 40, height: 16)
-                    .scaleEffect(0.6)
-            } else {
-                Spacer(minLength: 0)
-                LiveRecordingWaveformView(history: state.waveform)
-                    .frame(width: 256, height: 32)
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(height: statusBarHeight)
-    }
-
-    private var cardBackground: some View {
-        ZStack {
-            if !isFormattingPhase {
-                AnimatedGradientBackground(animate: animateGradient, colors: gradientColors)
-            } else {
-                Color.black.opacity(0.85)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-    }
-
-    // MARK: - Pill View
-
-    private var pillView: some View {
-        HStack(spacing: 10) {
-            if case .aiProcessing(let label) = state.state {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white)
-                Text(label)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white)
-                PulsingDotsView()
-                    .frame(width: 50, height: 20)
-                    .scaleEffect(0.7)
-            } else if case .streaming = state.state {
-                // Streaming with empty text — show waveform in pill
-                LiveRecordingWaveformView(history: state.waveform)
-                    .frame(width: 224, height: 38)
-            } else {
-                if state.state.isRecording {
-                    LiveRecordingWaveformView(history: state.waveform)
-                        .frame(width: 224, height: 38)
-                } else if state.state.isProcessing {
-                    logoView
-                    processingView
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(width: pillWidth, height: pillHeight)
-        .background(pillBackground)
-        .animation(.easeInOut(duration: 0.2), value: pillWidth)
-    }
-
-    // MARK: - Shared Sub-views
-
-    @ViewBuilder
-    private var logoView: some View {
-        if let iconPath = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png"),
-           let nsImage = NSImage(contentsOfFile: iconPath) {
-            Image(nsImage: nsImage)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 28, height: 28)
-                .opacity(state.state.isRecording ? 1.0 : 0.7)
-        } else {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 24))
-                .foregroundColor(.white)
-        }
-    }
-
-    private var processingView: some View {
-        PulsingDotsView()
-            .frame(width: 80, height: 30)
-    }
-
-    private var pillBackground: some View {
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(Color(red: 0.045, green: 0.052, blue: 0.064).opacity(0.96))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(.white.opacity(0.12), lineWidth: 1)
-            }
-    }
-
-}
-
-// MARK: - Pulsing Dots View
-
-struct PulsingDotsView: View {
-    @State private var activeIndex = 0
-    private let dotCount = 3
-    private let dotSize: CGFloat = 8
-    private let timer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(0..<dotCount, id: \.self) { index in
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: dotSize, height: dotSize)
-                    .opacity(activeIndex == index ? 1.0 : 0.3)
-                    .scaleEffect(activeIndex == index ? 1.2 : 0.8)
-                    .animation(.easeInOut(duration: 0.3), value: activeIndex)
-            }
-        }
-        .onReceive(timer) { _ in
-            activeIndex = (activeIndex + 1) % dotCount
-        }
-    }
-}
-
-// MARK: - Animated Gradient Background
-
-struct AnimatedGradientBackground: View {
-    let animate: Bool
-    let colors: [Color]
-
-    var body: some View {
-        LinearGradient(
-            colors: colors,
-            startPoint: animate ? .topLeading : .bottomTrailing,
-            endPoint: animate ? .bottomTrailing : .topLeading
-        )
-        .hueRotation(.degrees(animate ? 45 : 0))
-        .opacity(0.95)
-    }
-}
