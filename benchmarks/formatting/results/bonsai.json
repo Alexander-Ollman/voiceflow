@@ -1,0 +1,1272 @@
+{
+  "backend": "bonsai",
+  "load_seconds": 0.6482818748336285,
+  "first_inference_seconds": 4.841340166050941,
+  "peak_process_tree_rss_bytes": 2730688512,
+  "repeats": 3,
+  "fixture_sha256": "aa66a5390ac230e40a62c6f24808145dd074000972b6ce4ea2954e653a096145",
+  "native_library_sha256": "cab766212808305078fd280a001a4c736791a5314850ffaf4277a9a566a73ea8",
+  "python": "3.12.12 (main, Oct  9 2025, 11:07:00) [Clang 17.0.0 (clang-1700.4.4.1)]",
+  "platform": "macOS-15.6-arm64-arm-64bit",
+  "rows": [
+    {
+      "id": "preserve-01",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Please send the report by Friday.",
+      "references": [
+        "Please send the report by Friday."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "Please send the report by Friday.",
+      "outputs": [
+        "Please send the report by Friday.",
+        "Please send the report by Friday.",
+        "Please send the report by Friday."
+      ],
+      "latency_ms": [
+        92.37512503750622,
+        85.18112497404218,
+        85.10949998162687
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "preserve-02",
+      "category": "preserve",
+      "source": "authored",
+      "input": "I do not want to delete the backup.",
+      "references": [
+        "I do not want to delete the backup."
+      ],
+      "protected": [
+        "not"
+      ],
+      "tts": true,
+      "context": "",
+      "output": "I do not want to delete the backup.",
+      "outputs": [
+        "I do not want to delete the backup.",
+        "I do not want to delete the backup.",
+        "I do not want to delete the backup."
+      ],
+      "latency_ms": [
+        163.76283415593207,
+        93.72050012461841,
+        101.08516691252589
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "preserve-03",
+      "category": "preserve",
+      "source": "authored",
+      "input": "The meeting starts at 3:30 PM.",
+      "references": [
+        "The meeting starts at 3:30 PM."
+      ],
+      "protected": [
+        "3:30 PM"
+      ],
+      "tts": true,
+      "context": "",
+      "output": "The meeting starts at 3: 30 PM.",
+      "outputs": [
+        "The meeting starts at 3: 30 PM.",
+        "The meeting starts at 3: 30 PM.",
+        "The meeting starts at 3: 30 PM."
+      ],
+      "latency_ms": [
+        171.1380418855697,
+        122.5593329872936,
+        111.94254201836884
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "3:30 PM"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-04",
+      "category": "preserve",
+      "source": "authored",
+      "input": "The invoice total is $5,000.",
+      "references": [
+        "The invoice total is $5,000."
+      ],
+      "protected": [
+        "$5,000"
+      ],
+      "tts": true,
+      "context": "",
+      "output": "The invoice total is $5, 000.",
+      "outputs": [
+        "The invoice total is $5, 000.",
+        "The invoice total is $5, 000.",
+        "The invoice total is $5, 000."
+      ],
+      "latency_ms": [
+        192.70250014960766,
+        120.73545809835196,
+        112.894874997437
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "$5,000"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-05",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Use OAuth with Postgres and Kubernetes.",
+      "references": [
+        "Use OAuth with Postgres and Kubernetes."
+      ],
+      "protected": [
+        "OAuth",
+        "Postgres",
+        "Kubernetes"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Use OAuth with Postgres and Kubernetes.",
+      "outputs": [
+        "Use OAuth with Postgres and Kubernetes.",
+        "Use OAuth with Postgres and Kubernetes.",
+        "Use OAuth with Postgres and Kubernetes."
+      ],
+      "latency_ms": [
+        153.79450004547834,
+        86.43383393064141,
+        93.46279199235141
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "preserve-06",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Please email alex@example.com.",
+      "references": [
+        "Please email alex@example.com."
+      ],
+      "protected": [
+        "alex@example.com"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Please email Alex@example.com.",
+      "outputs": [
+        "Please email Alex@example.com.",
+        "Please email Alex@example.com.",
+        "Please email Alex@example.com."
+      ],
+      "latency_ms": [
+        140.3041670564562,
+        74.65554191730917,
+        74.90541692823172
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "alex@example.com"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-07",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Open https://example.com/docs?q=api.",
+      "references": [
+        "Open https://example.com/docs?q=api."
+      ],
+      "protected": [
+        "https://example.com/docs?q=api"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Open https://example.com/docs? Q=api.",
+      "outputs": [
+        "Open https://example.com/docs? Q=api.",
+        "Open https://example.com/docs? Q=api.",
+        "Open https://example.com/docs? Q=api."
+      ],
+      "latency_ms": [
+        176.96916707791388,
+        118.20058291777968,
+        111.99691612273455
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "https://example.com/docs?q=api"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-08",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Deploy version v2.7.1 to staging.",
+      "references": [
+        "Deploy version v2.7.1 to staging."
+      ],
+      "protected": [
+        "v2.7.1"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Deploy version v2. 7. 1 to staging.",
+      "outputs": [
+        "Deploy version v2. 7. 1 to staging.",
+        "Deploy version v2. 7. 1 to staging.",
+        "Deploy version v2. 7. 1 to staging."
+      ],
+      "latency_ms": [
+        176.33208306506276,
+        110.5457921512425,
+        124.29866613820195
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "v2.7.1"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-09",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Ticket AB-104 is still open.",
+      "references": [
+        "Ticket AB-104 is still open."
+      ],
+      "protected": [
+        "AB-104"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Ticket AB-104 is still open.",
+      "outputs": [
+        "Ticket AB-104 is still open.",
+        "Ticket AB-104 is still open.",
+        "Ticket AB-104 is still open."
+      ],
+      "latency_ms": [
+        174.48020889423788,
+        109.36379199847579,
+        103.18274982273579
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "preserve-10",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Run git status --short.",
+      "references": [
+        "Run git status --short."
+      ],
+      "protected": [
+        "git status --short"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Run git status--short.",
+      "outputs": [
+        "Run git status--short.",
+        "Run git status--short.",
+        "Run git status--short."
+      ],
+      "latency_ms": [
+        137.02637515962124,
+        73.99474992416799,
+        73.81554204039276
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "git status --short"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-11",
+      "category": "preserve",
+      "source": "authored",
+      "input": "The variable is userID, not userid.",
+      "references": [
+        "The variable is userID, not userid."
+      ],
+      "protected": [
+        "userID",
+        "not",
+        "userid"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "The variable is user ID, not userid.",
+      "outputs": [
+        "The variable is user ID, not userid.",
+        "The variable is user ID, not userid.",
+        "The variable is user ID, not userid."
+      ],
+      "latency_ms": [
+        166.49970808066428,
+        103.70312491431832,
+        103.226708015427
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "userID"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-12",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Do not change 192.168.1.10 or port 8080.",
+      "references": [
+        "Do not change 192.168.1.10 or port 8080."
+      ],
+      "protected": [
+        "not",
+        "192.168.1.10",
+        "8080"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Do not change 192. 168. 1. 10 or port 8080.",
+      "outputs": [
+        "Do not change 192. 168. 1. 10 or port 8080.",
+        "Do not change 192. 168. 1. 10 or port 8080.",
+        "Do not change 192. 168. 1. 10 or port 8080."
+      ],
+      "latency_ms": [
+        324.30995791219175,
+        234.5326670911163,
+        234.53145800158381
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "192.168.1.10"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-13",
+      "category": "preserve",
+      "source": "authored",
+      "input": "Her name is Siobhan.",
+      "references": [
+        "Her name is Siobhan."
+      ],
+      "protected": [
+        "Siobhan"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "Her name is Siobhan.",
+      "outputs": [
+        "Her name is Siobhan.",
+        "Her name is Siobhan.",
+        "Her name is Siobhan."
+      ],
+      "latency_ms": [
+        151.82187501341105,
+        84.70491599291563,
+        83.26450013555586
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "preserve-14",
+      "category": "preserve",
+      "source": "authored",
+      "input": "The product is called VoiceFlow.",
+      "references": [
+        "The product is called VoiceFlow."
+      ],
+      "protected": [
+        "VoiceFlow"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "The product is called Voice Flow.",
+      "outputs": [
+        "The product is called Voice Flow.",
+        "The product is called Voice Flow.",
+        "The product is called Voice Flow."
+      ],
+      "latency_ms": [
+        155.50616686232388,
+        82.8794171102345,
+        77.44516711682081
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [
+        "VoiceFlow"
+      ],
+      "empty": false
+    },
+    {
+      "id": "preserve-15",
+      "category": "preserve",
+      "source": "authored",
+      "input": "I use an iPhone and a MacBook Pro.",
+      "references": [
+        "I use an iPhone and a MacBook Pro."
+      ],
+      "protected": [
+        "iPhone",
+        "MacBook Pro"
+      ],
+      "tts": false,
+      "context": "",
+      "output": "I use an iPhone and a MacBook Pro.",
+      "outputs": [
+        "I use an iPhone and a MacBook Pro.",
+        "I use an iPhone and a MacBook Pro.",
+        "I use an iPhone and a MacBook Pro."
+      ],
+      "latency_ms": [
+        154.54483381472528,
+        100.97441705875099,
+        99.9477501027286
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "preserve-16",
+      "category": "preserve",
+      "source": "authored",
+      "input": "That is correct.",
+      "references": [
+        "That is correct."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "That is correct.",
+      "outputs": [
+        "That is correct.",
+        "That is correct.",
+        "That is correct."
+      ],
+      "latency_ms": [
+        117.64108389616013,
+        49.45529089309275,
+        56.45733280107379
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-01",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "hello how are you",
+      "references": [
+        "Hello, how are you?"
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "Hello. How are you?",
+      "outputs": [
+        "Hello. How are you?",
+        "Hello. How are you?",
+        "Hello. How are you?"
+      ],
+      "latency_ms": [
+        136.2925001885742,
+        75.02358290366828,
+        74.49404103681445
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-02",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "can you send the report by friday",
+      "references": [
+        "Can you send the report by Friday?"
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "Can you send the report by Friday?",
+      "outputs": [
+        "Can you send the report by Friday?",
+        "Can you send the report by Friday?",
+        "Can you send the report by Friday?"
+      ],
+      "latency_ms": [
+        158.30449992790818,
+        91.33454179391265,
+        90.6995830591768
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-03",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "i will call you tomorrow",
+      "references": [
+        "I will call you tomorrow."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "I will call you tomorrow.",
+      "outputs": [
+        "I will call you tomorrow.",
+        "I will call you tomorrow.",
+        "I will call you tomorrow."
+      ],
+      "latency_ms": [
+        137.68316712230444,
+        75.70975017733872,
+        73.60200001858175
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-04",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "yes that works for me",
+      "references": [
+        "Yes, that works for me."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "Yes that works for me.",
+      "outputs": [
+        "Yes that works for me.",
+        "Yes that works for me.",
+        "Yes that works for me."
+      ],
+      "latency_ms": [
+        137.25779089145362,
+        73.49874987266958,
+        72.73095799610019
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-05",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "we finished the test now we can deploy",
+      "references": [
+        "We finished the test. Now we can deploy."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "We finished the test. Now we can deploy.",
+      "outputs": [
+        "We finished the test. Now we can deploy.",
+        "We finished the test. Now we can deploy.",
+        "We finished the test. Now we can deploy."
+      ],
+      "latency_ms": [
+        177.48629092238843,
+        109.52845797874033,
+        108.21174993179739
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-06",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "when will the meeting start",
+      "references": [
+        "When will the meeting start?"
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "When will the meeting start?",
+      "outputs": [
+        "When will the meeting start?",
+        "When will the meeting start?",
+        "When will the meeting start?"
+      ],
+      "latency_ms": [
+        136.6932918317616,
+        80.86945884861052,
+        74.10562504082918
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-07",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "thanks for your help",
+      "references": [
+        "Thanks for your help."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "Thanks for your help.",
+      "outputs": [
+        "Thanks for your help.",
+        "Thanks for your help.",
+        "Thanks for your help."
+      ],
+      "latency_ms": [
+        127.08374997600913,
+        58.74104192480445,
+        59.02795889414847
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "punctuation-08",
+      "category": "punctuation",
+      "source": "authored",
+      "input": "i live in seattle",
+      "references": [
+        "I live in Seattle."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "I live in Seattle.",
+      "outputs": [
+        "I live in Seattle.",
+        "I live in Seattle.",
+        "I live in Seattle."
+      ],
+      "latency_ms": [
+        127.69879214465618,
+        64.87383390776813,
+        58.968208031728864
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-01",
+      "category": "grammar",
+      "source": "authored",
+      "input": "These is the wrong settings.",
+      "references": [
+        "These are the wrong settings."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "These are the wrong settings.",
+      "outputs": [
+        "These are the wrong settings.",
+        "These are the wrong settings.",
+        "These are the wrong settings."
+      ],
+      "latency_ms": [
+        132.03095900826156,
+        72.5645839702338,
+        78.83904105983675
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-02",
+      "category": "grammar",
+      "source": "authored",
+      "input": "She go to the office every day.",
+      "references": [
+        "She goes to the office every day."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "She goes to the office every day.",
+      "outputs": [
+        "She goes to the office every day.",
+        "She goes to the office every day.",
+        "She goes to the office every day."
+      ],
+      "latency_ms": [
+        158.38275011628866,
+        90.06499988026917,
+        91.63174987770617
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-03",
+      "category": "grammar",
+      "source": "authored",
+      "input": "I has two questions.",
+      "references": [
+        "I have two questions."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "I have two questions.",
+      "outputs": [
+        "I have two questions.",
+        "I have two questions.",
+        "I have two questions."
+      ],
+      "latency_ms": [
+        121.11229100264609,
+        64.76020906120539,
+        64.20433311723173
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-04",
+      "category": "grammar",
+      "source": "authored",
+      "input": "We was ready yesterday.",
+      "references": [
+        "We were ready yesterday."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "We were ready yesterday.",
+      "outputs": [
+        "We were ready yesterday.",
+        "We were ready yesterday.",
+        "We were ready yesterday."
+      ],
+      "latency_ms": [
+        125.8727500680834,
+        64.95383405126631,
+        64.04416705481708
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-05",
+      "category": "grammar",
+      "source": "authored",
+      "input": "There are a problem with the microphone.",
+      "references": [
+        "There is a problem with the microphone."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "There is a problem with the microphone.",
+      "outputs": [
+        "There is a problem with the microphone.",
+        "There is a problem with the microphone.",
+        "There is a problem with the microphone."
+      ],
+      "latency_ms": [
+        158.23800000362098,
+        84.3315829988569,
+        85.16174997203052
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-06",
+      "category": "grammar",
+      "source": "authored",
+      "input": "He did not went to the meeting.",
+      "references": [
+        "He did not go to the meeting."
+      ],
+      "protected": [
+        "not"
+      ],
+      "tts": true,
+      "context": "",
+      "output": "He did not go to the meeting.",
+      "outputs": [
+        "He did not go to the meeting.",
+        "He did not go to the meeting.",
+        "He did not go to the meeting."
+      ],
+      "latency_ms": [
+        152.60641695931554,
+        94.11841700784862,
+        98.58754114247859
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-07",
+      "category": "grammar",
+      "source": "authored",
+      "input": "This are the correct files.",
+      "references": [
+        "These are the correct files."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "This are the correct files.",
+      "outputs": [
+        "This are the correct files.",
+        "This are the correct files.",
+        "This are the correct files."
+      ],
+      "latency_ms": [
+        137.33137492090464,
+        73.80412495695055,
+        74.76075016893446
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "grammar-08",
+      "category": "grammar",
+      "source": "authored",
+      "input": "I look forward to hear from you.",
+      "references": [
+        "I look forward to hearing from you."
+      ],
+      "protected": [],
+      "tts": true,
+      "context": "",
+      "output": "I look forward to hearing from you.",
+      "outputs": [
+        "I look forward to hearing from you.",
+        "I look forward to hearing from you.",
+        "I look forward to hearing from you."
+      ],
+      "latency_ms": [
+        159.22600007615983,
+        96.68716695159674,
+        86.78587502799928
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "normalization-01",
+      "category": "normalization",
+      "source": "authored",
+      "input": "um I think uh we should leave now.",
+      "references": [
+        "I think we should leave now."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "I think we should leave now.",
+      "outputs": [
+        "I think we should leave now.",
+        "I think we should leave now.",
+        "I think we should leave now."
+      ],
+      "latency_ms": [
+        147.50591712072492,
+        82.71624986082315,
+        82.13183400221169
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "normalization-02",
+      "category": "normalization",
+      "source": "authored",
+      "input": "Send it on Friday new paragraph Thank you.",
+      "references": [
+        "Send it on Friday\n\nThank you."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "Send it on Friday. Thank you.",
+      "outputs": [
+        "Send it on Friday. Thank you.",
+        "Send it on Friday. Thank you.",
+        "Send it on Friday. Thank you."
+      ],
+      "latency_ms": [
+        150.11391695588827,
+        85.19200002774596,
+        85.1180839817971
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "normalization-03",
+      "category": "normalization",
+      "source": "authored",
+      "input": "The the microphone is working.",
+      "references": [
+        "The microphone is working."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "The microphone is working.",
+      "outputs": [
+        "The microphone is working.",
+        "The microphone is working.",
+        "The microphone is working."
+      ],
+      "latency_ms": [
+        126.68687500990927,
+        64.58479189313948,
+        65.02058310434222
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "normalization-04",
+      "category": "normalization",
+      "source": "authored",
+      "input": "The server uses port eight thousand.",
+      "references": [
+        "The server uses port 8000."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "The server uses port 8000.",
+      "outputs": [
+        "The server uses port 8000.",
+        "The server uses port 8000.",
+        "The server uses port 8000."
+      ],
+      "latency_ms": [
+        173.97704208269715,
+        104.06066686846316,
+        108.6562080308795
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "normalization-05",
+      "category": "normalization",
+      "source": "authored",
+      "input": "The budget is fifty thousand dollars.",
+      "references": [
+        "The budget is $50,000."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "The budget is $50, 000.",
+      "outputs": [
+        "The budget is $50, 000.",
+        "The budget is $50, 000.",
+        "The budget is $50, 000."
+      ],
+      "latency_ms": [
+        176.29787512123585,
+        117.62920813634992,
+        111.66541697457433
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "normalization-06",
+      "category": "normalization",
+      "source": "authored",
+      "input": "Meet at three thirty PM.",
+      "references": [
+        "Meet at 3:30 PM."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "Meet at 3: 30 PM.",
+      "outputs": [
+        "Meet at 3: 30 PM.",
+        "Meet at 3: 30 PM.",
+        "Meet at 3: 30 PM."
+      ],
+      "latency_ms": [
+        157.84158394671977,
+        101.0855829808861,
+        101.14883398637176
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "semantic-01",
+      "category": "semantic",
+      "source": "authored",
+      "input": "Deploy with cube control.",
+      "references": [
+        "Deploy with kubectl."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "[VOCABULARY HINT]\nOn-screen / current context: kubectl, Kubernetes",
+      "output": "Deploy with cube control.",
+      "outputs": [
+        "Deploy with cube control.",
+        "Deploy with Cube Control.",
+        "Deploy with Cube Control."
+      ],
+      "latency_ms": [
+        153.58970896340907,
+        65.07212505675852,
+        65.70412497967482
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "semantic-02",
+      "category": "semantic",
+      "source": "authored",
+      "input": "Use post grass for the database.",
+      "references": [
+        "Use Postgres for the database."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "[VOCABULARY HINT]\nOn-screen / current context: Postgres",
+      "output": "Use Post Grass for the database.",
+      "outputs": [
+        "Use Post Grass for the database.",
+        "Use Post Grass for the database.",
+        "Use Post Grass for the database."
+      ],
+      "latency_ms": [
+        142.33050006441772,
+        83.89891684055328,
+        82.20929186791182
+      ],
+      "errors": [],
+      "exact": false,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "semantic-03",
+      "category": "semantic",
+      "source": "authored",
+      "input": "Click the sign-in but in.",
+      "references": [
+        "Click the sign-in button."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "Click the sign-in button.",
+      "outputs": [
+        "Click the sign-in button.",
+        "Click the sign-in button.",
+        "Click the sign-in button."
+      ],
+      "latency_ms": [
+        133.13625007867813,
+        73.87299998663366,
+        74.72112495452166
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": true,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "semantic-04",
+      "category": "semantic",
+      "source": "authored",
+      "input": "The user has write access.",
+      "references": [
+        "The user has write access."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "The user has write access.",
+      "outputs": [
+        "The user has write access.",
+        "The user has write access.",
+        "The user has write access."
+      ],
+      "latency_ms": [
+        144.8167501948774,
+        75.19474998116493,
+        68.70683305896819
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    },
+    {
+      "id": "semantic-05",
+      "category": "semantic",
+      "source": "authored",
+      "input": "We need to check the cache.",
+      "references": [
+        "We need to check the cache."
+      ],
+      "protected": [],
+      "tts": false,
+      "context": "",
+      "output": "We need to check the cache.",
+      "outputs": [
+        "We need to check the cache.",
+        "We need to check the cache.",
+        "We need to check the cache."
+      ],
+      "latency_ms": [
+        147.7735829539597,
+        77.8868340421468,
+        77.56541692651808
+      ],
+      "errors": [],
+      "exact": true,
+      "changed": false,
+      "protected_failures": [],
+      "empty": false
+    }
+  ]
+}

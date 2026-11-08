@@ -11,7 +11,8 @@ enum WizardStep: Int, CaseIterable {
     case welcome = 0
     case permissions = 1
     case models = 2
-    case done = 3
+    case practice = 3
+    case done = 4
 }
 
 // MARK: - Setup Wizard View
@@ -19,6 +20,7 @@ enum WizardStep: Int, CaseIterable {
 struct SetupWizardView: View {
     @ObservedObject var state: SetupWizardState
     let onComplete: () -> Void
+    var preparePractice: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,9 +49,12 @@ struct SetupWizardView: View {
                 case .models:
                     ModelDownloadStepView(modelManager: state.modelManager) {
                         withAnimation(.easeInOut(duration: 0.3)) {
-                            state.currentStep = .done
+                            state.currentStep = .practice
                         }
                     }
+                case .practice:
+                    DictationCheckView(onContinue: { state.currentStep = .done })
+                        .onAppear { preparePractice() }
                 case .done:
                     DoneStepView(onComplete: onComplete)
                 }
@@ -66,7 +71,7 @@ struct SetupWizardView: View {
 struct StepProgressIndicator: View {
     let currentStep: WizardStep
 
-    private let steps: [WizardStep] = [.permissions, .models, .done]
+    private let steps: [WizardStep] = [.permissions, .models, .practice, .done]
 
     var body: some View {
         HStack(spacing: 0) {

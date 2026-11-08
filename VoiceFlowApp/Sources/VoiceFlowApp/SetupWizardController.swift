@@ -10,6 +10,11 @@ final class SetupWizardController {
     private var window: NSWindow?
     private let state = SetupWizardState()
     private var onComplete: (() -> Void)?
+    private let preparePractice: () -> Void
+
+    init(preparePractice: @escaping () -> Void = {}) {
+        self.preparePractice = preparePractice
+    }
 
     static let setupCompleteKey = "voiceflow.setupWizardCompleted"
 
@@ -20,9 +25,9 @@ final class SetupWizardController {
     func show(onComplete: @escaping () -> Void) {
         self.onComplete = onComplete
 
-        let wizardView = SetupWizardView(state: state) { [weak self] in
+        let wizardView = SetupWizardView(state: state, onComplete: { [weak self] in
             self?.completeSetup()
-        }
+        }, preparePractice: preparePractice)
 
         let hostingController = NSHostingController(rootView: wizardView)
 
@@ -57,7 +62,7 @@ final class SetupWizardController {
         window = nil
 
         // Restore menu-bar-only mode after wizard closes
-        NSApp.setActivationPolicy(.accessory)
+        ApplicationVisibility.apply()
 
         onComplete?()
         onComplete = nil

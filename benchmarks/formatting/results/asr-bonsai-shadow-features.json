@@ -1,0 +1,383 @@
+{
+  "mode": "shadow_features_only_no_probability",
+  "backend": "bonsai",
+  "rows": [
+    {
+      "id": "asr-preserve-01",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-preserve-02",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-preserve-03",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-preserve-04",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-01",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-02",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-03",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-04",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-05",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-06",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-07",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-punctuation-08",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-01",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "as"
+            ],
+            "candidate_words": [
+              "are"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-02",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "go"
+            ],
+            "candidate_words": [
+              "goes"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-03",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "has"
+            ],
+            "candidate_words": [
+              "have"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-04",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "was"
+            ],
+            "candidate_words": [
+              "were"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-05",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "are"
+            ],
+            "candidate_words": [
+              "is"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-06",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "went"
+            ],
+            "candidate_words": [
+              "go"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-07",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "asr-grammar-08",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "hear"
+            ],
+            "candidate_words": [
+              "hearing"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    }
+  ]
+}

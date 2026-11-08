@@ -39,7 +39,7 @@
 - **Voice snippets** &mdash; Custom trigger phrases that expand into any text
 - **AI voice commands** &mdash; Say "reply to this", "rewrite this", "proofread this", "continue writing", "summarize this" for context-aware AI actions on the current text field
 - **Repeat to replace** &mdash; Re-say a sentence (or just fix a word) and VoiceFlow replaces your last dictation instead of appending it. A deterministic pre-check &mdash; correction hotwords ("scratch that", "I meant…") plus word-overlap with your last output &mdash; gates the call, then Bonsai confirms redo-vs-new. Hold `⌥⇧ Space` to force a replace, or to speak an edit ("make it more formal")
-- **Menu bar app** &mdash; Minimal footprint, no dock icon, launch at login
+- **Native macOS app** &mdash; Dock and app-switcher presence by default, optional menu-bar-only mode, launch at login
 
 ## How It Works
 
@@ -109,6 +109,25 @@ See [Building from Source](#building-from-source) below — note you'll also nee
 1. **Launch VoiceFlow** &mdash; Look for the icon in your menu bar
 2. **Hold `⌥ Space`** &mdash; Start speaking
 3. **Release `⌥ Space`** &mdash; Text is transcribed by Parakeet, formatted by Bonsai with the right persona for your current app, and pasted at your cursor
+
+### Hotkeys
+
+All four shortcuts are customisable under **Settings → Hotkeys**: click **Record**, then press the keys you want.
+
+| Action | Default | Style |
+|--------|---------|-------|
+| Dictate | `⌥ Space` | Hold to record, release to paste |
+| Dictate with screen context | `⌃⌥ Space` | Hold; adds a screenshot of your screen as context |
+| Edit / repeat last dictation | `⌥⇧ Space` | Hold and re-say, or speak an instruction |
+| Cycle formatting level | `⌃⌥⇧ Space` | Tap |
+
+**Single-key triggers.** A shortcut doesn't have to be a chord — you can bind a single key on its own and just hold it to talk:
+
+- **🌐 fn (Globe)** &mdash; the little key at the bottom-left of Apple keyboards. Hold it to dictate, release to paste, exactly like Apple's built-in dictation but running fully locally. macOS normally uses this key for Emoji & Symbols or Dictation ("Press 🌐 key to" in System Settings › Keyboard); while it's a VoiceFlow hotkey, VoiceFlow sets that system action to **Do Nothing** and restores your original choice when you change the hotkey or quit.
+- **A single modifier** &mdash; right `⌘`, right `⌥`, left `⌃`, etc. Left and right keys are distinguished, so you can keep the other side for normal shortcuts.
+- **A function key** &mdash; `F1`…`F20` may be bound bare (other keys need at least one of `⌃ ⌥ ⌘`).
+
+Pressing any other key while a single-key hotkey is held cancels the recording, so `fn`+arrow or `⌘`+`C` still do what they always did.
 
 ### Editing & repeating
 
@@ -284,6 +303,44 @@ Two zero-config systems pre-populate sensible defaults:
 - **Filler removal** &mdash; "um", "uh", "ah", "hmm", "er" removed
 - **Spelled-out words** &mdash; "S M O L L M" → "SMOLLM"
 - **Technical terms** &mdash; Configurable replacement dictionary
+
+## Troubleshooting
+
+### Shortcuts respond but no text appears
+
+Open **Settings → Diagnostics → Test microphone, shortcut and insertion**.
+The same check runs during onboarding. Click its field and dictate; the last
+completed checkpoint identifies whether shortcut delivery, microphone input,
+speech recognition, writing, or insertion needs attention.
+
+- If **Test without shortcut** works but the shortcut does not, change the
+  binding and check other apps for the same shortcut (including ChatGPT).
+- If the input meter stays silent, check the microphone and input device.
+- If speech recognition fails or stalls, use **Restart speech service** and
+  open Logs for the actual error. Accessibility access alone cannot verify a
+  model or microphone is working.
+- If formatting succeeds but insertion does not, keep the test field focused
+  and check the running app's live Accessibility status.
+
+**Copy check summary** copies checkpoint and service status without test text
+or audio. Share it when requesting help. VoiceFlow now appears in the Dock and
+app switcher by default; **Settings → Startup** offers menu-bar-only mode.
+
+
+### VoiceFlow doesn't show up in Raycast, Alfred or Spotlight
+
+Launchers index `/Applications` through Spotlight and cache what they learn about each bundle **by file identity**, not by path. If the cached record for `/Applications/VoiceFlow.app` went stale — for example it was first seen half-copied, or a staged update with the same bundle id was indexed from `~/Library` — the launcher keeps hiding the app even though the bundle on disk is fine. (Newer builds stage updates in a `.noindex` folder and install atomically to avoid this.) To force a fresh record without reinstalling, give the bundle a new file identity:
+
+```bash
+osascript -e 'quit app "VoiceFlow"'
+ditto /Applications/VoiceFlow.app /Applications/.VoiceFlow-fresh   # exact copy, keeps the signature
+mv /Applications/VoiceFlow.app ~/.Trash/VoiceFlow-old.app
+mv /Applications/.VoiceFlow-fresh /Applications/VoiceFlow.app
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/VoiceFlow.app
+open -a VoiceFlow
+```
+
+If that still doesn't do it, the launcher's own index is the problem: in Raycast, open **Settings → Extensions → Applications** and remove and re-add the `/Applications` folder (or quit Raycast, delete `~/Library/Application Support/com.raycast.macos/app_index.db*`, and relaunch it).
 
 ## Building from Source
 

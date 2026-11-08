@@ -2040,6 +2040,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overlayState = OverlayState()
     var settingsWindow: NSWindow?
     var wizardController: SetupWizardController?
+    /// The app that was frontmost when Settings opened, so focus can be handed
+    /// back when the window closes and we drop out of the dock again.
+    private var appToReactivateAfterSettings: NSRunningApplication?
     private var audioLevelCancellable: AnyCancellable?
     private var screenshotCapture = ScreenshotCapture()
     private var isVisualContextRecording = false
@@ -2055,6 +2058,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Guards one-time installation of the hotkey-rebind observers.
     private var hotkeyObserversInstalled = false
+    private var normalLaunchStarted = false
+    private var diagnosticSubscriptions = Set<AnyCancellable>()
+    private var dockIconObserverInstalled = false
 
     // Moonshine streaming engine (Beta)
     var moonshineEngine = MoonshineStreamingEngine()
@@ -2223,8 +2229,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hide dock icon - menu bar only
-        NSApp.setActivationPolicy(.accessory)
+        ApplicationVisibility.apply()
+        ApplicationVisibility.installMenuIfNeeded(open: self, action: #selector(openSettings))
+        NotificationCenter.default.addObserver(forName: ApplicationVisibility.changed, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { ApplicationVisibility.apply() }
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { _ in
+            DispatchQueue.main.async { ApplicationVisibility.apply() }
+        }
 
         // Belt-and-suspenders: env is already seeded in VoiceFlowApp.init()
         // before VoiceFlowBridge is constructed, but re-apply here in case the
@@ -2334,7 +2346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let response = alert.runModal()
 
         // Restore menu-bar-only mode
-        NSApp.setActivationPolicy(.accessory)
+        ApplicationVisibility.apply()
 
         guard response == .alertFirstButtonReturn else { return }
 
@@ -2342,22 +2354,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let fm = FileManager.default
-            // Remove existing copy if present
-            if fm.fileExists(atPath: destPath) {
-                try fm.removeItem(atPath: destPath)
+            // Copy into /Applications under a temporary, non-.app name first,
+            // then rename into place. A 600 MB bundle takes seconds to copy;
+            // Spotlight, Raycast and Launch Services all watch /Applications
+            // and would otherwise index a half-copied VoiceFlow.app (no
+            // executable yet, no signature) and can cache that verdict. The
+            // rename is atomic, so the bundle only ever appears fully formed.
+            // (Source may be on a read-only volume, hence copy rather than move.)
+            let stagingPath = (applicationsDir as NSString)
+                .appendingPathComponent(".\(appName).installing-\(ProcessInfo.processInfo.processIdentifier)")
+            defer { try? fm.removeItem(atPath: stagingPath) }
+            try? fm.removeItem(atPath: stagingPath)
+            try fm.copyItem(atPath: appPath, toPath: stagingPath)
+
+            // Strip quarantine xattr so macOS doesn't re-prompt (and doesn't
+            // translocate the copy on first launch).
+            let stripProcess = Process()
+            stripProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            stripProcess.arguments = ["-dr", "com.apple.quarantine", stagingPath]
+            do {
+                try stripProcess.run()
+                stripProcess.waitUntilExit()
+            } catch {
+                NSLog("[VoiceFlow] Could not strip staging quarantine: %@", error.localizedDescription)
             }
-            // Copy to /Applications (source may be on a read-only volume)
-            try fm.copyItem(atPath: appPath, toPath: destPath)
+
+            // Replace any existing copy and move the finished bundle into place.
+            try AppBundleInstaller.promote(
+                staged: URL(fileURLWithPath: stagingPath),
+                to: URL(fileURLWithPath: destPath),
+                fileManager: fm
+            )
 
             // Best-effort cleanup of the original (fails silently on read-only volumes)
             try? fm.removeItem(atPath: appPath)
 
-            // Strip quarantine xattr so macOS doesn't re-prompt
-            let stripProcess = Process()
-            stripProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-            stripProcess.arguments = ["-dr", "com.apple.quarantine", destPath]
-            try? stripProcess.run()
-            stripProcess.waitUntilExit()
+            // Tell Launch Services about the new bundle right away rather than
+            // waiting for its next scan.
+            Self.registerWithLaunchServices(path: destPath)
 
             // Relaunch from /Applications after a short delay to let this instance exit
             let script = """
@@ -2382,8 +2416,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Force Launch Services to (re)read a bundle that was just installed or
+    /// swapped at `path`, so Spotlight-backed launchers pick it up without a
+    /// logout. `LSRegisterURL` is the public API for exactly this.
+    static func registerWithLaunchServices(path: String) {
+        let url = URL(fileURLWithPath: path) as CFURL
+        let status = LSRegisterURL(url, true)
+        if status != noErr {
+            NSLog("[VoiceFlow] LSRegisterURL(%@) failed: %d", path, status)
+        }
+    }
+
     private func showSetupWizard() {
-        let controller = SetupWizardController()
+        let controller = SetupWizardController(preparePractice: { [weak self] in
+            self?.proceedWithNormalLaunch()
+        })
         wizardController = controller
         controller.show { [weak self] in
             self?.wizardController = nil
@@ -2391,10 +2438,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func configureDictationCheck() {
+        let check = DictationDiagnostics.shared
+        check.startRecording = { [weak self] in self?.startRecording() }
+        check.cancelRecording = { [weak self] in self?.cancelActiveRecording() }
+        check.stopRecording = { [weak self] in self?.stopRecordingAndPaste() }
+        check.restartSpeech = { [weak self] in
+            guard let self else { return }
+            check.failedSpeech("Speech service is restarting. Reset the check when it is ready.")
+            await self.parakeetEngine.stopDaemon()
+            await self.parakeetEngine.loadModel()
+            if self.parakeetEngine.state == .ready {
+                check.recoveryMessage = "Speech service restarted. Click Reset check and try again."
+            } else {
+                check.recoveryMessage = "Speech service could not restart. Open Logs for the failure details."
+            }
+        }
+        audioRecorder.$audioLevel.sink { level in
+            check.audioLevel(level)
+        }.store(in: &diagnosticSubscriptions)
+        parakeetEngine.$state.sink { state in
+            switch state {
+            case .unloaded: check.speechState = "Not started"
+            case .starting: check.speechState = "Starting"
+            case .loadingModel: check.speechState = "Loading model"
+            case .ready: check.speechState = "Ready"
+            case .error(let message): check.speechState = "Error: \(message)"
+            }
+        }.store(in: &diagnosticSubscriptions)
+        voiceFlow.$isInitialized.combineLatest(llamaServer.$state).sink { initialized, state in
+            check.formatterReady = initialized && state == .ready
+        }.store(in: &diagnosticSubscriptions)
+    }
+
     private func proceedWithNormalLaunch() {
+        guard !normalLaunchStarted else { return }
+        normalLaunchStarted = true
+        configureDictationCheck()
         setupStatusItem()
         setupHotkey()
         installHotkeyObserversIfNeeded()
+        installDockIconObserverIfNeeded()
         UpdateManager.shared.startAutomaticChecks()
         setupOverlay()
         setupAIResultPanel()
@@ -2576,10 +2660,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[VoiceFlow] Bonsai pre-warm: %.0fms (model resident in Metal, persona prefix cached)", ms)
     }
 
+    private var terminationInProgress = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationInProgress else { return .terminateLater }
+        terminationInProgress = true
+        suspendHotkeys()
+        cancelLiveFormat()
+        if isRecording { _ = audioRecorder.stopRecording(); isRecording = false }
+        Task { @MainActor in
+            await parakeetEngine.stopDaemon()
+            await llamaServer.stop()
+            await voiceFlow.cleanup()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // If an update is staged, swap it in now (we're quitting anyway — no
         // relaunch). Touches only the app bundle, so user stats/settings persist.
         UpdateManager.shared.applyStagedUpdateOnQuitIfNeeded()
+
+        // Give the Globe key its system action back if we parked it.
+        GlobeKeyController.shared.restore()
 
         // Clean up AI result key monitors
         removeAIResultKeyMonitors()
@@ -2587,17 +2691,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Clean up streaming engine
         moonshineEngine.unloadModel()
 
-        // Stop Parakeet daemon if it's running
-        if useParakeet {
-            parakeetEngine.stopDaemon()
-        }
-
-        // Stop llama-server (only if we spawned it).
-        llamaServer.stop()
-
-        // Clean up resources before termination to prevent memory leaks
-        // This ensures the Rust side properly releases all model memory
-        voiceFlow.cleanup()
+        // Native cleanup already received a bounded background opportunity
+        // during applicationShouldTerminate, before AppKit agreed to exit.
 
         // Log final memory state for debugging
         let memUsage = VoiceFlowBridge.getMemoryUsage()
@@ -2784,6 +2879,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         // If window already exists, just bring it to front
         if let window = settingsWindow {
+            showInDockWhileSettingsOpen()
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -2808,10 +2905,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 920, height: 600)
         window.center()
         window.isReleasedWhenClosed = false
+        window.delegate = self
 
         settingsWindow = window
+        showInDockWhileSettingsOpen()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - Dock icon while Settings is open
+
+    /// UserDefaults key for the "Show in Dock while Settings is open" toggle.
+    static let dockIconWhileSettingsOpenKey = "dockIconWhileSettingsOpen"
+    static let dockIconPreferenceChangedNotification = Notification.Name("VoiceFlow.dockIconPreferenceChanged")
+
+    static var dockIconWhileSettingsOpenEnabled: Bool {
+        // Default ON: unset means enabled.
+        UserDefaults.standard.object(forKey: dockIconWhileSettingsOpenKey) == nil
+            || UserDefaults.standard.bool(forKey: dockIconWhileSettingsOpenKey)
+    }
+
+    /// VoiceFlow is a menu-bar app (LSUIElement / `.accessory`), so it normally
+    /// has no dock tile and is invisible to ⌘-Tab. That's right for the idle
+    /// state, but once the Settings window is open it's a real window the user
+    /// wants to get back to — so while it's open we become a `.regular` app
+    /// (dock tile + ⌘-Tab entry) and drop back to menu-bar-only as soon as it
+    /// closes. The setup wizard does the same thing on its own.
+    private func showInDockWhileSettingsOpen() {
+        guard Self.dockIconWhileSettingsOpenEnabled else { return }
+        guard NSApp.activationPolicy() != .regular else { return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != me {
+            appToReactivateAfterSettings = front
+        }
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    /// Return to menu-bar-only mode unless another real window (the setup
+    /// wizard) still needs the dock tile. Called after the Settings window has
+    /// actually gone away, and when the user turns the preference off.
+    private func leaveDockIfNoWindowsOpen() {
+        let settingsVisible = settingsWindow?.isVisible ?? false
+        let wizardOpen = wizardController != nil
+        guard !ApplicationVisibility.alwaysShow, !settingsVisible, !wizardOpen else { return }
+        guard NSApp.activationPolicy() == .regular else { return }
+        let shouldRestoreFocus = NSApp.isActive
+        ApplicationVisibility.apply()
+        // Switching to .accessory leaves us "active" with no menu bar; hand
+        // focus back to whatever the user was in before opening Settings.
+        let previous = appToReactivateAfterSettings
+        appToReactivateAfterSettings = nil
+        if shouldRestoreFocus, let previous, !previous.isTerminated {
+            previous.activate()
+        }
+    }
+
+    /// Live-apply the Settings toggle: turning it on while Settings is open
+    /// shows the dock tile immediately, turning it off hides it.
+    private func applyDockIconPreference() {
+        if Self.dockIconWhileSettingsOpenEnabled {
+            if settingsWindow?.isVisible == true {
+                showInDockWhileSettingsOpen()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        } else if wizardController == nil, NSApp.activationPolicy() == .regular {
+            ApplicationVisibility.apply()
+            // Keep the window in front: dropping the policy would otherwise
+            // leave it behind the previously active app.
+            settingsWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    private func installDockIconObserverIfNeeded() {
+        guard !dockIconObserverInstalled else { return }
+        dockIconObserverInstalled = true
+        NotificationCenter.default.addObserver(
+            forName: Self.dockIconPreferenceChangedNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyDockIconPreference() }
+        }
     }
 
     @objc private func openAccessibilitySettings() {
@@ -3208,6 +3381,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onRelease: {}
         )
+
+        // A bare 🌐 fn binding only works if macOS isn't also using the key
+        // for emoji / dictation; park (or give back) that system action.
+        GlobeKeyController.shared.sync(bindings: HotkeyStore.shared.allBindings)
     }
 
     /// Tear down all four hotkeys (used while the user is recording a new one,
@@ -3537,9 +3714,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startRecording() {
         guard !isRecording else { return }
+        if DictationDiagnostics.shared.running { return }
 
         do {
             try audioRecorder.startRecording()
+            DictationDiagnostics.shared.captureStarted()
             isRecording = true
             recordingMenuItem?.title = "Recording... (release \(dictateHotkeyLabel))"
 
@@ -3691,6 +3870,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         } catch {
+            DictationDiagnostics.shared.captureFailed(error.localizedDescription)
             showAlert(title: "Recording Error", message: error.localizedDescription)
         }
     }
@@ -4025,7 +4205,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let rawTranscript = await parakeetEngine.transcribe(audio: audio),
                       !rawTranscript.isEmpty else {
                     await MainActor.run { hideOverlay() }
-                    showNotification(title: "No Speech", body: "No speech was detected")
+                    if useParakeet, case .error = parakeetEngine.state {
+                        showNotification(title: "Speech recognition failed", body: "Open Settings → Diagnostics to restart the speech service or run the setup check.")
+                    } else {
+                        showNotification(title: "No Speech", body: "No speech was detected")
+                    }
                     return
                 }
 
@@ -4876,6 +5060,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try audioRecorder.startRecording()
+            DictationDiagnostics.shared.captureStarted()
             isRecording = true
             isEditMode = true
             recordingMenuItem?.title = "Recording edit... (release ⌥⇧Space)"
@@ -4892,6 +5077,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isEditMode = false
             NSLog("[VoiceFlow] Edit recording failed to start: %@",
                   error.localizedDescription)
+            DictationDiagnostics.shared.captureFailed(error.localizedDescription)
             showAlert(title: "Recording Error", message: error.localizedDescription)
         }
     }
@@ -5091,7 +5277,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Accessibility permission we already hold, so it's both simpler and one
     /// fewer permission class to get wrong.
     private func simulatePaste() {
+        if !DictationDiagnostics.shared.preparePaste(NSPasteboard.general.string(forType: .string) ?? "") { return }
+
         guard AXIsProcessTrusted() else {
+            DictationDiagnostics.shared.insertionFailed("Accessibility is not currently trusted by this running app. Open Privacy & Security and retry.")
             print("Accessibility not granted - cannot auto-paste")
             return
         }
@@ -5301,6 +5490,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - Settings window delegate
+
+extension AppDelegate: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        // The window is still on screen during willClose; flip the activation
+        // policy once it has actually been ordered out.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.leaveDockIfNoWindowsOpen() }
+        }
+    }
+}
+
 // MARK: - Global Hotkey Manager
 
 final class GlobalHotkeyManager {
@@ -5328,7 +5530,8 @@ final class GlobalHotkeyManager {
         GlobalHotkeyManager.cancelHandlers[id] = onCancel
 
         if let modifier = binding.modifierOnly {
-            modifierHotkeys[id] = modifier
+            MainActor.assumeIsolated { DictationDiagnostics.shared.registered(id: id, status: 0) }
+        modifierHotkeys[id] = modifier
             installModifierEventMonitorsIfNeeded()
             return
         }
@@ -5362,6 +5565,7 @@ final class GlobalHotkeyManager {
 
                     let kind = GetEventKind(event)
                     if kind == UInt32(kEventHotKeyPressed) {
+                        MainActor.assumeIsolated { DictationDiagnostics.shared.receivedHotkey(id: hotkeyID.id) }
                         GlobalHotkeyManager.pressHandlers[hotkeyID.id]?()
                     } else if kind == UInt32(kEventHotKeyReleased) {
                         GlobalHotkeyManager.releaseHandlers[hotkeyID.id]?()
@@ -5381,7 +5585,7 @@ final class GlobalHotkeyManager {
         hotKeyID.id = id
 
         var ref: EventHotKeyRef?
-        RegisterEventHotKey(
+        let registrationStatus = RegisterEventHotKey(
             keyCode,
             binding.modifiers,
             hotKeyID,
@@ -5390,7 +5594,8 @@ final class GlobalHotkeyManager {
             &ref
         )
 
-        if let ref = ref {
+        MainActor.assumeIsolated { DictationDiagnostics.shared.registered(id: id, status: registrationStatus) }
+        if registrationStatus == noErr, let ref = ref {
             hotKeyRefs[id] = ref
         }
     }
@@ -5428,6 +5633,12 @@ final class GlobalHotkeyManager {
                 if isPressed && !wasPressed {
                     activeModifierHotkeys.insert(id)
                     cancelledModifierHotkeys.remove(id)
+                    if modifier == .function {
+                        // Another app (or the user) may have handed the Globe
+                        // key back to emoji/dictation since we last checked.
+                        MainActor.assumeIsolated { GlobeKeyController.shared.claim() }
+                    }
+                    MainActor.assumeIsolated { DictationDiagnostics.shared.receivedHotkey(id: id) }
                     GlobalHotkeyManager.pressHandlers[id]?()
                 } else if !isPressed && wasPressed {
                     activeModifierHotkeys.remove(id)
@@ -5451,6 +5662,7 @@ final class GlobalHotkeyManager {
     /// Unregister a single hotkey so it can be re-bound at runtime. Clears the
     /// Carbon ref and the stored handlers for that id.
     func unregister(id: UInt32) {
+        MainActor.assumeIsolated { DictationDiagnostics.shared.unregister(id: id) }
         if let ref = hotKeyRefs[id] {
             UnregisterEventHotKey(ref)
             hotKeyRefs.removeValue(forKey: id)
@@ -7451,8 +7663,11 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var voiceFlow: VoiceFlowBridge
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var showLogs = false
+    @State private var showDictationCheck = false
     @State private var showTips = false
     @AppStorage("avoidBluetoothMic") private var avoidBluetoothMic = true
+    @AppStorage(ApplicationVisibility.preferenceKey) private var alwaysShowInDock = true
+    @AppStorage(AppDelegate.dockIconWhileSettingsOpenKey) private var dockIconWhileSettingsOpen = true
 
     var body: some View {
         ScrollView {
@@ -7478,6 +7693,14 @@ struct GeneralSettingsView: View {
                 }
 
                 cardSection(title: "Startup", icon: "power") {
+                    Toggle("Show VoiceFlow in Dock and app switcher", isOn: $alwaysShowInDock)
+                        .toggleStyle(.switch)
+                        .onChange(of: alwaysShowInDock) { _ in
+                            NotificationCenter.default.post(name: ApplicationVisibility.changed, object: nil)
+                        }
+                    Text("Keep VoiceFlow easy to reopen, pin to the Dock, or find in Force Quit. Turn this off for menu-bar-only use.")
+                        .font(.caption).foregroundStyle(.secondary)
+
                     Toggle("Launch VoiceFlow at login", isOn: $launchAtLogin)
                         .onChange(of: launchAtLogin) { newValue in
                             if newValue {
@@ -7487,6 +7710,23 @@ struct GeneralSettingsView: View {
                             }
                         }
                         .toggleStyle(.switch)
+
+                    Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+
+                    Toggle(isOn: $dockIconWhileSettingsOpen) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show in Dock while Settings is open")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                            Text("VoiceFlow stays a menu-bar-only app, but gets a Dock icon and a ⌘-Tab entry while this window is open so you can switch back to it.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.55))
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .onChange(of: dockIconWhileSettingsOpen) { _ in
+                        NotificationCenter.default.post(name: AppDelegate.dockIconPreferenceChangedNotification, object: nil)
+                    }
                 }
 
                 cardSection(title: "Software Update", icon: "arrow.down.circle") {
@@ -7545,6 +7785,8 @@ struct GeneralSettingsView: View {
                 }
 
                 cardSection(title: "Diagnostics", icon: "doc.text.magnifyingglass") {
+                    Button("Test microphone, shortcut and insertion…") { showDictationCheck = true }
+                        .buttonStyle(VFOutlinePillStyle())
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Logs")
@@ -7595,6 +7837,12 @@ struct GeneralSettingsView: View {
                 .padding(.top, 4)
             }
             .padding(24)
+        }
+        .sheet(isPresented: $showDictationCheck) {
+            VStack(spacing: 0) {
+                DictationCheckView()
+                Button("Done") { showDictationCheck = false }.padding(.bottom, 16)
+            }.frame(width: 620, height: 700)
         }
         .sheet(isPresented: $showLogs) {
             LogConsoleView()
@@ -7666,16 +7914,17 @@ struct GeneralSettingsView: View {
     private func restartApp() {
         let bundlePath = Bundle.main.bundlePath
 
-        // Use /bin/sh -c with nohup + disown so the relaunch survives our termination
-        let script = "sleep 1 && open \"\(bundlePath)\" &"
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", script]
+        task.arguments = ["-c", """
+        /usr/bin/nohup /bin/sh -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; /usr/bin/open "$2"' voiceflow-relaunch "$1" "$2" >/dev/null 2>&1 &
+        """, "voiceflow-restart", String(ProcessInfo.processInfo.processIdentifier), bundlePath]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
-        // Setting qualityOfService to .background helps the process survive parent exit
-        task.qualityOfService = .background
-        try? task.run()
+        do { try task.run() } catch {
+            NSLog("[VoiceFlow] Could not schedule restart: %@", error.localizedDescription)
+            return
+        }
 
         // Terminate after a brief delay to let the shell process detach
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -9760,8 +10009,15 @@ class OverlayState: ObservableObject {
         }
     }
 
-    @Published var state: RecordingState = .idle
-    @Published var audioLevel: Float = 0
+    let waveform = RecordingWaveformHistory()
+    @Published var state: RecordingState = .idle {
+        didSet {
+            if state.isRecording && !oldValue.isRecording { waveform.reset() }
+        }
+    }
+    @Published var audioLevel: Float = 0 {
+        didSet { waveform.append(audioLevel) }
+    }
 }
 
 // MARK: - Recording Overlay View
@@ -9809,7 +10065,7 @@ struct RecordingOverlayView: View {
 
     private var pillWidth: CGFloat {
         if case .aiProcessing = state.state { return 260 }
-        return 200
+        return 264
     }
 
     // MARK: - Body
@@ -9887,10 +10143,10 @@ struct RecordingOverlayView: View {
                     .frame(width: 40, height: 16)
                     .scaleEffect(0.6)
             } else {
-                logoView
-                WaveformView(audioLevel: state.audioLevel)
-                    .frame(width: 60, height: 30)
-                Spacer()
+                Spacer(minLength: 0)
+                LiveRecordingWaveformView(history: state.waveform)
+                    .frame(width: 256, height: 32)
+                Spacer(minLength: 0)
             }
         }
         .padding(.horizontal, 16)
@@ -9924,15 +10180,14 @@ struct RecordingOverlayView: View {
                     .scaleEffect(0.7)
             } else if case .streaming = state.state {
                 // Streaming with empty text — show waveform in pill
-                logoView
-                WaveformView(audioLevel: state.audioLevel)
-                    .frame(width: 80, height: 45)
+                LiveRecordingWaveformView(history: state.waveform)
+                    .frame(width: 224, height: 38)
             } else {
-                logoView
                 if state.state.isRecording {
-                    WaveformView(audioLevel: state.audioLevel)
-                        .frame(width: 80, height: 45)
+                    LiveRecordingWaveformView(history: state.waveform)
+                        .frame(width: 224, height: 38)
                 } else if state.state.isProcessing {
+                    logoView
                     processingView
                 }
             }
@@ -9968,15 +10223,14 @@ struct RecordingOverlayView: View {
     }
 
     private var pillBackground: some View {
-        ZStack {
-            if state.state.isRecording {
-                AnimatedGradientBackground(animate: animateGradient, colors: gradientColors)
-            } else {
-                Color.black.opacity(0.85)
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .fill(Color(red: 0.045, green: 0.052, blue: 0.064).opacity(0.96))
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(.white.opacity(0.12), lineWidth: 1)
             }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 30))
     }
+
 }
 
 // MARK: - Pulsing Dots View
@@ -10018,45 +10272,5 @@ struct AnimatedGradientBackground: View {
         )
         .hueRotation(.degrees(animate ? 45 : 0))
         .opacity(0.95)
-    }
-}
-
-// MARK: - Waveform View
-
-struct WaveformView: View {
-    let audioLevel: Float
-
-    private let barCount = 5
-    private let barSpacing: CGFloat = 4
-
-    var body: some View {
-        HStack(spacing: barSpacing) {
-            ForEach(0..<barCount, id: \.self) { index in
-                WaveformBar(audioLevel: audioLevel, index: index)
-            }
-        }
-    }
-}
-
-struct WaveformBar: View {
-    let audioLevel: Float
-    let index: Int
-
-    private let baseHeight: CGFloat = 6
-    private let maxHeight: CGFloat = 40  // Much bigger amplitude
-
-    private var computedHeight: CGFloat {
-        // Amplify the audio level for more visible movement
-        let amplifiedLevel = min(1.0, CGFloat(audioLevel) * 3.0)
-        let variation = sin(Double(index) * 1.5) * 0.4 + 0.6
-        let level = amplifiedLevel * CGFloat(variation)
-        return baseHeight + level * (maxHeight - baseHeight)
-    }
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 3)
-            .fill(Color.white)
-            .frame(width: 6, height: computedHeight)
-            .animation(.easeInOut(duration: 0.08), value: audioLevel)
     }
 }

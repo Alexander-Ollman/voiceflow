@@ -1,0 +1,1189 @@
+{
+  "cases": 190,
+  "rounds": 5,
+  "calls": 6650,
+  "errors": 0,
+  "backends": {
+    "identity": {
+      "backend": "identity",
+      "cases": 190,
+      "repeats": 5,
+      "measured_calls": 950,
+      "cpu_nice": 0,
+      "peer_experiment": "user reports paused",
+      "started": "2026-10-15T23:53:59-0700",
+      "load_seconds": 2.0829029381275177e-06,
+      "first_call_ms": 0.00045797787606716156,
+      "warmup_calls": 3,
+      "peak_process_tree_rss_bytes": 29884416,
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+      "native_library_sha256": null,
+      "overall": {
+        "calls": 950,
+        "median_ms": 0.000208,
+        "p95_ms": 0.0005,
+        "min_ms": 8.3e-05,
+        "max_ms": 0.005875,
+        "errors": 0
+      },
+      "by_round": {
+        "0": {
+          "calls": 190,
+          "median_ms": 0.000333,
+          "p95_ms": 0.003209,
+          "min_ms": 0.000125,
+          "max_ms": 0.005875,
+          "errors": 0
+        },
+        "1": {
+          "calls": 190,
+          "median_ms": 0.000167,
+          "p95_ms": 0.000292,
+          "min_ms": 0.000125,
+          "max_ms": 0.0005,
+          "errors": 0
+        },
+        "2": {
+          "calls": 190,
+          "median_ms": 0.000167,
+          "p95_ms": 0.00025,
+          "min_ms": 8.3e-05,
+          "max_ms": 0.000375,
+          "errors": 0
+        },
+        "3": {
+          "calls": 190,
+          "median_ms": 0.000209,
+          "p95_ms": 0.000416,
+          "min_ms": 0.000125,
+          "max_ms": 0.000834,
+          "errors": 0
+        },
+        "4": {
+          "calls": 190,
+          "median_ms": 0.000209,
+          "p95_ms": 0.000375,
+          "min_ms": 8.4e-05,
+          "max_ms": 0.000458,
+          "errors": 0
+        }
+      },
+      "by_input_words": {
+        "1-10": {
+          "calls": 660,
+          "median_ms": 0.000208,
+          "p95_ms": 0.0005,
+          "min_ms": 8.4e-05,
+          "max_ms": 0.005875,
+          "errors": 0
+        },
+        "11-25": {
+          "calls": 230,
+          "median_ms": 0.0002085,
+          "p95_ms": 0.0005,
+          "min_ms": 8.3e-05,
+          "max_ms": 0.003791,
+          "errors": 0
+        },
+        "26+": {
+          "calls": 60,
+          "median_ms": 0.000208,
+          "p95_ms": 0.0005,
+          "min_ms": 8.3e-05,
+          "max_ms": 0.003333,
+          "errors": 0
+        }
+      },
+      "model_invocation_calls": 0,
+      "by_category": {
+        "grammar": {
+          "calls": 500,
+          "median_ms": 0.000209,
+          "p95_ms": 0.000542,
+          "min_ms": 8.3e-05,
+          "max_ms": 0.005875,
+          "errors": 0
+        },
+        "lists": {
+          "calls": 55,
+          "median_ms": 0.000209,
+          "p95_ms": 0.000417,
+          "min_ms": 0.000125,
+          "max_ms": 0.000459,
+          "errors": 0
+        },
+        "normalization": {
+          "calls": 85,
+          "median_ms": 0.000208,
+          "p95_ms": 0.000417,
+          "min_ms": 0.000125,
+          "max_ms": 0.003083,
+          "errors": 0
+        },
+        "preserve": {
+          "calls": 135,
+          "median_ms": 0.000208,
+          "p95_ms": 0.000416,
+          "min_ms": 0.000125,
+          "max_ms": 0.004583,
+          "errors": 0
+        },
+        "punctuation": {
+          "calls": 95,
+          "median_ms": 0.000208,
+          "p95_ms": 0.002958,
+          "min_ms": 8.4e-05,
+          "max_ms": 0.004083,
+          "errors": 0
+        },
+        "semantic": {
+          "calls": 80,
+          "median_ms": 0.000208,
+          "p95_ms": 0.000542,
+          "min_ms": 8.4e-05,
+          "max_ms": 0.003167,
+          "errors": 0
+        }
+      },
+      "by_context": {
+        "False": {
+          "calls": 810,
+          "median_ms": 0.000208,
+          "p95_ms": 0.0005,
+          "min_ms": 8.3e-05,
+          "max_ms": 0.005875,
+          "errors": 0
+        },
+        "True": {
+          "calls": 140,
+          "median_ms": 0.000208,
+          "p95_ms": 0.000541,
+          "min_ms": 8.4e-05,
+          "max_ms": 0.003917,
+          "errors": 0
+        }
+      }
+    },
+    "rules": {
+      "backend": "rules",
+      "cases": 190,
+      "repeats": 5,
+      "measured_calls": 950,
+      "cpu_nice": 0,
+      "peer_experiment": "user reports paused",
+      "started": "2026-10-16T00:04:58-0700",
+      "load_seconds": 0.006177000002935529,
+      "first_call_ms": 0.24929200299084187,
+      "warmup_calls": 3,
+      "peak_process_tree_rss_bytes": 45481984,
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+      "native_library_sha256": "cab766212808305078fd280a001a4c736791a5314850ffaf4277a9a566a73ea8",
+      "overall": {
+        "calls": 950,
+        "median_ms": 0.1466045,
+        "p95_ms": 0.217667,
+        "min_ms": 0.125167,
+        "max_ms": 6.550959,
+        "errors": 0
+      },
+      "by_round": {
+        "0": {
+          "calls": 190,
+          "median_ms": 0.151417,
+          "p95_ms": 0.218916,
+          "min_ms": 0.136959,
+          "max_ms": 0.334375,
+          "errors": 0
+        },
+        "1": {
+          "calls": 190,
+          "median_ms": 0.146042,
+          "p95_ms": 0.216042,
+          "min_ms": 0.125625,
+          "max_ms": 6.550959,
+          "errors": 0
+        },
+        "2": {
+          "calls": 190,
+          "median_ms": 0.1436875,
+          "p95_ms": 0.226459,
+          "min_ms": 0.125875,
+          "max_ms": 6.530959,
+          "errors": 0
+        },
+        "3": {
+          "calls": 190,
+          "median_ms": 0.144312,
+          "p95_ms": 0.206917,
+          "min_ms": 0.12625,
+          "max_ms": 0.287708,
+          "errors": 0
+        },
+        "4": {
+          "calls": 190,
+          "median_ms": 0.145375,
+          "p95_ms": 0.231875,
+          "min_ms": 0.125167,
+          "max_ms": 6.544,
+          "errors": 0
+        }
+      },
+      "by_input_words": {
+        "1-10": {
+          "calls": 660,
+          "median_ms": 0.141333,
+          "p95_ms": 0.172416,
+          "min_ms": 0.125167,
+          "max_ms": 6.550959,
+          "errors": 0
+        },
+        "11-25": {
+          "calls": 230,
+          "median_ms": 0.17310399999999998,
+          "p95_ms": 0.211833,
+          "min_ms": 0.139792,
+          "max_ms": 5.860292,
+          "errors": 0
+        },
+        "26+": {
+          "calls": 60,
+          "median_ms": 0.2135625,
+          "p95_ms": 0.304167,
+          "min_ms": 0.185083,
+          "max_ms": 6.544,
+          "errors": 0
+        }
+      },
+      "model_invocation_calls": 0,
+      "by_category": {
+        "grammar": {
+          "calls": 500,
+          "median_ms": 0.15997899999999998,
+          "p95_ms": 0.235083,
+          "min_ms": 0.12675,
+          "max_ms": 6.544,
+          "errors": 0
+        },
+        "lists": {
+          "calls": 55,
+          "median_ms": 0.147,
+          "p95_ms": 0.215459,
+          "min_ms": 0.133542,
+          "max_ms": 6.550959,
+          "errors": 0
+        },
+        "normalization": {
+          "calls": 85,
+          "median_ms": 0.139042,
+          "p95_ms": 0.161167,
+          "min_ms": 0.127709,
+          "max_ms": 0.209458,
+          "errors": 0
+        },
+        "preserve": {
+          "calls": 135,
+          "median_ms": 0.142125,
+          "p95_ms": 0.186375,
+          "min_ms": 0.125167,
+          "max_ms": 6.530959,
+          "errors": 0
+        },
+        "punctuation": {
+          "calls": 95,
+          "median_ms": 0.139375,
+          "p95_ms": 0.173167,
+          "min_ms": 0.12775,
+          "max_ms": 6.473667,
+          "errors": 0
+        },
+        "semantic": {
+          "calls": 80,
+          "median_ms": 0.14,
+          "p95_ms": 0.1575,
+          "min_ms": 0.126,
+          "max_ms": 4.964,
+          "errors": 0
+        }
+      },
+      "by_context": {
+        "False": {
+          "calls": 810,
+          "median_ms": 0.1480005,
+          "p95_ms": 0.219875,
+          "min_ms": 0.125167,
+          "max_ms": 6.550959,
+          "errors": 0
+        },
+        "True": {
+          "calls": 140,
+          "median_ms": 0.141479,
+          "p95_ms": 0.170667,
+          "min_ms": 0.128,
+          "max_ms": 6.473667,
+          "errors": 0
+        }
+      }
+    },
+    "pcs": {
+      "backend": "pcs",
+      "cases": 190,
+      "repeats": 5,
+      "measured_calls": 950,
+      "cpu_nice": 0,
+      "peer_experiment": "user reports paused",
+      "started": "2026-10-15T23:53:59-0700",
+      "load_seconds": 1.2619575001299381,
+      "first_call_ms": 23.14849989488721,
+      "warmup_calls": 3,
+      "peak_process_tree_rss_bytes": 904364032,
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+      "native_library_sha256": null,
+      "overall": {
+        "calls": 950,
+        "median_ms": 21.282917,
+        "p95_ms": 70.908583,
+        "min_ms": 19.095167,
+        "max_ms": 109.652917,
+        "errors": 0
+      },
+      "by_round": {
+        "0": {
+          "calls": 190,
+          "median_ms": 21.318854,
+          "p95_ms": 70.640333,
+          "min_ms": 19.458833,
+          "max_ms": 100.892334,
+          "errors": 0
+        },
+        "1": {
+          "calls": 190,
+          "median_ms": 21.2114795,
+          "p95_ms": 69.422416,
+          "min_ms": 19.095167,
+          "max_ms": 109.652917,
+          "errors": 0
+        },
+        "2": {
+          "calls": 190,
+          "median_ms": 21.198500000000003,
+          "p95_ms": 71.017458,
+          "min_ms": 19.32675,
+          "max_ms": 90.159208,
+          "errors": 0
+        },
+        "3": {
+          "calls": 190,
+          "median_ms": 21.563083,
+          "p95_ms": 71.684333,
+          "min_ms": 19.473375,
+          "max_ms": 101.999834,
+          "errors": 0
+        },
+        "4": {
+          "calls": 190,
+          "median_ms": 21.234896,
+          "p95_ms": 70.438792,
+          "min_ms": 19.18775,
+          "max_ms": 83.850083,
+          "errors": 0
+        }
+      },
+      "by_input_words": {
+        "1-10": {
+          "calls": 660,
+          "median_ms": 20.456916999999997,
+          "p95_ms": 70.405916,
+          "min_ms": 19.095167,
+          "max_ms": 109.652917,
+          "errors": 0
+        },
+        "11-25": {
+          "calls": 230,
+          "median_ms": 21.955833,
+          "p95_ms": 71.509,
+          "min_ms": 20.093084,
+          "max_ms": 82.725792,
+          "errors": 0
+        },
+        "26+": {
+          "calls": 60,
+          "median_ms": 23.264729,
+          "p95_ms": 71.6275,
+          "min_ms": 22.000041,
+          "max_ms": 101.999834,
+          "errors": 0
+        }
+      },
+      "model_invocation_calls": 950,
+      "model_invocation_latency": {
+        "calls": 950,
+        "median_ms": 21.282917,
+        "p95_ms": 70.908583,
+        "min_ms": 19.095167,
+        "max_ms": 109.652917,
+        "errors": 0
+      },
+      "by_category": {
+        "grammar": {
+          "calls": 500,
+          "median_ms": 21.9657495,
+          "p95_ms": 71.211666,
+          "min_ms": 19.095167,
+          "max_ms": 101.999834,
+          "errors": 0
+        },
+        "lists": {
+          "calls": 55,
+          "median_ms": 20.48325,
+          "p95_ms": 72.804875,
+          "min_ms": 19.554708,
+          "max_ms": 100.892334,
+          "errors": 0
+        },
+        "normalization": {
+          "calls": 85,
+          "median_ms": 20.584125,
+          "p95_ms": 69.586209,
+          "min_ms": 19.50875,
+          "max_ms": 79.441209,
+          "errors": 0
+        },
+        "preserve": {
+          "calls": 135,
+          "median_ms": 20.813209,
+          "p95_ms": 71.261334,
+          "min_ms": 19.4895,
+          "max_ms": 109.652917,
+          "errors": 0
+        },
+        "punctuation": {
+          "calls": 95,
+          "median_ms": 20.188791,
+          "p95_ms": 69.095542,
+          "min_ms": 19.098292,
+          "max_ms": 72.536791,
+          "errors": 0
+        },
+        "semantic": {
+          "calls": 80,
+          "median_ms": 20.3872705,
+          "p95_ms": 69.95925,
+          "min_ms": 19.464792,
+          "max_ms": 91.092458,
+          "errors": 0
+        }
+      },
+      "by_context": {
+        "False": {
+          "calls": 810,
+          "median_ms": 21.647645500000003,
+          "p95_ms": 71.017458,
+          "min_ms": 19.095167,
+          "max_ms": 109.652917,
+          "errors": 0
+        },
+        "True": {
+          "calls": 140,
+          "median_ms": 20.364875,
+          "p95_ms": 69.95925,
+          "min_ms": 19.313667,
+          "max_ms": 100.892334,
+          "errors": 0
+        }
+      }
+    },
+    "pcs_guarded": {
+      "backend": "pcs_guarded",
+      "cases": 190,
+      "repeats": 5,
+      "measured_calls": 950,
+      "cpu_nice": 0,
+      "peer_experiment": "user reports paused",
+      "started": "2026-10-15T23:55:24-0700",
+      "load_seconds": 1.1227452079765499,
+      "first_call_ms": 0.07862504571676254,
+      "warmup_calls": 3,
+      "peak_process_tree_rss_bytes": 825327616,
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+      "native_library_sha256": null,
+      "overall": {
+        "calls": 950,
+        "median_ms": 0.005292,
+        "p95_ms": 22.561625,
+        "min_ms": 0.001,
+        "max_ms": 97.717542,
+        "errors": 0
+      },
+      "by_round": {
+        "0": {
+          "calls": 190,
+          "median_ms": 0.0054585,
+          "p95_ms": 22.631875,
+          "min_ms": 0.001,
+          "max_ms": 75.058041,
+          "errors": 0
+        },
+        "1": {
+          "calls": 190,
+          "median_ms": 0.005521,
+          "p95_ms": 22.217958,
+          "min_ms": 0.001666,
+          "max_ms": 73.326709,
+          "errors": 0
+        },
+        "2": {
+          "calls": 190,
+          "median_ms": 0.0052295,
+          "p95_ms": 22.388833,
+          "min_ms": 0.001667,
+          "max_ms": 97.717542,
+          "errors": 0
+        },
+        "3": {
+          "calls": 190,
+          "median_ms": 0.004854,
+          "p95_ms": 22.106625,
+          "min_ms": 0.001,
+          "max_ms": 72.451666,
+          "errors": 0
+        },
+        "4": {
+          "calls": 190,
+          "median_ms": 0.0055,
+          "p95_ms": 30.383167,
+          "min_ms": 0.001667,
+          "max_ms": 78.633084,
+          "errors": 0
+        }
+      },
+      "by_input_words": {
+        "1-10": {
+          "calls": 660,
+          "median_ms": 0.004125,
+          "p95_ms": 67.507958,
+          "min_ms": 0.001,
+          "max_ms": 97.717542,
+          "errors": 0
+        },
+        "11-25": {
+          "calls": 230,
+          "median_ms": 0.006021,
+          "p95_ms": 0.015959,
+          "min_ms": 0.002584,
+          "max_ms": 72.252459,
+          "errors": 0
+        },
+        "26+": {
+          "calls": 60,
+          "median_ms": 0.0107085,
+          "p95_ms": 22.561625,
+          "min_ms": 0.003958,
+          "max_ms": 72.85,
+          "errors": 0
+        }
+      },
+      "model_invocation_calls": 130,
+      "model_invocation_latency": {
+        "calls": 130,
+        "median_ms": 20.7635625,
+        "p95_ms": 72.491959,
+        "min_ms": 19.479542,
+        "max_ms": 97.717542,
+        "errors": 0
+      },
+      "by_category": {
+        "grammar": {
+          "calls": 500,
+          "median_ms": 0.005792,
+          "p95_ms": 20.957334,
+          "min_ms": 0.00175,
+          "max_ms": 73.326709,
+          "errors": 0
+        },
+        "lists": {
+          "calls": 55,
+          "median_ms": 0.004125,
+          "p95_ms": 69.837875,
+          "min_ms": 0.001,
+          "max_ms": 71.799458,
+          "errors": 0
+        },
+        "normalization": {
+          "calls": 85,
+          "median_ms": 0.004375,
+          "p95_ms": 20.6925,
+          "min_ms": 0.001791,
+          "max_ms": 70.976917,
+          "errors": 0
+        },
+        "preserve": {
+          "calls": 135,
+          "median_ms": 0.003416,
+          "p95_ms": 0.009416,
+          "min_ms": 0.001291,
+          "max_ms": 0.014083,
+          "errors": 0
+        },
+        "punctuation": {
+          "calls": 95,
+          "median_ms": 20.09725,
+          "p95_ms": 72.151083,
+          "min_ms": 0.002375,
+          "max_ms": 97.717542,
+          "errors": 0
+        },
+        "semantic": {
+          "calls": 80,
+          "median_ms": 0.0035,
+          "p95_ms": 0.010167,
+          "min_ms": 0.001458,
+          "max_ms": 0.017833,
+          "errors": 0
+        }
+      },
+      "by_context": {
+        "False": {
+          "calls": 810,
+          "median_ms": 0.005417,
+          "p95_ms": 21.32375,
+          "min_ms": 0.001,
+          "max_ms": 73.326709,
+          "errors": 0
+        },
+        "True": {
+          "calls": 140,
+          "median_ms": 0.004208,
+          "p95_ms": 69.436542,
+          "min_ms": 0.001458,
+          "max_ms": 97.717542,
+          "errors": 0
+        }
+      }
+    },
+    "gector": {
+      "backend": "gector",
+      "cases": 190,
+      "repeats": 5,
+      "measured_calls": 950,
+      "cpu_nice": 0,
+      "peer_experiment": "user reports paused",
+      "started": "2026-10-15T23:55:18-0700",
+      "load_seconds": 6.5704793750774115,
+      "first_call_ms": 33.26479089446366,
+      "warmup_calls": 3,
+      "peak_process_tree_rss_bytes": 1740455936,
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+      "native_library_sha256": null,
+      "overall": {
+        "calls": 950,
+        "median_ms": 75.949917,
+        "p95_ms": 135.178458,
+        "min_ms": 21.173167,
+        "max_ms": 273.404334,
+        "errors": 0
+      },
+      "by_round": {
+        "0": {
+          "calls": 190,
+          "median_ms": 70.589438,
+          "p95_ms": 123.128834,
+          "min_ms": 21.678875,
+          "max_ms": 217.276875,
+          "errors": 0
+        },
+        "1": {
+          "calls": 190,
+          "median_ms": 74.71810400000001,
+          "p95_ms": 126.506875,
+          "min_ms": 21.515,
+          "max_ms": 215.160292,
+          "errors": 0
+        },
+        "2": {
+          "calls": 190,
+          "median_ms": 75.4259165,
+          "p95_ms": 126.201416,
+          "min_ms": 22.040333,
+          "max_ms": 255.707208,
+          "errors": 0
+        },
+        "3": {
+          "calls": 190,
+          "median_ms": 80.5237295,
+          "p95_ms": 130.585291,
+          "min_ms": 21.173167,
+          "max_ms": 273.404334,
+          "errors": 0
+        },
+        "4": {
+          "calls": 190,
+          "median_ms": 75.979125,
+          "p95_ms": 142.119291,
+          "min_ms": 21.800667,
+          "max_ms": 226.21225,
+          "errors": 0
+        }
+      },
+      "by_input_words": {
+        "1-10": {
+          "calls": 660,
+          "median_ms": 73.3596875,
+          "p95_ms": 122.34,
+          "min_ms": 21.173167,
+          "max_ms": 226.21225,
+          "errors": 0
+        },
+        "11-25": {
+          "calls": 230,
+          "median_ms": 95.1308125,
+          "p95_ms": 136.1835,
+          "min_ms": 22.242375,
+          "max_ms": 260.678042,
+          "errors": 0
+        },
+        "26+": {
+          "calls": 60,
+          "median_ms": 100.31725,
+          "p95_ms": 216.003541,
+          "min_ms": 22.621167,
+          "max_ms": 273.404334,
+          "errors": 0
+        }
+      },
+      "model_invocation_calls": 950,
+      "model_invocation_latency": {
+        "calls": 950,
+        "median_ms": 75.949917,
+        "p95_ms": 135.178458,
+        "min_ms": 21.173167,
+        "max_ms": 273.404334,
+        "errors": 0
+      },
+      "by_category": {
+        "grammar": {
+          "calls": 500,
+          "median_ms": 95.6842705,
+          "p95_ms": 168.577625,
+          "min_ms": 22.019625,
+          "max_ms": 273.404334,
+          "errors": 0
+        },
+        "lists": {
+          "calls": 55,
+          "median_ms": 63.934042,
+          "p95_ms": 79.696916,
+          "min_ms": 21.90475,
+          "max_ms": 121.241916,
+          "errors": 0
+        },
+        "normalization": {
+          "calls": 85,
+          "median_ms": 67.028,
+          "p95_ms": 136.751417,
+          "min_ms": 21.870875,
+          "max_ms": 217.276875,
+          "errors": 0
+        },
+        "preserve": {
+          "calls": 135,
+          "median_ms": 25.310625,
+          "p95_ms": 109.798666,
+          "min_ms": 21.173167,
+          "max_ms": 135.482708,
+          "errors": 0
+        },
+        "punctuation": {
+          "calls": 95,
+          "median_ms": 96.019209,
+          "p95_ms": 137.31075,
+          "min_ms": 21.598875,
+          "max_ms": 185.355,
+          "errors": 0
+        },
+        "semantic": {
+          "calls": 80,
+          "median_ms": 24.9979585,
+          "p95_ms": 115.062708,
+          "min_ms": 21.922167,
+          "max_ms": 135.178458,
+          "errors": 0
+        }
+      },
+      "by_context": {
+        "False": {
+          "calls": 810,
+          "median_ms": 80.5237295,
+          "p95_ms": 137.406875,
+          "min_ms": 21.173167,
+          "max_ms": 273.404334,
+          "errors": 0
+        },
+        "True": {
+          "calls": 140,
+          "median_ms": 70.08722900000001,
+          "p95_ms": 105.094916,
+          "min_ms": 21.598875,
+          "max_ms": 147.523625,
+          "errors": 0
+        }
+      }
+    },
+    "coedit": {
+      "backend": "coedit",
+      "cases": 190,
+      "repeats": 5,
+      "measured_calls": 950,
+      "cpu_nice": 0,
+      "peer_experiment": "user reports paused",
+      "started": "2026-10-15T23:53:22-0700",
+      "load_seconds": 5.028053290909156,
+      "first_call_ms": 737.6077079679817,
+      "warmup_calls": 3,
+      "peak_process_tree_rss_bytes": 778747904,
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+      "native_library_sha256": null,
+      "overall": {
+        "calls": 950,
+        "median_ms": 91.606729,
+        "p95_ms": 216.280125,
+        "min_ms": 24.827459,
+        "max_ms": 435.643666,
+        "errors": 0
+      },
+      "by_round": {
+        "0": {
+          "calls": 190,
+          "median_ms": 92.65466649999999,
+          "p95_ms": 216.199,
+          "min_ms": 25.240625,
+          "max_ms": 391.307666,
+          "errors": 0
+        },
+        "1": {
+          "calls": 190,
+          "median_ms": 90.0275,
+          "p95_ms": 214.808042,
+          "min_ms": 24.827459,
+          "max_ms": 381.276041,
+          "errors": 0
+        },
+        "2": {
+          "calls": 190,
+          "median_ms": 92.6545835,
+          "p95_ms": 216.145458,
+          "min_ms": 25.8655,
+          "max_ms": 435.643666,
+          "errors": 0
+        },
+        "3": {
+          "calls": 190,
+          "median_ms": 89.95325,
+          "p95_ms": 223.501,
+          "min_ms": 24.843916,
+          "max_ms": 381.675417,
+          "errors": 0
+        },
+        "4": {
+          "calls": 190,
+          "median_ms": 92.935188,
+          "p95_ms": 236.040916,
+          "min_ms": 25.234,
+          "max_ms": 389.123917,
+          "errors": 0
+        }
+      },
+      "by_input_words": {
+        "1-10": {
+          "calls": 660,
+          "median_ms": 84.8320625,
+          "p95_ms": 111.634708,
+          "min_ms": 24.827459,
+          "max_ms": 196.865291,
+          "errors": 0
+        },
+        "11-25": {
+          "calls": 230,
+          "median_ms": 137.7839375,
+          "p95_ms": 208.854958,
+          "min_ms": 48.154208,
+          "max_ms": 255.171209,
+          "errors": 0
+        },
+        "26+": {
+          "calls": 60,
+          "median_ms": 256.2260215,
+          "p95_ms": 386.944834,
+          "min_ms": 151.615667,
+          "max_ms": 435.643666,
+          "errors": 0
+        }
+      },
+      "model_invocation_calls": 950,
+      "model_invocation_latency": {
+        "calls": 950,
+        "median_ms": 91.606729,
+        "p95_ms": 216.280125,
+        "min_ms": 24.827459,
+        "max_ms": 435.643666,
+        "errors": 0
+      },
+      "by_category": {
+        "grammar": {
+          "calls": 500,
+          "median_ms": 110.4690415,
+          "p95_ms": 262.820708,
+          "min_ms": 26.02325,
+          "max_ms": 435.643666,
+          "errors": 0
+        },
+        "lists": {
+          "calls": 55,
+          "median_ms": 94.331875,
+          "p95_ms": 115.259917,
+          "min_ms": 37.497625,
+          "max_ms": 188.336125,
+          "errors": 0
+        },
+        "normalization": {
+          "calls": 85,
+          "median_ms": 82.133834,
+          "p95_ms": 105.078542,
+          "min_ms": 27.181125,
+          "max_ms": 161.585458,
+          "errors": 0
+        },
+        "preserve": {
+          "calls": 135,
+          "median_ms": 90.127375,
+          "p95_ms": 127.861792,
+          "min_ms": 24.827459,
+          "max_ms": 196.865291,
+          "errors": 0
+        },
+        "punctuation": {
+          "calls": 95,
+          "median_ms": 78.4465,
+          "p95_ms": 117.464167,
+          "min_ms": 25.108667,
+          "max_ms": 157.681625,
+          "errors": 0
+        },
+        "semantic": {
+          "calls": 80,
+          "median_ms": 84.49056250000001,
+          "p95_ms": 93.3925,
+          "min_ms": 29.599083,
+          "max_ms": 126.567875,
+          "errors": 0
+        }
+      },
+      "by_context": {
+        "False": {
+          "calls": 810,
+          "median_ms": 95.91054199999999,
+          "p95_ms": 226.854416,
+          "min_ms": 24.827459,
+          "max_ms": 435.643666,
+          "errors": 0
+        },
+        "True": {
+          "calls": 140,
+          "median_ms": 85.3716665,
+          "p95_ms": 112.140708,
+          "min_ms": 32.047375,
+          "max_ms": 157.681625,
+          "errors": 0
+        }
+      }
+    },
+    "bonsai": {
+      "backend": "bonsai",
+      "cases": 190,
+      "repeats": 5,
+      "measured_calls": 950,
+      "cpu_nice": 0,
+      "peer_experiment": "user reports paused",
+      "started": "2026-10-16T00:04:57-0700",
+      "load_seconds": 1.0819894168525934,
+      "first_call_ms": 5446.257584029809,
+      "warmup_calls": 3,
+      "peak_process_tree_rss_bytes": 2722906112,
+      "corpus_sha256": "9d6ae1ab719e0dbb1c1a4af6e28fa10e0b93bf3ad638ca43fab02fb8def38972",
+      "adapter_sha256": "8c0df30c1b51250fe7c0ee7ffe0e56864aa762ffbe94dad4433c6d0d827e370a",
+      "worker_sha256": "47bd2385b4b963cab06c8f2bebd52bfc6e68f0f72246507cf872aa00f94682ee",
+      "native_library_sha256": "cab766212808305078fd280a001a4c736791a5314850ffaf4277a9a566a73ea8",
+      "overall": {
+        "calls": 950,
+        "median_ms": 270.814229,
+        "p95_ms": 808.33725,
+        "min_ms": 141.823834,
+        "max_ms": 2535.301125,
+        "errors": 0
+      },
+      "by_round": {
+        "0": {
+          "calls": 190,
+          "median_ms": 287.249979,
+          "p95_ms": 946.811625,
+          "min_ms": 151.683667,
+          "max_ms": 2535.301125,
+          "errors": 0
+        },
+        "1": {
+          "calls": 190,
+          "median_ms": 349.2304785,
+          "p95_ms": 1251.866417,
+          "min_ms": 152.335917,
+          "max_ms": 1594.214375,
+          "errors": 0
+        },
+        "2": {
+          "calls": 190,
+          "median_ms": 271.87887550000005,
+          "p95_ms": 647.941,
+          "min_ms": 145.504375,
+          "max_ms": 1050.666792,
+          "errors": 0
+        },
+        "3": {
+          "calls": 190,
+          "median_ms": 244.14389549999999,
+          "p95_ms": 524.709416,
+          "min_ms": 149.083083,
+          "max_ms": 958.558917,
+          "errors": 0
+        },
+        "4": {
+          "calls": 190,
+          "median_ms": 242.74841600000002,
+          "p95_ms": 519.527084,
+          "min_ms": 141.823834,
+          "max_ms": 868.378375,
+          "errors": 0
+        }
+      },
+      "by_input_words": {
+        "1-10": {
+          "calls": 660,
+          "median_ms": 240.147083,
+          "p95_ms": 569.21575,
+          "min_ms": 141.823834,
+          "max_ms": 1413.762583,
+          "errors": 0
+        },
+        "11-25": {
+          "calls": 230,
+          "median_ms": 380.22893799999997,
+          "p95_ms": 811.860542,
+          "min_ms": 233.814125,
+          "max_ms": 1594.214375,
+          "errors": 0
+        },
+        "26+": {
+          "calls": 60,
+          "median_ms": 623.784896,
+          "p95_ms": 1210.602709,
+          "min_ms": 474.195834,
+          "max_ms": 2535.301125,
+          "errors": 0
+        }
+      },
+      "model_invocation_calls": 950,
+      "model_invocation_latency": {
+        "calls": 950,
+        "median_ms": 270.814229,
+        "p95_ms": 808.33725,
+        "min_ms": 141.823834,
+        "max_ms": 2535.301125,
+        "errors": 0
+      },
+      "by_category": {
+        "grammar": {
+          "calls": 500,
+          "median_ms": 321.2455625,
+          "p95_ms": 935.009666,
+          "min_ms": 143.573625,
+          "max_ms": 2535.301125,
+          "errors": 0
+        },
+        "lists": {
+          "calls": 55,
+          "median_ms": 302.692583,
+          "p95_ms": 604.512667,
+          "min_ms": 219.325083,
+          "max_ms": 1251.866417,
+          "errors": 0
+        },
+        "normalization": {
+          "calls": 85,
+          "median_ms": 229.618625,
+          "p95_ms": 390.467667,
+          "min_ms": 162.850375,
+          "max_ms": 1264.196208,
+          "errors": 0
+        },
+        "preserve": {
+          "calls": 135,
+          "median_ms": 236.950291,
+          "p95_ms": 776.642709,
+          "min_ms": 141.823834,
+          "max_ms": 1339.54875,
+          "errors": 0
+        },
+        "punctuation": {
+          "calls": 95,
+          "median_ms": 239.791792,
+          "p95_ms": 433.534833,
+          "min_ms": 158.922541,
+          "max_ms": 951.979916,
+          "errors": 0
+        },
+        "semantic": {
+          "calls": 80,
+          "median_ms": 266.3938955,
+          "p95_ms": 604.342791,
+          "min_ms": 177.257917,
+          "max_ms": 1208.640667,
+          "errors": 0
+        }
+      },
+      "by_context": {
+        "False": {
+          "calls": 810,
+          "median_ms": 266.2541245,
+          "p95_ms": 819.801042,
+          "min_ms": 141.823834,
+          "max_ms": 2535.301125,
+          "errors": 0
+        },
+        "True": {
+          "calls": 140,
+          "median_ms": 282.948396,
+          "p95_ms": 539.780708,
+          "min_ms": 202.084,
+          "max_ms": 1251.866417,
+          "errors": 0
+        }
+      }
+    }
+  },
+  "notes": [
+    "Peer experiment was reported paused; another model remained resident and headroom changed during the pass.",
+    "Normal priority, same shuffled per-round inputs, sequential batch-one inference.",
+    "GPU/CPU backends and weight precision differ; these are configured pipeline timings, not an architecture speed ranking.",
+    "The initial Bonsai admission hold produced no measured calls.",
+    "First five paths used a16GiB physical-free guard; Bonsai/rules used a16GiB estimated-available guard, with normal pressure and zero new swap-outs throughout."
+  ]
+}

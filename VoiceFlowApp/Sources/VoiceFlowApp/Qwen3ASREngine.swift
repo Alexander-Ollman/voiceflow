@@ -86,28 +86,10 @@ final class Qwen3ASREngine: ObservableObject {
     }
 
     /// Shut down the Python daemon process.
-    func stopDaemon() {
-        // Send shutdown command
-        let shutdownDone = DispatchSemaphore(value: 0)
-        Task.detached {
-            _ = try? await self.sendCommand(["command": "shutdown"])
-            shutdownDone.signal()
-        }
-
-        // Wait briefly for graceful shutdown
-        let deadline = DispatchTime.now() + Self.daemonShutdownTimeout
-        _ = shutdownDone.wait(timeout: deadline)
-
-        // Force-kill if still alive
-        if let process = daemonProcess, process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-        }
+    func stopDaemon() async {
+        let owned = daemonProcess
         daemonProcess = nil
-
-        // Don't delete socket here — the daemon's cleanup() handles it
-        // and checks PID ownership to avoid races with a new daemon.
-
+        _ = await ManagedProcessShutdown.stop(owned)
         state = .unloaded
     }
 

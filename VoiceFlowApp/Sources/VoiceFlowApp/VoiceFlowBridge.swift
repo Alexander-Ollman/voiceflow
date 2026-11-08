@@ -55,27 +55,21 @@ final class VoiceFlowBridge: ObservableObject {
     }
 
     /// Explicit cleanup - call before app termination for clean shutdown
-    func cleanup() {
+    func cleanup() async {
         guard !isCleanedUp else { return }
         isCleanedUp = true
-
-        // Stop the Python ASR daemon if running
-        asrEngine?.stopDaemon()
+        await asrEngine?.stopDaemon()
         asrEngine = nil
-
-        if let handle = handle {
-            // Unload models first to release memory
-            voiceflow_unload_models(handle)
-
-            // Prepare for shutdown
-            voiceflow_prepare_shutdown()
-
-            // Destroy the handle
-            voiceflow_destroy(handle)
-            self.handle = nil
-        }
-
+        let nativeAddress = handle.map { UInt(bitPattern: $0) }
+        handle = nil
         isInitialized = false
+        guard let nativeAddress else { return }
+        await ManagedProcessShutdown.finishCleanup {
+            guard let native = OpaquePointer(bitPattern: nativeAddress) else { return }
+            voiceflow_unload_models(native)
+            voiceflow_prepare_shutdown()
+            voiceflow_destroy(native)
+        }
     }
 
     /// Unload models from memory without destroying the handle
@@ -239,6 +233,10 @@ final class VoiceFlowBridge: ObservableObject {
         cancellation: LLMStreamCancellation? = nil,
         onToken: @escaping @MainActor (String) -> Void
     ) async -> String? {
+        let diagnosticRequest = text != "." && DictationDiagnostics.shared.running
+            && DictationDiagnostics.shared.results[.speech] == .passed
+        var diagnosticSucceeded = false
+        defer { if diagnosticRequest { DictationDiagnostics.shared.formatted(success: diagnosticSucceeded) } }
         guard let handle = handle else { return nil }
 
         let result: VoiceFlowResult = await withCheckedContinuation { continuation in
@@ -275,7 +273,9 @@ final class VoiceFlowBridge: ObservableObject {
         defer { voiceflow_free_result(result) }
 
         if result.success, let ptr = result.formatted_text {
-            return String(cString: ptr)
+            let formatted = String(cString: ptr)
+            diagnosticSucceeded = !formatted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return formatted
         }
         return nil
     }
@@ -286,7 +286,18 @@ final class VoiceFlowBridge: ObservableObject {
         let audioDirect = voiceflow_is_audio_direct_mode()
 
         // Initialize with default config
-        let newHandle = voiceflow_init(nil)
+        let nativeAddress = await Task.detached(priority: .userInitiated) {
+            voiceflow_init(nil).map { UInt(bitPattern: $0) }
+        }.value
+        let newHandle = nativeAddress.flatMap(OpaquePointer.init(bitPattern:))
+        guard !isCleanedUp else {
+            if let nativeAddress {
+                await ManagedProcessShutdown.finishCleanup {
+                    if let native = OpaquePointer(bitPattern: nativeAddress) { voiceflow_destroy(native) }
+                }
+            }
+            return
+        }
 
         await MainActor.run {
             self.handle = newHandle

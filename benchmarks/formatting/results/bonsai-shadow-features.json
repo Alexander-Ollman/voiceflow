@@ -1,0 +1,849 @@
+{
+  "mode": "shadow_features_only_no_probability",
+  "backend": "bonsai",
+  "rows": [
+    {
+      "id": "preserve-01",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-02",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-03",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-04",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-05",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-06",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [
+          "alex@example.com."
+        ],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-07",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [
+          "https://example.com/docs?q=api."
+        ],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-08",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-09",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-10",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-11",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "userID"
+            ],
+            "candidate_words": [
+              "user",
+              "ID"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [
+          "userID"
+        ],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-12",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [
+          "192.168.1.10"
+        ],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-13",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-14",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "VoiceFlow"
+            ],
+            "candidate_words": [
+              "Voice",
+              "Flow"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [
+          "VoiceFlow"
+        ],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-15",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "preserve-16",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-01",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-02",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-03",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-04",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-05",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-06",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-07",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "punctuation-08",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-01",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "is"
+            ],
+            "candidate_words": [
+              "are"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-02",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "go"
+            ],
+            "candidate_words": [
+              "goes"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-03",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "has"
+            ],
+            "candidate_words": [
+              "have"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-04",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "was"
+            ],
+            "candidate_words": [
+              "were"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-05",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "are"
+            ],
+            "candidate_words": [
+              "is"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-06",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "went"
+            ],
+            "candidate_words": [
+              "go"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-07",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "grammar-08",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "hear"
+            ],
+            "candidate_words": [
+              "hearing"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "normalization-01",
+      "features": {
+        "edits": [
+          {
+            "operation": "delete",
+            "source_words": [
+              "um"
+            ],
+            "candidate_words": [],
+            "context_supported_words": []
+          },
+          {
+            "operation": "delete",
+            "source_words": [
+              "uh"
+            ],
+            "candidate_words": [],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 2,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "normalization-02",
+      "features": {
+        "edits": [
+          {
+            "operation": "delete",
+            "source_words": [
+              "new",
+              "paragraph"
+            ],
+            "candidate_words": [],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "normalization-03",
+      "features": {
+        "edits": [
+          {
+            "operation": "delete",
+            "source_words": [
+              "The"
+            ],
+            "candidate_words": [],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "normalization-04",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "eight",
+              "thousand"
+            ],
+            "candidate_words": [
+              "8000"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "normalization-05",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "fifty",
+              "thousand",
+              "dollars"
+            ],
+            "candidate_words": [
+              "50",
+              "000"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "normalization-06",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "three",
+              "thirty"
+            ],
+            "candidate_words": [
+              "3",
+              "30"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": true,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "semantic-01",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": true
+      }
+    },
+    {
+      "id": "semantic-02",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": true
+      }
+    },
+    {
+      "id": "semantic-03",
+      "features": {
+        "edits": [
+          {
+            "operation": "replace",
+            "source_words": [
+              "but",
+              "in"
+            ],
+            "candidate_words": [
+              "button"
+            ],
+            "context_supported_words": []
+          }
+        ],
+        "word_edit_count": 1,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": false,
+        "context_available": false
+      }
+    },
+    {
+      "id": "semantic-04",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    },
+    {
+      "id": "semantic-05",
+      "features": {
+        "edits": [],
+        "word_edit_count": 0,
+        "identifiers_lost": [],
+        "numeric_content_changed": false,
+        "negation_changed": false,
+        "source_list_items": 0,
+        "candidate_list_items": 0,
+        "existing_list_item_count_changed": false,
+        "punctuation_or_structure_only": true,
+        "context_available": false
+      }
+    }
+  ]
+}

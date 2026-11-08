@@ -24,6 +24,8 @@ final class LlamaServerManager: ObservableObject {
     @Published var state: State = .stopped
     @Published var lastError: String?
 
+    private var childWatchdog: ChildProcessWatchdog?
+    private var lifecycleID = UUID()
     private var process: Process?
     private var watchdogTimer: Timer?
 
@@ -75,17 +77,20 @@ final class LlamaServerManager: ObservableObject {
     /// listening on our port (e.g. user started it manually), we adopt rather than
     /// spawn a duplicate.
     func start() async {
+        let attempt = lifecycleID
         if state == .ready, let p = process, p.isRunning {
             return
         }
 
         // If something is already serving the port, just adopt it.
         if await isPortServing() {
+            guard lifecycleID == attempt else { return }
             NSLog("[LlamaServer] External server already on :%d, adopting.", Self.port)
             state = .ready
             return
         }
 
+        guard lifecycleID == attempt else { return }
         guard FileManager.default.fileExists(atPath: bonsaiPath.path) else {
             lastError = "Bonsai GGUF not found at \(bonsaiPath.path). Run Setup first."
             state = .crashed(lastError!)
@@ -147,6 +152,7 @@ final class LlamaServerManager: ObservableObject {
 
         do {
             try p.run()
+            childWatchdog = ChildProcessWatchdog.start(childPID: p.processIdentifier, role: "llama-server")
             process = p
             NSLog("[LlamaServer] Spawned PID %d (model %@, ctx %d)",
                   p.processIdentifier, bonsaiPath.lastPathComponent, Self.contextSize)
@@ -159,7 +165,9 @@ final class LlamaServerManager: ObservableObject {
         let readyDeadline = Date().addingTimeInterval(45)
         while Date() < readyDeadline {
             try? await Task.sleep(nanoseconds: 300_000_000)
+            guard lifecycleID == attempt else { return }
             if await isPortServing() {
+                guard lifecycleID == attempt else { return }
                 state = .ready
                 return
             }
@@ -171,26 +179,15 @@ final class LlamaServerManager: ObservableObject {
         state = .crashed("Server didn't respond on port \(Self.port) within 45s")
     }
 
-    func stop() {
+    func stop() async {
+        lifecycleID = UUID()
         watchdogTimer?.invalidate()
         watchdogTimer = nil
-        if let p = process, p.isRunning {
-            p.terminate()
-            // Wait synchronously up to 2s for graceful exit, then SIGKILL.
-            // The previous async-dispatch SIGKILL never fired during
-            // applicationWillTerminate: the parent app exits before the
-            // global queue gets to the +2s block, the dispatch is dropped,
-            // the child reparents to launchd, and the user is left with an
-            // orphan llama-server holding ~1.1GB of Bonsai weights resident.
-            let deadline = Date().addingTimeInterval(2.0)
-            while p.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.05)
-            }
-            if p.isRunning {
-                kill(p.processIdentifier, SIGKILL)
-                p.waitUntilExit()
-            }
+        if !(await ManagedProcessShutdown.stop(process)) {
+            NSLog("[LlamaServer] Owned server did not exit within shutdown deadline")
         }
+        childWatchdog?.stop()
+        childWatchdog = nil
         process = nil
         state = .stopped
     }

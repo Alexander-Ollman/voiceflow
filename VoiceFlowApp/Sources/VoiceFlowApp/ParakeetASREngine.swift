@@ -19,20 +19,28 @@ final class ParakeetASREngine: ObservableObject {
     private static let daemonStartTimeout: TimeInterval = 10
     private static let daemonShutdownTimeout: TimeInterval = 2
 
+    private var lifecycleID = UUID()
+    private var stopping = false
+    private var watchdog: ChildProcessWatchdog?
     private var daemonProcess: Process?
 
     // MARK: - Public API
 
     func loadModel(modelId: String? = nil) async {
+        guard !stopping else { return }
+        let attempt = UUID()
+        lifecycleID = attempt
         let target = modelId ?? self.modelId
         state = .starting
         do {
-            try await ensureDaemonRunning()
+            try await ensureDaemonRunning(attempt: attempt)
+            guard lifecycleID == attempt, !stopping else { return }
             state = .loadingModel
             let response = try await sendCommand([
                 "command": "preload",
                 "model_id": target,
             ])
+            guard lifecycleID == attempt, !stopping else { return }
             if (response["status"] as? String) == "ok" {
                 self.modelId = target
                 state = .ready
@@ -40,6 +48,7 @@ final class ParakeetASREngine: ObservableObject {
                 state = .error(response["message"] as? String ?? "Unknown preload error")
             }
         } catch {
+            guard lifecycleID == attempt, !stopping else { return }
             state = .error(error.localizedDescription)
         }
     }
@@ -47,27 +56,41 @@ final class ParakeetASREngine: ObservableObject {
     /// Transcribe Float32 PCM audio (16kHz). Returns the transcript text.
     func transcribe(audio: [Float]) async -> String? {
         guard case .ready = state else {
+            DictationDiagnostics.shared.failedSpeech("Speech service is not ready: \(state). Use Restart speech service or open Logs.")
             NSLog("[Parakeet] transcribe called but state is \(state)")
             return nil
         }
+        DictationDiagnostics.shared.transcribing()
+        guard audio.count >= 3200 else {
+            DictationDiagnostics.shared.recognized("")
+            return ""
+        }
+        let attempt = lifecycleID
         do {
             let wav = encodeAsWAV(audio: audio, sampleRate: 16000)
             let response = try await sendCommand([
                 "command": "transcribe",
                 "audio": wav.base64EncodedString(),
             ])
+            guard lifecycleID == attempt, !stopping else { return nil }
             if (response["status"] as? String) == "ok",
                let text = response["text"] as? String {
                 if let elapsed = response["elapsed_ms"] as? Int {
                     NSLog("[Parakeet] Transcribed in %dms: %@", elapsed,
                           String(text.prefix(80)))
                 }
+                DictationDiagnostics.shared.recognized(text)
                 return text
             }
-            NSLog("[Parakeet] Transcription error: %@",
-                  response["message"] as? String ?? "unknown")
+            let message = response["message"] as? String ?? "Unknown speech recognition error"
+            state = .error(message)
+            DictationDiagnostics.shared.failedSpeech(message)
+            NSLog("[Parakeet] Transcription error: %@", message)
             return nil
         } catch {
+            guard lifecycleID == attempt, !stopping else { return nil }
+            state = .error(error.localizedDescription)
+            DictationDiagnostics.shared.failedSpeech(error.localizedDescription)
             NSLog("[Parakeet] transcribe error: %@", error.localizedDescription)
             return nil
         }
@@ -80,29 +103,44 @@ final class ParakeetASREngine: ObservableObject {
         }
     }
 
-    func stopDaemon() {
-        let done = DispatchSemaphore(value: 0)
-        Task.detached {
-            _ = try? await self.sendCommand(["command": "shutdown"])
-            done.signal()
-        }
-        _ = done.wait(timeout: .now() + Self.daemonShutdownTimeout)
-        if let p = daemonProcess, p.isRunning {
-            p.terminate()
-            p.waitUntilExit()
-        }
-        daemonProcess = nil
+    func stopDaemon() async {
+        stopping = true
+        lifecycleID = UUID()
         state = .unloaded
+        let owned = daemonProcess
+        daemonProcess = nil
+        if !(await ManagedProcessShutdown.stop(owned)) {
+            NSLog("[Parakeet] Owned daemon did not exit within shutdown deadline")
+        }
+        watchdog?.stop()
+        watchdog = nil
+        stopping = false
     }
 
     // MARK: - Daemon lifecycle
 
-    private func ensureDaemonRunning() async throws {
-        if await isDaemonAlive() { return }
+    private func ensureDaemonRunning(attempt: UUID) async throws {
+        if await isDaemonAlive() {
+            if daemonProcess?.isRunning == true { return }
+            // Replace a responsive legacy helper with one tied to our lifetime.
+            _ = try? await sendCommand(["command": "shutdown"])
+            let deadline = Date().addingTimeInterval(Self.daemonShutdownTimeout)
+            while Date() < deadline, await isDaemonAlive() {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if await isDaemonAlive() {
+                throw ParakeetASRError.socketError("Previous speech service did not stop. Open Logs before retrying.")
+            }
+        }
+        guard !stopping, lifecycleID == attempt else { throw CancellationError() }
+        if let owned = daemonProcess, owned.isRunning {
+            throw ParakeetASRError.socketError("Speech service is not responding. Use Restart speech service instead of starting another copy.")
+        }
         try spawnDaemon()
         let deadline = Date().addingTimeInterval(Self.daemonStartTimeout)
         while Date() < deadline {
             try await Task.sleep(nanoseconds: 200_000_000)
+            guard !stopping, lifecycleID == attempt else { throw CancellationError() }
             if await isDaemonAlive() { return }
         }
         throw ParakeetASRError.daemonStartTimeout
@@ -137,13 +175,25 @@ final class ParakeetASREngine: ObservableObject {
             process.arguments = [scriptPath]
         }
 
-        let logFile = FileHandle(forWritingAtPath: "/tmp/voiceflow_parakeet_daemon.log")
-            ?? FileHandle.nullDevice
+        let logPath = "/tmp/voiceflow_parakeet_daemon.log"
+        if !FileManager.default.fileExists(atPath: logPath) {
+            FileManager.default.createFile(atPath: logPath, contents: nil)
+        }
+        let logFile = FileHandle(forWritingAtPath: logPath) ?? FileHandle.nullDevice
+        _ = try? logFile.seekToEnd()
         process.standardOutput = logFile
         process.standardError = logFile
 
+        process.terminationHandler = { [weak self] exited in
+            Task { @MainActor in
+                guard let self, self.daemonProcess?.processIdentifier == exited.processIdentifier else { return }
+                self.daemonProcess = nil
+                self.state = .error("Speech service exited (status \(exited.terminationStatus)). Use Restart Speech Service to retry.")
+            }
+        }
         try process.run()
         daemonProcess = process
+        watchdog = ChildProcessWatchdog.start(childPID: process.processIdentifier, role: "parakeet-daemon")
         NSLog("[Parakeet] Daemon spawned with PID %d", process.processIdentifier)
     }
 
@@ -218,8 +268,8 @@ final class ParakeetASREngine: ObservableObject {
         }
     }
 
-    private nonisolated static func sendCommandSync(
-        _ command: [String: Any]
+    nonisolated static func sendCommandSync(
+        _ command: [String: Any], socketPath: String? = nil
     ) throws -> [String: Any] {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -227,13 +277,17 @@ final class ParakeetASREngine: ObservableObject {
         }
         defer { close(fd) }
 
-        var timeout = timeval(tv_sec: ParakeetDaemonConstants.socketTimeoutSeconds, tv_usec: 0)
+        let commandName = command["command"] as? String ?? ""
+        let seconds = commandName == "preload" ? 300 : (commandName == "transcribe" ? 30 : 1)
+        var timeout = timeval(tv_sec: seconds, tv_usec: 0)
+        var noSignal: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = ParakeetDaemonConstants.socketPath.utf8CString
+        let pathBytes = (socketPath ?? ParakeetDaemonConstants.socketPath).utf8CString
         let sunPathSize = MemoryLayout.size(ofValue: addr.sun_path)
         withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
             ptr.withMemoryRebound(to: CChar.self, capacity: sunPathSize) { dest in
@@ -263,9 +317,7 @@ final class ParakeetASREngine: ObservableObject {
         try sendAll(fd: fd, data: jsonData)
 
         let respLengthData = try recvExact(fd: fd, count: 4)
-        let respLength = respLengthData.withUnsafeBytes {
-            UInt32(bigEndian: $0.load(as: UInt32.self))
-        }
+        let respLength = respLengthData.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
         guard respLength > 0, respLength < 100 * 1024 * 1024 else {
             throw ParakeetASRError.socketError("Invalid response length: \(respLength)")
         }
@@ -351,8 +403,6 @@ final class ParakeetASREngine: ObservableObject {
 
 private enum ParakeetDaemonConstants {
     static let socketPath = "/tmp/voiceflow_parakeet_daemon.sock"
-    // Model load can pull ~600MB on first run; allow a long socket timeout.
-    static let socketTimeoutSeconds: Int = 300
 }
 
 // MARK: - Errors

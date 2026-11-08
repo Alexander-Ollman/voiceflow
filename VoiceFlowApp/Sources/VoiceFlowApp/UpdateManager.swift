@@ -292,6 +292,9 @@ final class UpdateManager: ObservableObject {
         fi
         xattr -dr com.apple.quarantine "\(install)" 2>/dev/null
         rm -rf "\(install).old"
+        # Re-register the swapped bundle so Launch Services (and Spotlight-backed
+        # launchers like Raycast) see the new copy immediately.
+        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "\(install)" >/dev/null 2>&1 || true
         \(relaunch ? "open \"\(install)\"" : "true")
         exit 0
         """
@@ -314,11 +317,18 @@ final class UpdateManager: ObservableObject {
 
     // MARK: - Helpers
 
+    /// Where downloads and the unzipped, verified bundle wait between "ready
+    /// to install" and the swap. The `.noindex` suffix keeps Spotlight out:
+    /// otherwise a staged `VoiceFlow.app` under ~/Library is a second,
+    /// identically-named app bundle with the same bundle id, and launchers
+    /// that de-duplicate by bundle id (Raycast, Alfred) can end up keying on
+    /// the staged copy — which lives in a folder they don't list — and
+    /// hiding the real one in /Applications.
     private func updatesDir() throws -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport
             .appendingPathComponent("com.era-laboratories.voiceflow", isDirectory: true)
-            .appendingPathComponent("Updates", isDirectory: true)
+            .appendingPathComponent("Updates.noindex", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

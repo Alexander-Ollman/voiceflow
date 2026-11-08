@@ -1,0 +1,149 @@
+[
+  {
+    "backend": "identity",
+    "cases": 20,
+    "exact": 8,
+    "category_exact": {
+      "grammar": "1/8",
+      "preserve": "2/4",
+      "punctuation": "5/8"
+    },
+    "preserve_changed": 0,
+    "protected_failed_cases": 0,
+    "protected_cases": 3,
+    "errors": 0,
+    "unstable": 0,
+    "punctuation_warm_median_ms": 0.0,
+    "warm_median_ms": 0.0,
+    "warm_p95_ms": 0.0,
+    "load_seconds": 0.0,
+    "first_inference_seconds": 0.0,
+    "peak_process_tree_rss_mib": 24
+  },
+  {
+    "backend": "rules",
+    "cases": 20,
+    "exact": 7,
+    "category_exact": {
+      "grammar": "1/8",
+      "preserve": "1/4",
+      "punctuation": "5/8"
+    },
+    "preserve_changed": 2,
+    "protected_failed_cases": 1,
+    "protected_cases": 3,
+    "errors": 0,
+    "unstable": 0,
+    "punctuation_warm_median_ms": 0.18,
+    "warm_median_ms": 0.18,
+    "warm_p95_ms": 0.24,
+    "load_seconds": 0.0,
+    "first_inference_seconds": 0.0,
+    "peak_process_tree_rss_mib": 34
+  },
+  {
+    "backend": "pcs",
+    "cases": 20,
+    "exact": 9,
+    "category_exact": {
+      "grammar": "1/8",
+      "preserve": "1/4",
+      "punctuation": "7/8"
+    },
+    "preserve_changed": 2,
+    "protected_failed_cases": 1,
+    "protected_cases": 3,
+    "errors": 0,
+    "unstable": 0,
+    "punctuation_warm_median_ms": 57.21,
+    "warm_median_ms": 62.19,
+    "warm_p95_ms": 100.62,
+    "load_seconds": 1.53,
+    "first_inference_seconds": 0.05,
+    "peak_process_tree_rss_mib": 848
+  },
+  {
+    "backend": "pcs_guarded",
+    "cases": 20,
+    "exact": 8,
+    "category_exact": {
+      "grammar": "1/8",
+      "preserve": "2/4",
+      "punctuation": "5/8"
+    },
+    "preserve_changed": 0,
+    "protected_failed_cases": 0,
+    "protected_cases": 3,
+    "errors": 0,
+    "unstable": 0,
+    "punctuation_warm_median_ms": 0.0,
+    "warm_median_ms": 0.0,
+    "warm_p95_ms": 0.01,
+    "load_seconds": 2.93,
+    "first_inference_seconds": 0.0,
+    "peak_process_tree_rss_mib": 578
+  },
+  {
+    "backend": "gector",
+    "cases": 20,
+    "exact": 13,
+    "category_exact": {
+      "grammar": "6/8",
+      "preserve": "2/4",
+      "punctuation": "5/8"
+    },
+    "preserve_changed": 0,
+    "protected_failed_cases": 0,
+    "protected_cases": 3,
+    "errors": 0,
+    "unstable": 0,
+    "punctuation_warm_median_ms": 78.08,
+    "warm_median_ms": 103.16,
+    "warm_p95_ms": 216.14,
+    "load_seconds": 8.54,
+    "first_inference_seconds": 0.07,
+    "peak_process_tree_rss_mib": 1603
+  },
+  {
+    "backend": "coedit",
+    "cases": 20,
+    "exact": 16,
+    "category_exact": {
+      "grammar": "7/8",
+      "preserve": "2/4",
+      "punctuation": "7/8"
+    },
+    "preserve_changed": 0,
+    "protected_failed_cases": 0,
+    "protected_cases": 3,
+    "errors": 0,
+    "unstable": 0,
+    "punctuation_warm_median_ms": 97.13,
+    "warm_median_ms": 138.7,
+    "warm_p95_ms": 704.85,
+    "load_seconds": 4.47,
+    "first_inference_seconds": 0.22,
+    "peak_process_tree_rss_mib": 719
+  },
+  {
+    "backend": "bonsai",
+    "cases": 20,
+    "exact": 15,
+    "category_exact": {
+      "grammar": "8/8",
+      "preserve": "1/4",
+      "punctuation": "6/8"
+    },
+    "preserve_changed": 2,
+    "protected_failed_cases": 1,
+    "protected_cases": 3,
+    "errors": 0,
+    "unstable": 0,
+    "punctuation_warm_median_ms": 131.12,
+    "warm_median_ms": 141.17,
+    "warm_p95_ms": 285.03,
+    "load_seconds": 1.18,
+    "first_inference_seconds": 11.24,
+    "peak_process_tree_rss_mib": 2598
+  }
+]
