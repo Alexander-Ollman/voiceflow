@@ -2487,12 +2487,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
-        // Check accessibility permission (required for auto-paste). Deferred
-        // to the next run-loop turn: the alert is modal, and running it inline
-        // blocked the rest of launch (speech/LLM startup) until dismissed while
-        // hotkeys were already live, so dictations recorded and then failed
-        // with "transcribe called but state is unloaded".
-        DispatchQueue.main.async { [weak self] in self?.checkAccessibilityPermission() }
+        // Check accessibility permission (required for auto-paste). The alert
+        // is modal; running it inline blocked the rest of launch (speech/LLM
+        // startup) while hotkeys were already live, so dictations recorded and
+        // then failed with "transcribe called but state is unloaded".
+        // It must not run inside a main-queue block either: the main queue is
+        // serial, so main-actor startup tasks would wait for the alert. A
+        // run-loop block lets the modal loop keep draining the main queue.
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated { self?.checkAccessibilityPermission() }
+        }
 
         // Request microphone permission (entitlements ensure the system dialog appears)
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
