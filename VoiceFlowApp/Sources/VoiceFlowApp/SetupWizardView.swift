@@ -12,7 +12,8 @@ enum WizardStep: Int, CaseIterable {
     case permissions = 1
     case models = 2
     case practice = 3
-    case done = 4
+    case tryItOut = 4
+    case done = 5
 }
 
 // MARK: - Setup Wizard View
@@ -53,8 +54,14 @@ struct SetupWizardView: View {
                         }
                     }
                 case .practice:
-                    DictationCheckView(onContinue: { state.currentStep = .done })
+                    DictationCheckView(onContinue: {
+                        withAnimation(.easeInOut(duration: 0.3)) { state.currentStep = .tryItOut }
+                    })
                         .onAppear { preparePractice() }
+                case .tryItOut:
+                    TryItOutStepView {
+                        withAnimation(.easeInOut(duration: 0.3)) { state.currentStep = .done }
+                    }
                 case .done:
                     DoneStepView(onComplete: onComplete)
                 }
@@ -71,7 +78,7 @@ struct SetupWizardView: View {
 struct StepProgressIndicator: View {
     let currentStep: WizardStep
 
-    private let steps: [WizardStep] = [.permissions, .models, .practice, .done]
+    private let steps: [WizardStep] = [.permissions, .models, .practice, .tryItOut, .done]
 
     var body: some View {
         HStack(spacing: 0) {
@@ -607,6 +614,7 @@ struct ProfileCard: View {
 
 struct DoneStepView: View {
     let onComplete: () -> Void
+    @ObservedObject private var hotkeys = HotkeyStore.shared
 
     @State private var showCheckmark = false
     @State private var launchAtLogin = true
@@ -632,7 +640,7 @@ struct DoneStepView: View {
                 Text("Talk this way.")
                     .font(.system(size: 24, weight: .bold))
 
-                Text("Hold ⌥ Space, speak, and you're off.")
+                Text("Hold \(HotkeyFormatter.display(hotkeys.binding(for: .dictate))), speak, and you're off.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }

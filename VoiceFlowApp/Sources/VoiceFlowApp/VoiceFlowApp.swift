@@ -6244,7 +6244,7 @@ struct MainAppView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
         } detail: {
             ZStack {
-                VisualEffectBackground(material: .hudWindow, blending: .behindWindow)
+                VFWindowBackdrop(material: .hudWindow)
                     .ignoresSafeArea()
 
                 Group {

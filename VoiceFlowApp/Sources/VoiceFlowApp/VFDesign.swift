@@ -121,7 +121,7 @@ extension View {
     /// backdrop, dark scheme, brand tint.
     func vfWindowChrome(material: NSVisualEffectView.Material = .hudWindow) -> some View {
         self
-            .background(VisualEffectBackground(material: material, blending: .behindWindow).ignoresSafeArea())
+            .background(VFWindowBackdrop(material: material).ignoresSafeArea())
             .preferredColorScheme(.dark)
             .tint(VF.accent)
     }
@@ -141,6 +141,18 @@ struct VFKeycap: View {
 }
 
 // MARK: - Components
+/// Window backdrop: vibrant material plus a dark wash, so windows read as
+/// dark glass over bright content instead of flat gray.
+struct VFWindowBackdrop: View {
+    var material: NSVisualEffectView.Material = .hudWindow
+    var body: some View {
+        ZStack {
+            VisualEffectBackground(material: material, blending: .behindWindow)
+            Color.black.opacity(0.38)
+        }
+    }
+}
+
 /// NSVisualEffectView wrapper. Gives windows a vibrant dark backdrop.
 struct VisualEffectBackground: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .hudWindow
