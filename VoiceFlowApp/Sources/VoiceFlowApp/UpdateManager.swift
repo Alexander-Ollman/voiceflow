@@ -407,7 +407,7 @@ struct UpdateSettingsView: View {
                         .font(.system(size: 11)).foregroundColor(.white.opacity(0.45))
                 }
             }
-            .toggleStyle(.switch)
+            .toggleStyle(VFSwitchRowStyle())
         }
     }
 

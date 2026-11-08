@@ -6049,10 +6049,10 @@ struct StreakHeatmap: View {
     private func color(for count: Int, max: Int) -> Color {
         guard count > 0 else { return Color.white.opacity(0.05) }
         let intensity = min(1.0, Double(count) / Double(max))
-        // Map intensity → accent blue → purple
-        let r = 0.34 + (0.55 - 0.34) * intensity
-        let g = 0.46 - (0.46 - 0.36) * intensity
-        let b = 1.0
+        // Map intensity → deep ocean → bright aqua (the brand ramp)
+        let r = 0.07 + (0.40 - 0.07) * intensity
+        let g = 0.42 + (0.92 - 0.42) * intensity
+        let b = 0.72 + (0.95 - 0.72) * intensity
         return Color(red: r, green: g, blue: b).opacity(0.35 + 0.55 * intensity)
     }
 
@@ -7144,7 +7144,7 @@ struct StyleSettingsView: View {
                                     .foregroundColor(.white.opacity(0.55))
                             }
                         }
-                        .toggleStyle(.switch)
+                        .toggleStyle(VFSwitchRowStyle())
                         .padding(.vertical, 2)
                     }
                 }
@@ -7186,7 +7186,7 @@ struct StyleSettingsView: View {
                                 .foregroundColor(.white.opacity(0.55))
                         }
                     }
-                    .toggleStyle(.switch)
+                    .toggleStyle(VFSwitchRowStyle())
 
                     if !profileManager.profiles.isEmpty {
                         Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
@@ -7449,7 +7449,7 @@ struct AIFeaturesSettingsView: View {
                                         .foregroundColor(.white.opacity(0.55))
                                 }
                             }
-                            .toggleStyle(.switch)
+                            .toggleStyle(VFSwitchRowStyle())
 
                             Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
 
@@ -7502,12 +7502,12 @@ struct GeneralSettingsView: View {
                                 .foregroundColor(.white.opacity(0.55))
                         }
                     }
-                    .toggleStyle(.switch)
+                    .toggleStyle(VFSwitchRowStyle())
                 }
 
                 cardSection(title: "Startup", icon: "power") {
                     Toggle("Show VoiceFlow in Dock and app switcher", isOn: $alwaysShowInDock)
-                        .toggleStyle(.switch)
+                        .toggleStyle(VFSwitchRowStyle())
                         .onChange(of: alwaysShowInDock) { _ in
                             NotificationCenter.default.post(name: ApplicationVisibility.changed, object: nil)
                         }
@@ -7522,7 +7522,7 @@ struct GeneralSettingsView: View {
                                 try? SMAppService.mainApp.unregister()
                             }
                         }
-                        .toggleStyle(.switch)
+                        .toggleStyle(VFSwitchRowStyle())
 
                     Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
 
@@ -7536,7 +7536,7 @@ struct GeneralSettingsView: View {
                                 .foregroundColor(.white.opacity(0.55))
                         }
                     }
-                    .toggleStyle(.switch)
+                    .toggleStyle(VFSwitchRowStyle())
                     .onChange(of: dockIconWhileSettingsOpen) { _ in
                         NotificationCenter.default.post(name: AppDelegate.dockIconPreferenceChangedNotification, object: nil)
                     }
@@ -8039,6 +8039,34 @@ struct AppProfilesSettingsView: View {
     }
 }
 
+/// The real application icon for a bundle ID, falling back to a tinted glyph
+/// when the app isn't installed.
+struct AppIconView: View {
+    let bundleID: String
+    var fallbackTint: Color = VF.accent
+    var size: CGFloat = 32
+    @State private var icon: NSImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon).resizable().interpolation(.high)
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(fallbackTint.opacity(0.18))
+                    Image(systemName: "app").font(.system(size: 14, weight: .semibold)).foregroundColor(fallbackTint)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .onAppear {
+            guard icon == nil,
+                  let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
+            icon = NSWorkspace.shared.icon(forFile: url.path)
+        }
+    }
+}
+
 struct AppProfileRowView: View {
     let profile: AppProfile
     @ObservedObject private var personaManager = PersonaManager.shared
@@ -8056,7 +8084,7 @@ struct AppProfileRowView: View {
     }
 
     private var badgeColor: Color {
-        if profile.personaId != nil { return .accentColor }
+        if profile.personaId != nil { return VF.accent }
         if profile.customPrompt?.isEmpty == false { return .orange }
         switch profile.category {
         case "email": return .blue
@@ -8068,14 +8096,7 @@ struct AppProfileRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(badgeColor.opacity(0.18))
-                    .frame(width: 32, height: 32)
-                Image(systemName: "app")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(badgeColor)
-            }
+            AppIconView(bundleID: profile.id, fallbackTint: badgeColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.displayName)
                     .font(.system(size: 13, weight: .semibold))
@@ -8093,8 +8114,8 @@ struct AppProfileRowView: View {
                 .fontWeight(.medium)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(badgeColor.opacity(0.18))
-                .foregroundColor(badgeColor)
+                .background(badgeColor.opacity(0.26))
+                .foregroundColor(.white.opacity(0.92))
                 .clipShape(Capsule())
             Image(systemName: "chevron.right")
                 .font(.system(size: 10, weight: .semibold))
@@ -9528,6 +9549,12 @@ struct ModelSettingsView: View {
     }
 
     private func fileSizeText(_ url: URL, fallback: String) -> String {
+        // A directory's own attributes report a few bytes, not its contents
+        // (this showed the Parakeet cache as "0 MB"); sum the files instead.
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            return directorySizeText(url) ?? fallback
+        }
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? UInt64 else {
             return directorySizeText(url) ?? fallback

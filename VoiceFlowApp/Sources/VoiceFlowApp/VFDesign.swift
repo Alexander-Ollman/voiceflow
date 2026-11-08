@@ -25,7 +25,7 @@ enum VF {
     /// Fill for primary buttons and selected states. Deep enough that white
     /// label text keeps contrast.
     static let accentGradient = LinearGradient(
-        colors: [Color(red: 0.05, green: 0.56, blue: 0.76), Color(red: 0.20, green: 0.38, blue: 0.92)],
+        colors: [Color(red: 0.05, green: 0.58, blue: 0.78), Color(red: 0.12, green: 0.44, blue: 0.90)],
         startPoint: .topLeading, endPoint: .bottomTrailing)
 
     /// Bright luminous gradient for icons and accents on dark glass.
@@ -124,6 +124,22 @@ extension View {
             .background(VFWindowBackdrop(material: material).ignoresSafeArea())
             .preferredColorScheme(.dark)
             .tint(VF.accent)
+    }
+}
+
+/// Settings switch row: label (and caption) on the left, switch pinned to the
+/// trailing edge, full width. macOS's `.switch` style otherwise places the
+/// switch wherever the label text ends.
+struct VFSwitchRowStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .center, spacing: VF.Space.l) {
+            configuration.label
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: configuration.$isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+        .contentShape(Rectangle())
     }
 }
 
