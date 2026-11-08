@@ -6,7 +6,12 @@ import SwiftUI
 final class RecordingWaveformHistory: ObservableObject {
     @Published private(set) var levels = Array(repeating: Float.zero, count: 37)
 
+    /// When the newest level arrived (reference-date seconds, the same clock
+    /// as TimelineView), so renderers can ease into it instead of stepping.
+    private(set) var lastAppend: TimeInterval = 0
+
     func append(_ level: Float) {
+        lastAppend = Date().timeIntervalSinceReferenceDate
         var next = Array(levels.dropFirst())
         next.append(level.isFinite ? min(1, max(0, level)) : 0)
         levels = next

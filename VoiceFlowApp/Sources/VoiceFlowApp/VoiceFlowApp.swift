@@ -2038,6 +2038,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overlayPanel: NSPanel?
     var overlayHostingView: NSHostingView<RecordingOverlayView>?
     var overlayState = OverlayState()
+    private var overlayActivity: NSObjectProtocol?
+    private var islandPanel: NSPanel?
+    private let systemIsland = SystemIslandGeometry()
+    private var systemIslandTimer: Timer?
+    /// Placement used by the overlay currently on screen.
+    private var activeOverlayPlacement: OverlayPlacement = .bottom
+    private var overlayOutcomeTimer: DispatchWorkItem?
+    private var overlayAwaitingPaste = false
+    private var overlayPastedThisSession = false
     var settingsWindow: NSWindow?
     var wizardController: SetupWizardController?
     /// The app that was frontmost when Settings opened, so focus can be handed
@@ -2486,8 +2495,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
-        // Check accessibility permission (required for auto-paste)
-        checkAccessibilityPermission()
+        // Check accessibility permission (required for auto-paste). The alert
+        // is modal; running it inline blocked the rest of launch (speech/LLM
+        // startup) while hotkeys were already live, so dictations recorded and
+        // then failed with "transcribe called but state is unloaded".
+        // It must not run inside a main-queue block either: the main queue is
+        // serial, so main-actor startup tasks would wait for the alert. A
+        // run-loop block lets the modal loop keep draining the main queue.
+        RunLoop.main.perform(inModes: [.default]) { [weak self] in
+            MainActor.assumeIsolated { self?.checkAccessibilityPermission() }
+        }
 
         // Request microphone permission (entitlements ensure the system dialog appears)
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
@@ -2712,6 +2729,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "Open Settings")
             alert.addButton(withTitle: "Later")
 
+            // Launched in the background, the alert could sit hidden behind
+            // other windows; bring it forward so the user can see it.
+            NSApp.activate(ignoringOtherApps: true)
             let response = alert.runModal()
 
             if response == .alertFirstButtonReturn {
@@ -3042,17 +3062,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Overlay Setup
 
+    /// Glass card width plus the transparent margin that holds its shadow.
+    static let overlayEnvelopeSize = NSSize(
+        width: RecordingOverlayView.cardWidth + RecordingOverlayView.envelopeMargin * 2,
+        height: RecordingOverlayView.maxTextHeight + 46 + 32 + RecordingOverlayView.envelopeMargin * 2)
+    /// The glass sits 80pt above the visible area's bottom edge, as before.
+    static let overlayBottomInset: CGFloat = 80 - RecordingOverlayView.envelopeMargin
+
     private func setupOverlay() {
-        // Card envelope: 420 wide, up to 40% of screen height + padding for status bar
+        // One fixed transparent envelope for every overlay state: the glass
+        // object morphs inside it, so the panel never resizes mid-animation.
         let screen = NSScreen.main
-        let screenHeight = screen?.visibleFrame.height ?? 800
-        let panelWidth: CGFloat = 420
-        let panelHeight: CGFloat = screenHeight * 0.4 + 80
+        let panelSize = Self.overlayEnvelopeSize
+        let panelWidth = panelSize.width
+        let panelHeight = panelSize.height
 
         // Position at bottom center of screen, above the dock
         let screenFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let panelX = screenFrame.midX - panelWidth / 2
-        let panelY = screenFrame.minY + 80  // bottom edge 80pt above dock area
+        let panelY = screenFrame.minY + Self.overlayBottomInset
 
         let panel = NSPanel(
             contentRect: NSRect(x: panelX, y: panelY, width: panelWidth, height: panelHeight),
@@ -3065,6 +3093,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
+        panel.ignoresMouseEvents = true  // display-only; never block clicks behind the envelope
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = false
         panel.titlebarAppearsTransparent = true
@@ -3100,13 +3129,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ?? NSScreen.main
     }
 
+    /// The placement to use for a new overlay session: the user's choice when
+    /// the active screen has a camera housing, otherwise the bottom capsule.
+    private func resolvedOverlayPlacement() -> OverlayPlacement {
+        let preferred = OverlayPlacement.current
+        guard preferred != .bottom, activeScreen()?.cameraHousingFrame != nil else { return .bottom }
+        return preferred
+    }
+
+    /// Shows the overlay around the camera housing of the active screen.
+    private func showIslandPanel(style: OverlayPlacement) {
+        guard let screen = activeScreen(), let housing = screen.cameraHousingFrame else {
+            activeOverlayPlacement = .bottom
+            repositionOverlay()
+            overlayPanel?.orderFront(nil)
+            return
+        }
+        let size = IslandOverlayView.panelSize(housing: housing.size)
+        let frame = NSRect(x: housing.midX - size.width / 2, y: screen.frame.maxY - size.height,
+                           width: size.width, height: size.height)
+        if islandPanel == nil {
+            let panel = TopEdgePanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+                                backing: .buffered, defer: false)
+            // Above the menu bar, so the shape can merge with the housing.
+            panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 2)
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = false
+            panel.ignoresMouseEvents = true
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+            panel.animationBehavior = .none
+            islandPanel = panel
+        }
+        guard let panel = islandPanel else { return }
+        // Rebuild the view when style or housing changes (e.g. another screen).
+        let key = "\(style.rawValue)-\(housing.width)x\(housing.height)"
+        if panel.identifier?.rawValue != key {
+            panel.contentView = NSHostingView(rootView: IslandOverlayView(
+                state: overlayState, style: style, housing: housing.size, system: systemIsland))
+            panel.identifier = NSUserInterfaceItemIdentifier(key)
+        }
+        panel.setFrame(frame, display: true)
+        panel.orderFrontRegardless()
+
+        // Track the system island (e.g. the mic indicator appearing ~100 ms
+        // after recording starts) and menu-bar room, for both styles: the
+        // notch style sits over the same hardware on Dynamic Island Macs.
+        do {
+            systemIsland.refresh(housing: housing, screen: screen)
+            if systemIslandTimer == nil {
+                let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.islandPanel?.isVisible == true,
+                              let screen = self.islandPanel?.screen, let housing = screen.cameraHousingFrame else { return }
+                        self.systemIsland.refresh(housing: housing, screen: screen)
+                    }
+                }
+                RunLoop.main.add(timer, forMode: .common)
+                systemIslandTimer = timer
+            }
+        }
+    }
+
     /// Snaps the overlay panel to bottom-center of the active screen's visible area.
     private func repositionOverlay() {
         guard let panel = overlayPanel, let screen = activeScreen() else { return }
         let screenFrame = screen.visibleFrame
         let panelFrame = panel.frame
         let x = screenFrame.midX - panelFrame.width / 2
-        let y = screenFrame.minY + 80  // 80pt above dock area
+        let y = screenFrame.minY + Self.overlayBottomInset
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
@@ -3138,6 +3229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showAIResult(command: AICommand, text: String, targetApp: NSRunningApplication?) {
+        noteOverlayPasted()  // a shown result is a successful outcome too
         pendingAICommand = command
         pendingAITargetApp = targetApp
         aiResultState.show(title: command.resultTitle, text: text, hint: command.pasteHint)
@@ -3266,25 +3358,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOverlay(state: OverlayState.RecordingState) {
+        // A new session supersedes any pending done/failed animation.
+        overlayOutcomeTimer?.cancel()
+        overlayOutcomeTimer = nil
+        overlayAwaitingPaste = false
+        if state.isRecording && !overlayState.state.isRecording { overlayPastedThisSession = false }
+        let wasVisible = overlayPanel?.isVisible == true || islandPanel?.isVisible == true
         overlayState.state = state
-        // Resize panel based on state
-        switch state {
-        case .streaming, .formatting:
-            // Card mode: large transparent envelope — SwiftUI handles visible size
-            let maxH = (activeScreen()?.visibleFrame.height ?? 800) * 0.4 + 80
-            overlayPanel?.setContentSize(NSSize(width: 420, height: maxH))
-        case .aiProcessing:
-            overlayPanel?.setContentSize(NSSize(width: 260, height: 70))
-        default:
-            overlayPanel?.setContentSize(NSSize(width: 200, height: 70))
+        if !wasVisible { activeOverlayPlacement = resolvedOverlayPlacement() }
+        if activeOverlayPlacement == .bottom {
+            repositionOverlay()
+            overlayPanel?.orderFront(nil)
+        } else {
+            showIslandPanel(style: activeOverlayPlacement)
         }
-        repositionOverlay()
-        overlayPanel?.orderFront(nil)
+        // VoiceFlow is in the background while the user dictates into another
+        // app; keep App Nap from throttling the overlay's 60 fps animation.
+        if overlayActivity == nil {
+            overlayActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .latencyCritical],
+                reason: "Animating the voice overlay")
+        }
     }
 
+    /// Hide the overlay. If VoiceFlow was working (recognizing, formatting,
+    /// running a command), wait briefly for the paste that normally follows
+    /// (~100 ms later): a paste plays the green "done" ripple, no paste plays
+    /// amber. Cancelling while still recording hides immediately.
     private func hideOverlay() {
+        guard overlayPanel?.isVisible == true || islandPanel?.isVisible == true,
+              overlayState.state.isWorking else {
+            finishHidingOverlay()
+            return
+        }
+        // Some paths (corrections, redo-replacement) insert before hiding.
+        if overlayPastedThisSession {
+            playOverlayOutcome(success: true)
+            return
+        }
+        overlayOutcomeTimer?.cancel()
+        overlayAwaitingPaste = true
+        let noPaste = DispatchWorkItem { [weak self] in self?.playOverlayOutcome(success: false) }
+        overlayOutcomeTimer = noPaste
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: noPaste)
+    }
+
+    /// Called when text was actually inserted (pasted or typed).
+    private func noteOverlayPasted() {
+        overlayPastedThisSession = true
+        guard overlayAwaitingPaste else { return }
+        overlayOutcomeTimer?.cancel()
+        playOverlayOutcome(success: true)
+    }
+
+    private func playOverlayOutcome(success: Bool) {
+        overlayAwaitingPaste = false
+        overlayState.state = success ? .succeeded : .failed
+        let finish = DispatchWorkItem { [weak self] in self?.finishHidingOverlay() }
+        overlayOutcomeTimer = finish
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: finish)
+    }
+
+    private func finishHidingOverlay() {
+        overlayOutcomeTimer?.cancel()
+        overlayOutcomeTimer = nil
+        overlayAwaitingPaste = false
+        overlayPastedThisSession = false
         overlayPanel?.orderOut(nil)
+        islandPanel?.orderOut(nil)
+        systemIslandTimer?.invalidate()
+        systemIslandTimer = nil
         overlayState.state = .idle
+        if let activity = overlayActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            overlayActivity = nil
+        }
     }
 
     // MARK: - Hotkey Setup
@@ -3845,10 +3993,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // showOverlay(state: .recording)  -- handled above
 
             // Subscribe to audio level changes
-            audioLevelCancellable = audioRecorder.$audioLevel
+            audioLevelCancellable = audioRecorder.meterLevels
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] level in
-                    self?.overlayState.audioLevel = level
+                .sink { [weak self] levels in
+                    for level in levels { self?.overlayState.audioLevel = level }
                 }
 
             // Visual context: capture screenshot when using Control+Option+Space hotkey
@@ -5066,10 +5214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingMenuItem?.title = "Recording edit... (release ⌥⇧Space)"
             showOverlay(state: .recording)
 
-            audioLevelCancellable = audioRecorder.$audioLevel
+            audioLevelCancellable = audioRecorder.meterLevels
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] level in
-                    self?.overlayState.audioLevel = level
+                .sink { [weak self] levels in
+                    for level in levels { self?.overlayState.audioLevel = level }
                 }
             NSLog("[VoiceFlow] Edit recording started (target=%@)",
                   target.localizedName ?? "?")
@@ -5297,6 +5445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyDown.post(tap: .cgSessionEventTap)
         usleep(10000)  // 10ms between down/up
         keyUp.post(tap: .cgSessionEventTap)
+        noteOverlayPasted()
     }
 
     /// Simulate Cmd+A (Select All) via CGEvent (works from background apps)
@@ -5357,6 +5506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyUp.post(tap: .cgSessionEventTap)
             usleep(2000) // 2ms between chunks
         }
+        if !utf16.isEmpty { noteOverlayPasted() }
     }
 
     /// Send `count` backspace keystrokes to delete characters before cursor.
@@ -5788,192 +5938,6 @@ struct ScreenRecordingPermissionButton: View {
     }
 }
 
-// MARK: - VF Design System
-
-/// Color and shape tokens for the dark-vibrant "Liquid Glass" look.
-enum VF {
-    static let cardCorner: CGFloat = 16
-    static let pillCorner: CGFloat = 18
-
-    // Sidebar selection.
-    static let sidebarHover = Color.white.opacity(0.05)
-    static let sidebarSelected = Color.white.opacity(0.10)
-
-    // Accent gradient used for primary CTAs.
-    static let accentGradient = LinearGradient(
-        colors: [Color(red: 0.34, green: 0.46, blue: 1.0),
-                 Color(red: 0.55, green: 0.36, blue: 1.0)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-
-    /// Specular highlight stroke for glass surfaces — brighter at top.
-    static let glassStroke = LinearGradient(
-        colors: [Color.white.opacity(0.28), Color.white.opacity(0.06)],
-        startPoint: .top,
-        endPoint: .bottom
-    )
-
-    /// Inner top highlight — adds a subtle gleam at the top edge of cards.
-    static let glassGleam = LinearGradient(
-        colors: [Color.white.opacity(0.10), Color.white.opacity(0.0)],
-        startPoint: .top,
-        endPoint: .center
-    )
-}
-
-/// NSVisualEffectView wrapper. Gives windows a vibrant dark backdrop.
-struct VisualEffectBackground: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .hudWindow
-    var blending: NSVisualEffectView.BlendingMode = .behindWindow
-    var emphasized: Bool = false
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = material
-        v.blendingMode = blending
-        v.state = .active
-        v.isEmphasized = emphasized
-        v.appearance = NSAppearance(named: .vibrantDark)
-        return v
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blending
-        nsView.isEmphasized = emphasized
-    }
-}
-
-/// Frosted "Liquid Glass" rounded card surface.
-/// Layers: ultraThinMaterial base + faint white tint + top-edge gleam + gradient highlight stroke.
-struct VFCard<Content: View>: View {
-    var padding: CGFloat = 18
-    var corner: CGFloat = VF.cardCorner
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        content()
-            .padding(padding)
-            .background {
-                ZStack {
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .fill(VF.glassGleam)
-                        .blendMode(.plusLighter)
-                        .opacity(0.6)
-                }
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .strokeBorder(VF.glassStroke, lineWidth: 1)
-            }
-            .shadow(color: Color.black.opacity(0.25), radius: 18, x: 0, y: 8)
-    }
-}
-
-/// Page header: large title + caption subtitle, optional trailing slot.
-struct VFPageHeader<Trailing: View>: View {
-    let title: String
-    let subtitle: String?
-    @ViewBuilder var trailing: () -> Trailing
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 22, weight: .bold))
-                if let s = subtitle, !s.isEmpty {
-                    Text(s)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            }
-            Spacer()
-            trailing()
-        }
-    }
-}
-
-extension VFPageHeader where Trailing == EmptyView {
-    init(title: String, subtitle: String? = nil) {
-        self.title = title
-        self.subtitle = subtitle
-        self.trailing = { EmptyView() }
-    }
-}
-
-/// Section header within a page — caption-sized, breaks up cards.
-struct VFSectionHeader: View {
-    let title: String
-    var icon: String? = nil
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
-            }
-            Text(title.uppercased())
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.8)
-                .foregroundColor(.secondary)
-        }
-    }
-}
-
-/// Filled pill button — primary action on a row or in a header.
-struct VFFilledPillStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(
-                Capsule()
-                    .fill(VF.accentGradient)
-                    .opacity(configuration.isPressed ? 0.85 : 1.0)
-            )
-    }
-}
-
-/// Outlined pill button — secondary action ("Open", "Install").
-struct VFOutlinePillStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.white.opacity(0.92))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                    .background(
-                        Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.10 : 0.04))
-                    )
-            )
-    }
-}
-
-/// Small ghost pill — caption sized, used inline with body text.
-struct VFGhostPillStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 11, weight: .medium))
-            .foregroundColor(.white.opacity(0.75))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(
-                Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.12 : 0.06))
-            )
-    }
-}
-
 // MARK: - Dashboard primitives
 
 /// Wispr-style underline tab strip. The selected tab gets a thicker accent underline;
@@ -6237,10 +6201,10 @@ struct StreakHeatmap: View {
     private func color(for count: Int, max: Int) -> Color {
         guard count > 0 else { return Color.white.opacity(0.05) }
         let intensity = min(1.0, Double(count) / Double(max))
-        // Map intensity → accent blue → purple
-        let r = 0.34 + (0.55 - 0.34) * intensity
-        let g = 0.46 - (0.46 - 0.36) * intensity
-        let b = 1.0
+        // Map intensity → deep ocean → bright aqua (the brand ramp)
+        let r = 0.07 + (0.40 - 0.07) * intensity
+        let g = 0.42 + (0.92 - 0.42) * intensity
+        let b = 0.72 + (0.95 - 0.72) * intensity
         return Color(red: r, green: g, blue: b).opacity(0.35 + 0.55 * intensity)
     }
 
@@ -6281,7 +6245,7 @@ struct SettingsHeaderView: View {
             } else {
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 48))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(VF.accent)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -6432,7 +6396,7 @@ struct MainAppView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
         } detail: {
             ZStack {
-                VisualEffectBackground(material: .hudWindow, blending: .behindWindow)
+                VFWindowBackdrop(material: .hudWindow)
                     .ignoresSafeArea()
 
                 Group {
@@ -6466,6 +6430,7 @@ struct MainAppView: View {
         }
         .frame(width: 1080, height: 720)
         .preferredColorScheme(.dark)
+        .tint(VF.accent)
     }
 }
 
@@ -6830,7 +6795,7 @@ struct HomeView: View {
 
     /// Mini stat chip used in the Recent Activity banner.
     @ViewBuilder
-    private func miniStat(value: String, label: String, icon: String, tint: Color = .accentColor) -> some View {
+    private func miniStat(value: String, label: String, icon: String, tint: Color = VF.accent) -> some View {
         VFCard(padding: 14) {
             HStack(spacing: 12) {
                 ZStack {
@@ -7331,7 +7296,7 @@ struct StyleSettingsView: View {
                                     .foregroundColor(.white.opacity(0.55))
                             }
                         }
-                        .toggleStyle(.switch)
+                        .toggleStyle(VFSwitchRowStyle())
                         .padding(.vertical, 2)
                     }
                 }
@@ -7373,7 +7338,7 @@ struct StyleSettingsView: View {
                                 .foregroundColor(.white.opacity(0.55))
                         }
                     }
-                    .toggleStyle(.switch)
+                    .toggleStyle(VFSwitchRowStyle())
 
                     if !profileManager.profiles.isEmpty {
                         Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
@@ -7574,7 +7539,7 @@ struct StyleSettingsView: View {
         .padding(.horizontal, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                .fill(isSelected ? VF.accent.opacity(0.12) : Color.clear)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
@@ -7636,7 +7601,7 @@ struct AIFeaturesSettingsView: View {
                                         .foregroundColor(.white.opacity(0.55))
                                 }
                             }
-                            .toggleStyle(.switch)
+                            .toggleStyle(VFSwitchRowStyle())
 
                             Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
 
@@ -7653,6 +7618,86 @@ struct AIFeaturesSettingsView: View {
                 }
             }
             .padding(24)
+        }
+    }
+}
+
+// MARK: - Voice overlay settings
+
+struct VoiceOverlaySettings: View {
+    @AppStorage(OverlayPlacement.preferenceKey) private var placement = OverlayPlacement.bottom.rawValue
+    @AppStorage(WaveformPalette.preferenceKey) private var palette = WaveformPalette.default.rawValue
+    @StateObject private var preview = RecordingWaveformHistory()
+    private let hasHousing = NSScreen.screens.contains { $0.cameraHousingFrame != nil }
+    private let tick = Timer.publish(every: 1.0 / 47.0, on: .main, in: .common).autoconnect()
+    @State private var t = 0.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Position")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                    Text(hasHousing
+                         ? "Dynamic Island wraps the island and makes room for the system's microphone indicator. Notch extends down from the notch without covering menu bar items. Displays without a camera housing use the bottom of the screen."
+                         : "This Mac's displays have no camera housing, so the overlay appears at the bottom of the screen.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Picker("", selection: $placement) {
+                    ForEach(OverlayPlacement.allCases) { option in
+                        Text(option.title).tag(option.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .disabled(!hasHousing)
+            }
+
+            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Waveform colour")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                    LiquidWaveformView(history: preview, mode: .listening,
+                                       palette: WaveformPalette(rawValue: palette) ?? .default)
+                        .id(palette)
+                        .frame(width: 110, height: 18)
+                        .padding(.horizontal, 17)
+                        .frame(height: 35)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .padding(.top, 6)
+                }
+                Spacer()
+                HStack(spacing: 8) {
+                    ForEach(WaveformPalette.allCases) { option in
+                        Button { palette = option.rawValue } label: {
+                            Circle()
+                                .fill(LinearGradient(colors: [option.stops.edge, option.stops.center],
+                                                     startPoint: .bottomLeading, endPoint: .topTrailing))
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().strokeBorder(.white.opacity(palette == option.rawValue ? 0.9 : 0), lineWidth: 2))
+                                .padding(2)
+                        }
+                        .buttonStyle(.plain)
+                        .help(option.rawValue.capitalized)
+                        .accessibilityLabel(option.rawValue.capitalized)
+                    }
+                }
+            }
+        }
+        .onReceive(tick) { _ in
+            // A gentle synthetic voice so the swatch preview is alive.
+            t += 1.0 / 47.0
+            let phrase = sin(t * 0.9) > -0.6 ? 1.0 : 0.05
+            let syllable = max(0, sin(t * 11)) * (0.6 + 0.4 * sin(t * 2.3))
+            preview.append(Float(0.02 + 0.2 * phrase * syllable))
         }
     }
 }
@@ -7678,6 +7723,10 @@ struct GeneralSettingsView: View {
                     HotkeyRecorderList()
                 }
 
+                cardSection(title: "Voice overlay", icon: "waveform") {
+                    VoiceOverlaySettings()
+                }
+
                 cardSection(title: "Microphone", icon: "mic") {
                     Toggle(isOn: $avoidBluetoothMic) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -7689,12 +7738,12 @@ struct GeneralSettingsView: View {
                                 .foregroundColor(.white.opacity(0.55))
                         }
                     }
-                    .toggleStyle(.switch)
+                    .toggleStyle(VFSwitchRowStyle())
                 }
 
                 cardSection(title: "Startup", icon: "power") {
                     Toggle("Show VoiceFlow in Dock and app switcher", isOn: $alwaysShowInDock)
-                        .toggleStyle(.switch)
+                        .toggleStyle(VFSwitchRowStyle())
                         .onChange(of: alwaysShowInDock) { _ in
                             NotificationCenter.default.post(name: ApplicationVisibility.changed, object: nil)
                         }
@@ -7709,7 +7758,7 @@ struct GeneralSettingsView: View {
                                 try? SMAppService.mainApp.unregister()
                             }
                         }
-                        .toggleStyle(.switch)
+                        .toggleStyle(VFSwitchRowStyle())
 
                     Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
 
@@ -7723,7 +7772,7 @@ struct GeneralSettingsView: View {
                                 .foregroundColor(.white.opacity(0.55))
                         }
                     }
-                    .toggleStyle(.switch)
+                    .toggleStyle(VFSwitchRowStyle())
                     .onChange(of: dockIconWhileSettingsOpen) { _ in
                         NotificationCenter.default.post(name: AppDelegate.dockIconPreferenceChangedNotification, object: nil)
                     }
@@ -8161,7 +8210,7 @@ struct AppProfilesSettingsView: View {
                          ? "Auto-detect: no new mappings (everything already covered)."
                          : "Auto-detect: mapped \(n) app\(n == 1 ? "" : "s") to personas.")
                         .font(.caption)
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(VF.accent)
                 }
                 if isClassifying {
                     HStack(spacing: 6) {
@@ -8170,7 +8219,7 @@ struct AppProfilesSettingsView: View {
                     }
                 }
                 if let result = classifyResult, !isClassifying {
-                    Text(result).font(.caption).foregroundColor(.accentColor)
+                    Text(result).font(.caption).foregroundColor(VF.accent)
                 }
 
                 if profileManager.profiles.isEmpty {
@@ -8226,6 +8275,34 @@ struct AppProfilesSettingsView: View {
     }
 }
 
+/// The real application icon for a bundle ID, falling back to a tinted glyph
+/// when the app isn't installed.
+struct AppIconView: View {
+    let bundleID: String
+    var fallbackTint: Color = VF.accent
+    var size: CGFloat = 32
+    @State private var icon: NSImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(nsImage: icon).resizable().interpolation(.high)
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(fallbackTint.opacity(0.18))
+                    Image(systemName: "app").font(.system(size: 14, weight: .semibold)).foregroundColor(fallbackTint)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .onAppear {
+            guard icon == nil,
+                  let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
+            icon = NSWorkspace.shared.icon(forFile: url.path)
+        }
+    }
+}
+
 struct AppProfileRowView: View {
     let profile: AppProfile
     @ObservedObject private var personaManager = PersonaManager.shared
@@ -8243,7 +8320,7 @@ struct AppProfileRowView: View {
     }
 
     private var badgeColor: Color {
-        if profile.personaId != nil { return .accentColor }
+        if profile.personaId != nil { return VF.accent }
         if profile.customPrompt?.isEmpty == false { return .orange }
         switch profile.category {
         case "email": return .blue
@@ -8255,14 +8332,7 @@ struct AppProfileRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(badgeColor.opacity(0.18))
-                    .frame(width: 32, height: 32)
-                Image(systemName: "app")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(badgeColor)
-            }
+            AppIconView(bundleID: profile.id, fallbackTint: badgeColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text(profile.displayName)
                     .font(.system(size: 13, weight: .semibold))
@@ -8280,8 +8350,8 @@ struct AppProfileRowView: View {
                 .fontWeight(.medium)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(badgeColor.opacity(0.18))
-                .foregroundColor(badgeColor)
+                .background(badgeColor.opacity(0.26))
+                .foregroundColor(.white.opacity(0.92))
                 .clipShape(Capsule())
             Image(systemName: "chevron.right")
                 .font(.system(size: 10, weight: .semibold))
@@ -8789,7 +8859,7 @@ struct VocabularyChipEditor: View {
                             }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                            .background(Capsule().fill(VF.accent.opacity(0.15)))
                             .foregroundColor(.primary)
                         }
                     }
@@ -9688,7 +9758,7 @@ struct ModelSettingsView: View {
 
                 if setup.phase != .idle {
                     if let frac = setup.progressFraction, !setup.isFullyInstalled {
-                        ProgressView(value: frac).progressViewStyle(.linear).tint(.accentColor)
+                        ProgressView(value: frac).progressViewStyle(.linear).tint(VF.accent)
                     } else if isInProgress {
                         ProgressView()
                     }
@@ -9715,6 +9785,12 @@ struct ModelSettingsView: View {
     }
 
     private func fileSizeText(_ url: URL, fallback: String) -> String {
+        // A directory's own attributes report a few bytes, not its contents
+        // (this showed the Parakeet cache as "0 MB"); sum the files instead.
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            return directorySizeText(url) ?? fallback
+        }
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? UInt64 else {
             return directorySizeText(url) ?? fallback
@@ -9902,7 +9978,7 @@ struct AIResultView: View {
                 HStack {
                     Image(systemName: "sparkles")
                         .font(.system(size: 14))
-                        .foregroundColor(.purple)
+                        .foregroundStyle(VF.glowGradient)
                     Text(state.title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
@@ -9950,20 +10026,16 @@ struct AIResultView: View {
             }
             .frame(width: 480)
             .frame(minHeight: 160, maxHeight: 400)
-            .background(Color.black.opacity(0.85))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .vfGlass(in: RoundedRectangle(cornerRadius: VF.Radius.panel, style: .continuous),
+                     tint: Color.black.opacity(0.55))
+            .environment(\.colorScheme, .dark)
         }
     }
 
     private func keyHint(_ key: String, _ label: String) -> some View {
         HStack(spacing: 4) {
-            Text(key)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+            VFKeycap(key: key)
                 .foregroundColor(.white.opacity(0.8))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(Color.white.opacity(0.15))
-                .cornerRadius(4)
             Text(label)
                 .font(.system(size: 11))
                 .foregroundColor(.gray)
@@ -9980,297 +10052,3 @@ private final class TokenAccumulator {
     var text: String = ""
 }
 
-// MARK: - Overlay State
-
-class OverlayState: ObservableObject {
-    enum RecordingState {
-        case idle
-        case recording
-        case streaming(String)      // partial transcript text from real-time STT
-        case processing
-        case formatting(String)     // LLM tokens appearing word-by-word
-        case aiProcessing(String)   // label text like "Summarizing..."
-
-        var isRecording: Bool {
-            if case .recording = self { return true }
-            if case .streaming = self { return true }
-            return false
-        }
-
-        var isProcessing: Bool {
-            if case .processing = self { return true }
-            if case .formatting = self { return true }
-            return false
-        }
-
-        var isStreaming: Bool {
-            if case .streaming = self { return true }
-            return false
-        }
-    }
-
-    let waveform = RecordingWaveformHistory()
-    @Published var state: RecordingState = .idle {
-        didSet {
-            if state.isRecording && !oldValue.isRecording { waveform.reset() }
-        }
-    }
-    @Published var audioLevel: Float = 0 {
-        didSet { waveform.append(audioLevel) }
-    }
-}
-
-// MARK: - Recording Overlay View
-
-struct RecordingOverlayView: View {
-    @ObservedObject var state: OverlayState
-    @State private var animateGradient = false
-
-    // Brand colors from logo
-    private let gradientColors: [Color] = [
-        Color(red: 0.0, green: 0.85, blue: 0.85),   // Cyan
-        Color(red: 0.2, green: 0.6, blue: 0.9),    // Blue
-        Color(red: 0.4, green: 0.8, blue: 0.7),    // Teal
-        Color(red: 0.0, green: 0.7, blue: 0.9),    // Light blue
-        Color(red: 0.0, green: 0.85, blue: 0.85),   // Cyan (loop)
-    ]
-
-    private let cardWidth: CGFloat = 420
-    private let pillHeight: CGFloat = 66
-    private let statusBarHeight: CGFloat = 50
-    private let maxTextAreaHeight: CGFloat = 300
-
-    // MARK: - Mode Detection
-
-    private var isCardMode: Bool {
-        switch state.state {
-        case .streaming(let t) where !t.isEmpty: return true
-        case .formatting: return true  // Always card mode — keeps card visible during STT→formatting transition
-        default: return false
-        }
-    }
-
-    private var currentText: String {
-        switch state.state {
-        case .streaming(let t): return t
-        case .formatting(let t): return t
-        default: return ""
-        }
-    }
-
-    private var isFormattingPhase: Bool {
-        if case .formatting = state.state { return true }
-        return false
-    }
-
-    private var pillWidth: CGFloat {
-        if case .aiProcessing = state.state { return 260 }
-        return 264
-    }
-
-    // MARK: - Body
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-
-            if isCardMode {
-                cardView
-                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
-            } else {
-                pillView
-                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isCardMode)
-        .onAppear {
-            withAnimation(.linear(duration: 3.0).repeatForever(autoreverses: false)) {
-                animateGradient = true
-            }
-        }
-    }
-
-    // MARK: - Card View
-
-    private var cardView: some View {
-        VStack(spacing: 0) {
-            if !currentText.isEmpty {
-                textArea
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.15))
-                    .frame(height: 1)
-            }
-
-            statusBar
-        }
-        .frame(width: cardWidth)
-        .background(cardBackground)
-    }
-
-    private var textArea: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                Text(currentText)
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .id("textBottom")
-            }
-            .onChange(of: currentText) { _ in
-                withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo("textBottom", anchor: .bottom)
-                }
-            }
-        }
-        .frame(maxHeight: maxTextAreaHeight)
-    }
-
-    private var statusBar: some View {
-        HStack(spacing: 10) {
-            if isFormattingPhase {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 16))
-                    .foregroundColor(.white)
-                Text("Formatting...")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
-                Spacer()
-                PulsingDotsView()
-                    .frame(width: 40, height: 16)
-                    .scaleEffect(0.6)
-            } else {
-                Spacer(minLength: 0)
-                LiveRecordingWaveformView(history: state.waveform)
-                    .frame(width: 256, height: 32)
-                Spacer(minLength: 0)
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(height: statusBarHeight)
-    }
-
-    private var cardBackground: some View {
-        ZStack {
-            if !isFormattingPhase {
-                AnimatedGradientBackground(animate: animateGradient, colors: gradientColors)
-            } else {
-                Color.black.opacity(0.85)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-    }
-
-    // MARK: - Pill View
-
-    private var pillView: some View {
-        HStack(spacing: 10) {
-            if case .aiProcessing(let label) = state.state {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white)
-                Text(label)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white)
-                PulsingDotsView()
-                    .frame(width: 50, height: 20)
-                    .scaleEffect(0.7)
-            } else if case .streaming = state.state {
-                // Streaming with empty text — show waveform in pill
-                LiveRecordingWaveformView(history: state.waveform)
-                    .frame(width: 224, height: 38)
-            } else {
-                if state.state.isRecording {
-                    LiveRecordingWaveformView(history: state.waveform)
-                        .frame(width: 224, height: 38)
-                } else if state.state.isProcessing {
-                    logoView
-                    processingView
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(width: pillWidth, height: pillHeight)
-        .background(pillBackground)
-        .animation(.easeInOut(duration: 0.2), value: pillWidth)
-    }
-
-    // MARK: - Shared Sub-views
-
-    @ViewBuilder
-    private var logoView: some View {
-        if let iconPath = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png"),
-           let nsImage = NSImage(contentsOfFile: iconPath) {
-            Image(nsImage: nsImage)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 28, height: 28)
-                .opacity(state.state.isRecording ? 1.0 : 0.7)
-        } else {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 24))
-                .foregroundColor(.white)
-        }
-    }
-
-    private var processingView: some View {
-        PulsingDotsView()
-            .frame(width: 80, height: 30)
-    }
-
-    private var pillBackground: some View {
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(Color(red: 0.045, green: 0.052, blue: 0.064).opacity(0.96))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(.white.opacity(0.12), lineWidth: 1)
-            }
-    }
-
-}
-
-// MARK: - Pulsing Dots View
-
-struct PulsingDotsView: View {
-    @State private var activeIndex = 0
-    private let dotCount = 3
-    private let dotSize: CGFloat = 8
-    private let timer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(0..<dotCount, id: \.self) { index in
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: dotSize, height: dotSize)
-                    .opacity(activeIndex == index ? 1.0 : 0.3)
-                    .scaleEffect(activeIndex == index ? 1.2 : 0.8)
-                    .animation(.easeInOut(duration: 0.3), value: activeIndex)
-            }
-        }
-        .onReceive(timer) { _ in
-            activeIndex = (activeIndex + 1) % dotCount
-        }
-    }
-}
-
-// MARK: - Animated Gradient Background
-
-struct AnimatedGradientBackground: View {
-    let animate: Bool
-    let colors: [Color]
-
-    var body: some View {
-        LinearGradient(
-            colors: colors,
-            startPoint: animate ? .topLeading : .bottomTrailing,
-            endPoint: animate ? .bottomTrailing : .topLeading
-        )
-        .hueRotation(.degrees(animate ? 45 : 0))
-        .opacity(0.95)
-    }
-}

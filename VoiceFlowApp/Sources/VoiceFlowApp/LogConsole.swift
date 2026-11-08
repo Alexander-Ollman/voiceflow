@@ -307,7 +307,7 @@ struct LogConsoleView: View {
             exportBar
         }
         .frame(width: 880, height: 640)
-        .background(VisualEffectBackground(material: .hudWindow, blending: .behindWindow).ignoresSafeArea())
+        .background(VFWindowBackdrop(material: .hudWindow).ignoresSafeArea())
         .preferredColorScheme(.dark)
     }
 

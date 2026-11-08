@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import Accelerate
 import AudioToolbox
 
@@ -9,6 +10,9 @@ final class AudioRecorder: ObservableObject {
 
     @Published var isRecording = false
     @Published var audioLevel: Float = 0
+    /// Finer-grained levels for the overlay visualizer only: one RMS per
+    /// quarter of each tap buffer (~47 Hz at 48 kHz instead of ~12 Hz).
+    let meterLevels = PassthroughSubject<[Float], Never>()
 
     private var audioBuffer: [Float] = []
     private let targetSampleRate: Double = 16000
@@ -128,8 +132,31 @@ final class AudioRecorder: ObservableObject {
         // Calculate audio level for visualization
         var rms: Float = 0
         vDSP_rmsqv(monoSamples, 1, &rms, vDSP_Length(monoSamples.count))
+        let sliceCount = 4
+        let sliceLength = max(1, monoSamples.count / sliceCount)
+        var slices: [Float] = []
+        slices.reserveCapacity(sliceCount)
+        monoSamples.withUnsafeBufferPointer { samples in
+            var start = 0
+            while start < samples.count {
+                let length = min(sliceLength, samples.count - start)
+                var sliceRMS: Float = 0
+                vDSP_rmsqv(samples.baseAddress! + start, 1, &sliceRMS, vDSP_Length(length))
+                slices.append(min(1.0, sliceRMS * 10))
+                start += length
+            }
+        }
         DispatchQueue.main.async {
             self.audioLevel = min(1.0, rms * 10)
+        }
+        // Release the slices at their real spacing (~21 ms at 48 kHz) instead
+        // of as one burst per 85 ms buffer, so the visualizer gets a steady
+        // stream rather than a visible step every buffer.
+        let sliceInterval = Double(sliceLength) / max(1, inputSampleRate)
+        for (index, level) in slices.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + sliceInterval * Double(index)) {
+                self.meterLevels.send([level])
+            }
         }
 
         // Resample to 16kHz if needed

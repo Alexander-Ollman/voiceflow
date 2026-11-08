@@ -38,7 +38,7 @@ struct DictationCheckView: View {
 
                 DiagnosticPracticeField(diagnostics: diagnostics)
                     .frame(height: 80)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                    .overlay(RoundedRectangle(cornerRadius: VF.Radius.control).stroke(VF.surfaceStroke))
                     .accessibilityLabel("Dictation test field")
                 ProgressView(value: Double(diagnostics.inputLevel))
                     .accessibilityLabel("Live microphone level")
@@ -99,7 +99,7 @@ struct DictationCheckView: View {
                     HStack {
                         Spacer()
                         Button("Continue") { onContinue() }
-                            .buttonStyle(.borderedProminent).disabled(!diagnostics.passed)
+                            .vfPrimaryButton().disabled(!diagnostics.passed)
                     }
                 }
             }.padding(24)

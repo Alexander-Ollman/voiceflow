@@ -39,8 +39,8 @@ enum QuickTipKind: Int, CaseIterable, Identifiable {
 
 /// Shared accent used across the playful bits. Falls back gracefully in light mode.
 private enum Tip {
-    static let accent = Color(red: 0.40, green: 0.46, blue: 1.0)
-    static let accent2 = Color(red: 0.62, green: 0.40, blue: 1.0)
+    static let accent = VF.Palette.aqua
+    static let accent2 = VF.Palette.lagoon
     static let gradient = LinearGradient(
         colors: [accent, accent2],
         startPoint: .leading, endPoint: .trailing
@@ -618,6 +618,6 @@ struct QuickTipsSheet: View {
         }
         .padding(32)
         .frame(width: 760, height: 520)
-        .background(VisualEffectBackground(material: .hudWindow, blending: .behindWindow).ignoresSafeArea())
+        .background(VFWindowBackdrop(material: .hudWindow).ignoresSafeArea())
     }
 }
