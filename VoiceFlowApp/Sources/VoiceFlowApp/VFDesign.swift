@@ -12,6 +12,8 @@ enum VF {
         static let lagoon = Color(red: 0.30, green: 0.55, blue: 1.00)
         static let mint   = Color(red: 0.50, green: 0.96, blue: 0.88)
         static let iris   = Color(red: 0.60, green: 0.48, blue: 1.00)
+        /// Deep accent for filled controls carrying white text.
+        static let ocean  = Color(red: 0.07, green: 0.50, blue: 0.78)
 
         static let success = Color(red: 0.36, green: 0.84, blue: 0.56)
         static let warning = Color(red: 1.00, green: 0.75, blue: 0.35)
@@ -34,6 +36,9 @@ enum VF {
     // MARK: Surfaces (dark vibrant windows)
     static let cardCorner: CGFloat = Radius.card
     static let pillCorner: CGFloat = 18
+    /// Fill for grouped rows and option tiles inside dark vibrant windows.
+    static let surface = Color.white.opacity(0.06)
+    static let surfaceStroke = Color.white.opacity(0.10)
     static let sidebarHover = Color.white.opacity(0.05)
     static let sidebarSelected = Color.white.opacity(0.10)
 
@@ -96,6 +101,29 @@ extension View {
                 .overlay(shape.stroke(.white.opacity(0.18), lineWidth: 1))
                 .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
         }
+    }
+}
+
+extension View {
+    /// The app's primary action: native glass-prominent on macOS 26+, tinted
+    /// bordered-prominent before. Native styles keep focus, default-button and
+    /// disabled behavior.
+    @ViewBuilder
+    func vfPrimaryButton() -> some View {
+        if #available(macOS 26, *) {
+            self.buttonStyle(.glassProminent).tint(VF.Palette.ocean)
+        } else {
+            self.buttonStyle(.borderedProminent).tint(VF.Palette.ocean)
+        }
+    }
+
+    /// Window chrome shared by Settings, Setup, Logs and Tips: dark vibrant
+    /// backdrop, dark scheme, brand tint.
+    func vfWindowChrome(material: NSVisualEffectView.Material = .hudWindow) -> some View {
+        self
+            .background(VisualEffectBackground(material: material, blending: .behindWindow).ignoresSafeArea())
+            .preferredColorScheme(.dark)
+            .tint(VF.accent)
     }
 }
 

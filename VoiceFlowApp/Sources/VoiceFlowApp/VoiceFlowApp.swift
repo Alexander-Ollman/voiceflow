@@ -6093,7 +6093,7 @@ struct SettingsHeaderView: View {
             } else {
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 48))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(VF.accent)
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -6278,6 +6278,7 @@ struct MainAppView: View {
         }
         .frame(width: 1080, height: 720)
         .preferredColorScheme(.dark)
+        .tint(VF.accent)
     }
 }
 
@@ -6642,7 +6643,7 @@ struct HomeView: View {
 
     /// Mini stat chip used in the Recent Activity banner.
     @ViewBuilder
-    private func miniStat(value: String, label: String, icon: String, tint: Color = .accentColor) -> some View {
+    private func miniStat(value: String, label: String, icon: String, tint: Color = VF.accent) -> some View {
         VFCard(padding: 14) {
             HStack(spacing: 12) {
                 ZStack {
@@ -7386,7 +7387,7 @@ struct StyleSettingsView: View {
         .padding(.horizontal, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                .fill(isSelected ? VF.accent.opacity(0.12) : Color.clear)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
@@ -7973,7 +7974,7 @@ struct AppProfilesSettingsView: View {
                          ? "Auto-detect: no new mappings (everything already covered)."
                          : "Auto-detect: mapped \(n) app\(n == 1 ? "" : "s") to personas.")
                         .font(.caption)
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(VF.accent)
                 }
                 if isClassifying {
                     HStack(spacing: 6) {
@@ -7982,7 +7983,7 @@ struct AppProfilesSettingsView: View {
                     }
                 }
                 if let result = classifyResult, !isClassifying {
-                    Text(result).font(.caption).foregroundColor(.accentColor)
+                    Text(result).font(.caption).foregroundColor(VF.accent)
                 }
 
                 if profileManager.profiles.isEmpty {
@@ -8601,7 +8602,7 @@ struct VocabularyChipEditor: View {
                             }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                            .background(Capsule().fill(VF.accent.opacity(0.15)))
                             .foregroundColor(.primary)
                         }
                     }
@@ -9500,7 +9501,7 @@ struct ModelSettingsView: View {
 
                 if setup.phase != .idle {
                     if let frac = setup.progressFraction, !setup.isFullyInstalled {
-                        ProgressView(value: frac).progressViewStyle(.linear).tint(.accentColor)
+                        ProgressView(value: frac).progressViewStyle(.linear).tint(VF.accent)
                     } else if isInProgress {
                         ProgressView()
                     }
@@ -9714,7 +9715,7 @@ struct AIResultView: View {
                 HStack {
                     Image(systemName: "sparkles")
                         .font(.system(size: 14))
-                        .foregroundColor(.purple)
+                        .foregroundStyle(VF.glowGradient)
                     Text(state.title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
@@ -9762,20 +9763,16 @@ struct AIResultView: View {
             }
             .frame(width: 480)
             .frame(minHeight: 160, maxHeight: 400)
-            .background(Color.black.opacity(0.85))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .vfGlass(in: RoundedRectangle(cornerRadius: VF.Radius.panel, style: .continuous),
+                     tint: Color.black.opacity(0.55))
+            .environment(\.colorScheme, .dark)
         }
     }
 
     private func keyHint(_ key: String, _ label: String) -> some View {
         HStack(spacing: 4) {
-            Text(key)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+            VFKeycap(key: key)
                 .foregroundColor(.white.opacity(0.8))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(Color.white.opacity(0.15))
-                .cornerRadius(4)
             Text(label)
                 .font(.system(size: 11))
                 .foregroundColor(.gray)

@@ -62,7 +62,7 @@ struct SetupWizardView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 620, height: 700)
-        .background(Color(NSColor.windowBackgroundColor))
+        .vfWindowChrome()
     }
 }
 
@@ -78,7 +78,7 @@ struct StepProgressIndicator: View {
             ForEach(Array(steps.enumerated()), id: \.element) { index, step in
                 if index > 0 {
                     Rectangle()
-                        .fill(step.rawValue <= currentStep.rawValue ? Color.accentColor : Color.secondary.opacity(0.3))
+                        .fill(step.rawValue <= currentStep.rawValue ? VF.accent : Color.secondary.opacity(0.3))
                         .frame(height: 2)
                         .frame(maxWidth: 60)
                 }
@@ -86,14 +86,14 @@ struct StepProgressIndicator: View {
                 ZStack {
                     if step.rawValue < currentStep.rawValue {
                         Circle()
-                            .fill(Color.accentColor)
+                            .fill(VF.accent)
                             .frame(width: 20, height: 20)
                         Image(systemName: "checkmark")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundColor(.white)
                     } else if step == currentStep {
                         Circle()
-                            .fill(Color.accentColor)
+                            .fill(VF.accent)
                             .frame(width: 20, height: 20)
                         Circle()
                             .fill(Color.white)
@@ -130,7 +130,7 @@ struct WelcomeStepView: View {
             } else {
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 80))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(VF.accent)
             }
 
             VStack(spacing: 8) {
@@ -150,7 +150,7 @@ struct WelcomeStepView: View {
                     .frame(maxWidth: 200)
                     .padding(.vertical, 8)
             }
-            .buttonStyle(.borderedProminent)
+            .vfPrimaryButton()
             .controlSize(.large)
 
             Spacer()
@@ -236,7 +236,7 @@ struct PermissionsStepView: View {
                     .frame(maxWidth: 200)
                     .padding(.vertical, 8)
             }
-            .buttonStyle(.borderedProminent)
+            .vfPrimaryButton()
             .controlSize(.large)
 
             Spacer()
@@ -302,7 +302,7 @@ struct PermissionCard: View {
             }
         }
         .padding(14)
-        .background(Color(NSColor.controlBackgroundColor))
+        .background(VF.surface)
         .cornerRadius(12)
     }
 }
@@ -358,7 +358,7 @@ struct ModelDownloadStepView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "arrow.down.circle")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(VF.accent)
                     Text("Installing models")
                         .font(.headline)
                     Spacer()
@@ -378,7 +378,7 @@ struct ModelDownloadStepView: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(NSColor.controlBackgroundColor))
+                    .fill(VF.surface)
             )
             .padding(.horizontal, 32)
             .padding(.top, 8)
@@ -416,7 +416,7 @@ struct ModelDownloadStepView: View {
             VStack(spacing: 8) {
                 Image(systemName: "shippingbox.and.arrow.backward")
                     .font(.system(size: 38))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(VF.accent)
                 Text("Install models")
                     .font(.title2.weight(.semibold))
                 Text("VoiceFlow uses two on-device models — both run locally on Apple Silicon.")
@@ -452,7 +452,7 @@ struct ModelDownloadStepView: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(NSColor.controlBackgroundColor))
+                    .fill(VF.surface)
             )
             .padding(.horizontal, 32)
 
@@ -472,7 +472,7 @@ struct ModelDownloadStepView: View {
                     }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
+                    .vfPrimaryButton()
                 } else {
                     Button(action: { Task { await setup.runSetup() } }) {
                         Text("Setup")
@@ -480,7 +480,7 @@ struct ModelDownloadStepView: View {
                     }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
+                    .vfPrimaryButton()
                 }
                 Spacer()
             }
@@ -507,7 +507,7 @@ struct ModelRundownRow: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 18))
-                .foregroundColor(.accentColor)
+                .foregroundColor(VF.accent)
                 .frame(width: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -543,9 +543,9 @@ struct ProfileCard: View {
                 // Icon
                 Image(systemName: profile.icon)
                     .font(.system(size: 20))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(VF.accent)
                     .frame(width: 40, height: 40)
-                    .background(Color.accentColor.opacity(0.1))
+                    .background(VF.accent.opacity(0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 // Text
@@ -580,11 +580,11 @@ struct ProfileCard: View {
                 // Selection indicator
                 ZStack {
                     Circle()
-                        .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.4), lineWidth: 2)
+                        .stroke(isSelected ? VF.accent : Color.secondary.opacity(0.4), lineWidth: 2)
                         .frame(width: 20, height: 20)
                     if isSelected {
                         Circle()
-                            .fill(Color.accentColor)
+                            .fill(VF.accent)
                             .frame(width: 12, height: 12)
                     }
                 }
@@ -592,11 +592,11 @@ struct ProfileCard: View {
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(NSColor.controlBackgroundColor))
+                    .fill(VF.surface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+                    .stroke(isSelected ? VF.accent : Color.clear, lineWidth: 2)
             )
         }
         .buttonStyle(.plain)
@@ -641,7 +641,7 @@ struct DoneStepView: View {
             HStack(spacing: 12) {
                 Image(systemName: "menubar.arrow.up.rectangle")
                     .font(.system(size: 22))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(VF.accent)
                     .frame(width: 32)
                 Text("VoiceFlow lives in your menu bar — click the icon at the top of your screen anytime for settings, insights, and help.")
                     .font(.callout)
@@ -651,7 +651,7 @@ struct DoneStepView: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(NSColor.controlBackgroundColor))
+                    .fill(VF.surface)
             )
             .padding(.horizontal, 40)
             .padding(.top, 8)
@@ -674,7 +674,7 @@ struct DoneStepView: View {
                     .frame(maxWidth: 240)
                     .padding(.vertical, 8)
             }
-            .buttonStyle(.borderedProminent)
+            .vfPrimaryButton()
             .controlSize(.large)
 
             Spacer()
@@ -700,7 +700,7 @@ struct UsageTipRow: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 14))
-                .foregroundColor(.accentColor)
+                .foregroundColor(VF.accent)
                 .frame(width: 24)
             Text(text)
                 .font(.callout)

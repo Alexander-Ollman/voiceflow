@@ -37,6 +37,9 @@ final class SetupWizardController {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
+        // Same dark vibrant chrome as the main window.
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = .clear
         window.setContentSize(NSSize(width: 620, height: 700))
         window.center()
         window.isReleasedWhenClosed = false
