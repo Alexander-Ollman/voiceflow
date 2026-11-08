@@ -3149,7 +3149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let frame = NSRect(x: housing.midX - size.width / 2, y: screen.frame.maxY - size.height,
                            width: size.width, height: size.height)
         if islandPanel == nil {
-            let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+            let panel = TopEdgePanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                                 backing: .buffered, defer: false)
             // Above the menu bar, so the shape can merge with the housing.
             panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 2)
@@ -3173,8 +3173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
 
         // Track the system island (e.g. the mic indicator appearing ~100 ms
-        // after recording starts) so our wings make room for it.
-        if style == .island {
+        // after recording starts) and menu-bar room, for both styles: the
+        // notch style sits over the same hardware on Dynamic Island Macs.
+        do {
             systemIsland.refresh(housing: housing, screen: screen)
             if systemIslandTimer == nil {
                 let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in

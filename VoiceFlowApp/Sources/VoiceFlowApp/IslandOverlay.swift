@@ -81,6 +81,65 @@ final class SystemIslandGeometry: ObservableObject {
         let left = (housing.minX - minX + margin).rounded(), right = (maxX - housing.maxX + margin).rounded()
         if left != leftExtra { leftExtra = left }
         if right != rightExtra { rightExtra = right }
+
+        // Menu-bar room beside what the system occupies, so wings never cover
+        // menus (left) or status items (right).
+        let occupiedMin = housing.minX - left, occupiedMax = housing.maxX + right
+        var statusMinX = screen.frame.maxX
+        for window in windows {
+            guard let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == Int(CGWindowLevelForKey(.statusWindow)),
+                  (window[kCGWindowOwnerName as String] as? String) != "Window Server",
+                  let b = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let w = b["Width"], let y = b["Y"],
+                  y - screenTopCG < housing.height, w < 300, x >= housing.maxX - 1 else { continue }
+            statusMinX = min(statusMinX, x)
+        }
+        let room = (left: occupiedMin - Self.appMenusMaxX(screen: screen, primaryHeight: primaryHeight),
+                    right: statusMinX - occupiedMax)
+        if room.left != leftRoom { leftRoom = room.left }
+        if room.right != rightRoom { rightRoom = room.right }
+    }
+
+    /// Room in the menu bar left and right of what the system occupies.
+    @Published var leftRoom: CGFloat = .greatestFiniteMagnitude
+    @Published var rightRoom: CGFloat = .greatestFiniteMagnitude
+
+    private static var menuCache: (pid: pid_t, at: Date, maxX: CGFloat)?
+
+    /// Right edge of the frontmost app's menu titles, read through
+    /// Accessibility (cached per app for a second). Without Accessibility,
+    /// assume the left half of the menu bar is in use.
+    private static func appMenusMaxX(screen: NSScreen, primaryHeight: CGFloat) -> CGFloat {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return screen.frame.minX }
+        if let cache = menuCache, cache.pid == app.processIdentifier, Date().timeIntervalSince(cache.at) < 1 {
+            return cache.maxX
+        }
+        var maxX = screen.frame.midX - 80
+        if AXIsProcessTrusted() {
+            maxX = screen.frame.minX
+            let element = AXUIElementCreateApplication(app.processIdentifier)
+            var bar: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXMenuBarAttribute as CFString, &bar) == .success,
+               let bar, CFGetTypeID(bar) == AXUIElementGetTypeID() {
+                var children: CFTypeRef?
+                AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children)
+                for item in (children as? [AXUIElement]) ?? [] {
+                    var posRef: CFTypeRef?, sizeRef: CFTypeRef?
+                    var pos = CGPoint.zero, size = CGSize.zero
+                    if AXUIElementCopyAttributeValue(item, kAXPositionAttribute as CFString, &posRef) == .success,
+                       AXUIElementCopyAttributeValue(item, kAXSizeAttribute as CFString, &sizeRef) == .success,
+                       let posRef, let sizeRef {
+                        AXValueGetValue(posRef as! AXValue, .cgPoint, &pos)
+                        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+                        // Only titles on this screen, left of centre.
+                        if pos.x >= screen.frame.minX, pos.x < screen.frame.midX { maxX = max(maxX, pos.x + size.width) }
+                    }
+                }
+            }
+        }
+        menuCache = (app.processIdentifier, Date(), maxX)
+        return maxX
     }
 }
 
@@ -136,8 +195,10 @@ struct IslandOverlayView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if style == .island {
-                islandBody
+            if wingsFit {
+                besideBody
+            } else if style == .island {
+                islandBelowBody
             } else {
                 VStack(spacing: 0) {
                     Color.clear.frame(width: bodyWidth, height: housing.height)
@@ -167,11 +228,19 @@ struct IslandOverlayView: View {
 
     /// One black pill behind the system island with our wings on either side;
     /// the system draws its indicators above it, so they are never hidden.
-    private var islandBody: some View {
+    /// Wings go beside the housing only when the menu bar has room for them
+    /// on both sides; otherwise the overlay hangs below instead.
+    private var wingsFit: Bool {
+        system.leftRoom >= Self.islandWing + 4 && system.rightRoom >= Self.islandWing + 4
+    }
+
+    /// Wings beside what the system occupies. Island: one black pill behind
+    /// the system island. Notch: flush with the top edge, with ears, like the
+    /// notch grown sideways. The system draws its indicators above ours.
+    private var besideBody: some View {
         let compactWidth = occupiedWidth + Self.islandWing * 2
+        let rowHeight = style == .island ? bandHeight : housing.height
         return VStack(spacing: 6) {
-            // The pill stays pill-sized in the menu-bar band, so it never
-            // covers menu items…
             HStack(spacing: 0) {
                 LiquidWaveformView(history: state.waveform, mode: waveMode)
                     .frame(width: Self.islandWing - 20, height: 16)
@@ -180,12 +249,12 @@ struct IslandOverlayView: View {
                 IslandStatus(state: state)
                     .frame(width: Self.islandWing)
             }
-            .frame(width: compactWidth, height: bandHeight)
-            .background(Capsule(style: .continuous).fill(Color.black))
-            // Keep the gap centred on what the system occupies, not on the housing.
+            .frame(width: compactWidth, height: rowHeight)
+            .background(wingsBackground(rowHeight: rowHeight))
+            // Keep the gap centred on what the system occupies.
             .offset(x: (system.rightExtra - system.leftExtra) / 2)
 
-            // …and live text drops into its own card below the menu bar.
+            // Live text drops into its own card below the menu bar.
             if expanded {
                 transcript
                     .frame(width: Self.expandedWidth)
@@ -196,12 +265,33 @@ struct IslandOverlayView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(.top, Self.islandTop)
+        .padding(.top, style == .island ? Self.islandTop : 0)
         .animation(VF.Motion.morph, value: system.leftExtra)
         .animation(VF.Motion.morph, value: system.rightExtra)
     }
 
-    // MARK: Notch: body below the notch
+    @ViewBuilder
+    private func wingsBackground(rowHeight: CGFloat) -> some View {
+        if style == .island {
+            Capsule(style: .continuous).fill(Color.black)
+        } else {
+            NotchWingsShape(bottomRadius: 12, earRadius: 6).fill(Color.black)
+        }
+    }
+
+    /// Fallback when the menu bar is too full: a separate pill under the island.
+    private var islandBelowBody: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: housing.height + Self.islandGap)
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: expanded ? 22 : Self.rowHeight / 2, style: .continuous)
+                        .fill(Color.black)
+                        .shadow(color: .black.opacity(0.3), radius: 10, y: 4))
+        }
+    }
+
+    // MARK: Fallback: body below the housing
 
     private var content: some View {
         VStack(spacing: 0) {
@@ -332,4 +422,34 @@ struct NotchDropShape: Shape {
         p.closeSubpath()
         return p
     }
+}
+
+/// Notch grown sideways: flush with the top edge (square top with small
+/// concave ears where it meets the screen edge), rounded bottom corners.
+struct NotchWingsShape: Shape {
+    var bottomRadius: CGFloat
+    var earRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let e = earRadius, r = min(bottomRadius, rect.height / 2)
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX - e, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX + e, y: rect.minY))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + e), control: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - r), control: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + e))
+        p.addQuadCurve(to: CGPoint(x: rect.minX - e, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Panel for the camera-housing overlay. AppKit normally constrains windows
+/// to stay below the menu bar, which pushed the overlay ~45 pt down in
+/// full-screen spaces; this one must sit exactly at the top edge.
+final class TopEdgePanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
