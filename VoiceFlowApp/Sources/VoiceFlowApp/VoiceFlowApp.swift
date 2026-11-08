@@ -2038,6 +2038,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overlayPanel: NSPanel?
     var overlayHostingView: NSHostingView<RecordingOverlayView>?
     var overlayState = OverlayState()
+    private var overlayActivity: NSObjectProtocol?
     var settingsWindow: NSWindow?
     var wizardController: SetupWizardController?
     /// The app that was frontmost when Settings opened, so focus can be handed
@@ -3278,11 +3279,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayState.state = state
         repositionOverlay()
         overlayPanel?.orderFront(nil)
+        // VoiceFlow is in the background while the user dictates into another
+        // app; keep App Nap from throttling the overlay's 60 fps animation.
+        if overlayActivity == nil {
+            overlayActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .latencyCritical],
+                reason: "Animating the voice overlay")
+        }
     }
 
     private func hideOverlay() {
         overlayPanel?.orderOut(nil)
         overlayState.state = .idle
+        if let activity = overlayActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            overlayActivity = nil
+        }
     }
 
     // MARK: - Hotkey Setup

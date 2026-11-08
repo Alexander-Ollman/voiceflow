@@ -29,7 +29,9 @@ import SwiftUI
         panel.contentView = NSHostingView(rootView: RecordingOverlayView(state: state))
         panel.orderFrontRegardless()
         if useMic { recorder.start() }
-        Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
+        // ~12 Hz, matching AudioRecorder's 4096-frame tap at 48 kHz, so the
+        // preview moves exactly as the app does.
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 12.0, repeats: true) { _ in
             MainActor.assumeIsolated { self.step() }
         }
     }
@@ -42,8 +44,8 @@ import SwiftUI
 
     func step() {
         tick += 1
-        let t = Double(tick % 480) / 30.0   // 16s loop
-        let level = useMic ? recorder.level : syntheticLevel(Double(tick) / 30.0)
+        let t = Double(tick % 192) / 12.0   // 16s loop
+        let level = useMic ? recorder.level : syntheticLevel(Double(tick) / 12.0)
         switch t {
         case ..<3: state.state = .recording; state.audioLevel = level
         case ..<9:

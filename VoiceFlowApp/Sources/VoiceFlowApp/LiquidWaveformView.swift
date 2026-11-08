@@ -42,9 +42,9 @@ struct LiquidWaveformView: View {
     }
 
     private static let layers: [Layer] = [
-        Layer(color: VF.Palette.iris,  frequency: 1.15, speed: 1.9, gain: 0.85, offset: 0.0),
-        Layer(color: VF.Palette.lagoon, frequency: 1.65, speed: -2.6, gain: 1.0, offset: 1.7),
-        Layer(color: VF.Palette.mint,  frequency: 2.20, speed: 3.3, gain: 0.7, offset: 3.1),
+        Layer(color: VF.Palette.iris,  frequency: 1.15, speed: 4.8, gain: 0.85, offset: 0.0),
+        Layer(color: VF.Palette.lagoon, frequency: 1.65, speed: -6.4, gain: 1.0, offset: 1.7),
+        Layer(color: VF.Palette.mint,  frequency: 2.20, speed: 8.2, gain: 0.7, offset: 3.1),
     ]
 
     private func draw(in context: inout GraphicsContext, size: CGSize, time: Double) {
@@ -57,8 +57,10 @@ struct LiquidWaveformView: View {
         case .listening:
             level = smoother.next(Double(Self.energy(levels.last ?? 0)))
         case .thinking:
-            level = smoother.next(0.24 + 0.06 * sin(time * 2.2))
+            level = smoother.next(0.24 + 0.06 * sin(time * 4.0))
         }
+        // Flow faster while speaking: phase advances with a level-scaled clock.
+        let phaseTime = smoother.advancePhase(now: time, level: level)
 
         let samples = max(24, Int(size.width / 3))
         context.blendMode = .plusLighter
@@ -73,15 +75,17 @@ struct LiquidWaveformView: View {
                 let local: Double
                 switch mode {
                 case .listening:
-                    // Mirror history around the center: newest in the middle.
+                    // Mirror recent history around the center: newest in the
+                    // middle, ~1 s old at the edges (levels arrive ~12 Hz).
                     let distance = abs(x - 0.5) * 2               // 0 center … 1 edge
-                    local = min(1, 0.45 * level + 0.75 * Self.sample(levels, age: distance))
+                    let age = distance * Self.visibleHistoryFraction(levels.count)
+                    local = min(1, 0.5 * level + 0.7 * Self.sample(levels, age: age))
                 case .thinking:
                     // A soft highlight travelling across the line.
-                    let sweep = (sin(time * 1.6) + 1) / 2
+                    let sweep = (sin(time * 3.2) + 1) / 2
                     local = level * (0.6 + 0.8 * exp(-pow((x - sweep) * 5, 2)))
                 }
-                let carrier = sin(2 * .pi * layer.frequency * x + layer.speed * time + layer.offset)
+                let carrier = sin(2 * .pi * layer.frequency * x + layer.speed * phaseTime + layer.offset)
                 let amplitude = max(0.05, local) * layer.gain * window
                 let y = Double(mid) - halfHeight * amplitude * (0.55 + 0.45 * carrier)
                 top.append(CGPoint(x: x * Double(size.width), y: y))
@@ -116,6 +120,12 @@ struct LiquidWaveformView: View {
         return pow(min(1, max(0, level) * 3.6), 0.72)
     }
 
+    /// Share of the history shown center-to-edge: about one second of audio.
+    private static func visibleHistoryFraction(_ count: Int) -> Double {
+        guard count > 1 else { return 1 }
+        return min(1, 12.0 / Double(count - 1))
+    }
+
     /// Interpolated level by age (0 = newest, 1 = oldest in the history).
     private static func sample(_ levels: [Float], age: Double) -> Double {
         guard levels.count > 1 else { return Double(energy(levels.first ?? 0)) }
@@ -132,6 +142,17 @@ struct LiquidWaveformView: View {
 /// A reference type so the Canvas closure can advance it per frame.
 final class LevelSmoother {
     private var value: Double = 0
+    private var phase: Double = 0
+    private var lastTime: Double?
+
+    /// A clock that runs at 1× in silence and up to ~1.8× while speaking.
+    func advancePhase(now: Double, level: Double) -> Double {
+        defer { lastTime = now }
+        guard let lastTime, now > lastTime, now - lastTime < 0.25 else { return phase }
+        phase += (now - lastTime) * (1 + 0.8 * min(1, level * 1.5))
+        return phase
+    }
+
     func next(_ target: Double) -> Double {
         let rate = target > value ? 0.45 : 0.08
         value += (target - value) * rate
