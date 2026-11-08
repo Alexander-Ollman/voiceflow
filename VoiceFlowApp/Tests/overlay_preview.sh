@@ -11,7 +11,7 @@ if [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Applications/Xcode.app ]; then
 fi
 swiftc -O -parse-as-library -target arm64-apple-macos15.0 \
     "$SRC/VFDesign.swift" "$SRC/RecordingWaveformView.swift" \
-    "$SRC/LiquidWaveformView.swift" "$SRC/RecordingOverlay.swift" \
+    "$SRC/LiquidWaveformView.swift" "$SRC/RecordingOverlay.swift" "$SRC/IslandOverlay.swift" \
     "$APP_ROOT/Tests/overlay_preview.swift" -o "$OUT/overlay-preview"
 echo "Overlay preview running — Ctrl-C to quit."
 "$OUT/overlay-preview" "$@"

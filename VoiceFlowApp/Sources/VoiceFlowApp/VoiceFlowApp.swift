@@ -2039,6 +2039,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var overlayHostingView: NSHostingView<RecordingOverlayView>?
     var overlayState = OverlayState()
     private var overlayActivity: NSObjectProtocol?
+    private var islandPanel: NSPanel?
+    /// Placement used by the overlay currently on screen.
+    private var activeOverlayPlacement: OverlayPlacement = .bottom
     private var overlayOutcomeTimer: DispatchWorkItem?
     private var overlayAwaitingPaste = false
     private var overlayPastedThisSession = false
@@ -3124,6 +3127,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ?? NSScreen.main
     }
 
+    /// The placement to use for a new overlay session: the user's choice when
+    /// the active screen has a camera housing, otherwise the bottom capsule.
+    private func resolvedOverlayPlacement() -> OverlayPlacement {
+        let preferred = OverlayPlacement.current
+        guard preferred != .bottom, activeScreen()?.cameraHousingFrame != nil else { return .bottom }
+        return preferred
+    }
+
+    /// Shows the overlay around the camera housing of the active screen.
+    private func showIslandPanel(style: OverlayPlacement) {
+        guard let screen = activeScreen(), let housing = screen.cameraHousingFrame else {
+            activeOverlayPlacement = .bottom
+            repositionOverlay()
+            overlayPanel?.orderFront(nil)
+            return
+        }
+        let size = IslandOverlayView.panelSize(housing: housing.size)
+        let frame = NSRect(x: housing.midX - size.width / 2, y: screen.frame.maxY - size.height,
+                           width: size.width, height: size.height)
+        if islandPanel == nil {
+            let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+                                backing: .buffered, defer: false)
+            // Above the menu bar, so the shape can merge with the housing.
+            panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 2)
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = false
+            panel.ignoresMouseEvents = true
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+            islandPanel = panel
+        }
+        guard let panel = islandPanel else { return }
+        // Rebuild the view when style or housing changes (e.g. another screen).
+        let key = "\(style.rawValue)-\(housing.width)x\(housing.height)"
+        if panel.identifier?.rawValue != key {
+            panel.contentView = NSHostingView(rootView: IslandOverlayView(
+                state: overlayState, style: style, housing: housing.size))
+            panel.identifier = NSUserInterfaceItemIdentifier(key)
+        }
+        panel.setFrame(frame, display: true)
+        panel.orderFrontRegardless()
+    }
+
     /// Snaps the overlay panel to bottom-center of the active screen's visible area.
     private func repositionOverlay() {
         guard let panel = overlayPanel, let screen = activeScreen() else { return }
@@ -3296,9 +3342,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayOutcomeTimer = nil
         overlayAwaitingPaste = false
         if state.isRecording && !overlayState.state.isRecording { overlayPastedThisSession = false }
+        let wasVisible = overlayPanel?.isVisible == true || islandPanel?.isVisible == true
         overlayState.state = state
-        repositionOverlay()
-        overlayPanel?.orderFront(nil)
+        if !wasVisible { activeOverlayPlacement = resolvedOverlayPlacement() }
+        if activeOverlayPlacement == .bottom {
+            repositionOverlay()
+            overlayPanel?.orderFront(nil)
+        } else {
+            showIslandPanel(style: activeOverlayPlacement)
+        }
         // VoiceFlow is in the background while the user dictates into another
         // app; keep App Nap from throttling the overlay's 60 fps animation.
         if overlayActivity == nil {
@@ -3313,7 +3365,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (~100 ms later): a paste plays the green "done" ripple, no paste plays
     /// amber. Cancelling while still recording hides immediately.
     private func hideOverlay() {
-        guard overlayPanel?.isVisible == true, overlayState.state.isWorking else {
+        guard overlayPanel?.isVisible == true || islandPanel?.isVisible == true,
+              overlayState.state.isWorking else {
             finishHidingOverlay()
             return
         }
@@ -3351,6 +3404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayAwaitingPaste = false
         overlayPastedThisSession = false
         overlayPanel?.orderOut(nil)
+        islandPanel?.orderOut(nil)
         overlayState.state = .idle
         if let activity = overlayActivity {
             ProcessInfo.processInfo.endActivity(activity)
@@ -7545,6 +7599,86 @@ struct AIFeaturesSettingsView: View {
     }
 }
 
+// MARK: - Voice overlay settings
+
+struct VoiceOverlaySettings: View {
+    @AppStorage(OverlayPlacement.preferenceKey) private var placement = OverlayPlacement.bottom.rawValue
+    @AppStorage(WaveformPalette.preferenceKey) private var palette = WaveformPalette.default.rawValue
+    @StateObject private var preview = RecordingWaveformHistory()
+    private let hasHousing = NSScreen.screens.contains { $0.cameraHousingFrame != nil }
+    private let tick = Timer.publish(every: 1.0 / 47.0, on: .main, in: .common).autoconnect()
+    @State private var t = 0.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Position")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                    Text(hasHousing
+                         ? "Dynamic Island and Notch grow out of the camera housing. Displays without one use the bottom of the screen."
+                         : "This Mac's displays have no camera housing, so the overlay appears at the bottom of the screen.")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Picker("", selection: $placement) {
+                    ForEach(OverlayPlacement.allCases) { option in
+                        Text(option.title).tag(option.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .disabled(!hasHousing)
+            }
+
+            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1)
+
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Waveform colour")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                    LiquidWaveformView(history: preview, mode: .listening,
+                                       palette: WaveformPalette(rawValue: palette) ?? .default)
+                        .id(palette)
+                        .frame(width: 110, height: 18)
+                        .padding(.horizontal, 17)
+                        .frame(height: 35)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .padding(.top, 6)
+                }
+                Spacer()
+                HStack(spacing: 8) {
+                    ForEach(WaveformPalette.allCases) { option in
+                        Button { palette = option.rawValue } label: {
+                            Circle()
+                                .fill(LinearGradient(colors: [option.stops.edge, option.stops.center],
+                                                     startPoint: .bottomLeading, endPoint: .topTrailing))
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().strokeBorder(.white.opacity(palette == option.rawValue ? 0.9 : 0), lineWidth: 2))
+                                .padding(2)
+                        }
+                        .buttonStyle(.plain)
+                        .help(option.rawValue.capitalized)
+                        .accessibilityLabel(option.rawValue.capitalized)
+                    }
+                }
+            }
+        }
+        .onReceive(tick) { _ in
+            // A gentle synthetic voice so the swatch preview is alive.
+            t += 1.0 / 47.0
+            let phrase = sin(t * 0.9) > -0.6 ? 1.0 : 0.05
+            let syllable = max(0, sin(t * 11)) * (0.6 + 0.4 * sin(t * 2.3))
+            preview.append(Float(0.02 + 0.2 * phrase * syllable))
+        }
+    }
+}
+
 // MARK: - General Settings Tab
 
 struct GeneralSettingsView: View {
@@ -7564,6 +7698,10 @@ struct GeneralSettingsView: View {
 
                 cardSection(title: "Hotkeys", icon: "keyboard") {
                     HotkeyRecorderList()
+                }
+
+                cardSection(title: "Voice overlay", icon: "waveform") {
+                    VoiceOverlaySettings()
                 }
 
                 cardSection(title: "Microphone", icon: "mic") {

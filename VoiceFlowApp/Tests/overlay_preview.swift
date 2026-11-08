@@ -5,6 +5,7 @@ import SwiftUI
 /// Loops: listen → release (flare, glide) → done (green); live text →
 /// formatting → nothing inserted (amber); AI command → done.
 /// Pass --palette glacier|lagoon|aurora|ember|mono to pick a swatch.
+/// Pass --island or --notch to draw around the camera housing.
 /// Pass --mic to drive the waveform from the real microphone instead of a
 /// synthetic speech envelope. Quit with Ctrl-C.
 @MainActor final class OverlayPreview {
@@ -32,6 +33,17 @@ import SwiftUI
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(rootView: RecordingOverlayView(state: state))
+        // --island / --notch: draw around the built-in display's camera housing.
+        let style: OverlayPlacement? = CommandLine.arguments.contains("--island") ? .island
+            : CommandLine.arguments.contains("--notch") ? .notch : nil
+        if let style, let screen = NSScreen.screens.first(where: { $0.cameraHousingFrame != nil }),
+           let housing = screen.cameraHousingFrame {
+            let size = IslandOverlayView.panelSize(housing: housing.size)
+            panel.setFrame(NSRect(x: housing.midX - size.width / 2, y: screen.frame.maxY - size.height,
+                                  width: size.width, height: size.height), display: true)
+            panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 2)
+            panel.contentView = NSHostingView(rootView: IslandOverlayView(state: state, style: style, housing: housing.size))
+        }
         panel.orderFrontRegardless()
         if useMic { recorder.start() }
         // ~47 Hz, matching AudioRecorder.meterLevels (4 slices per 4096-frame

@@ -41,9 +41,14 @@ class OverlayState: ObservableObject {
     let waveform = RecordingWaveformHistory()
     @Published var state: RecordingState = .idle {
         didSet {
-            if state.isRecording && !oldValue.isRecording { waveform.reset() }
+            if state.isRecording && !oldValue.isRecording {
+                waveform.reset()
+                recordingStarted = Date()
+            }
         }
     }
+    /// When the current recording began (drives the island's timer).
+    private(set) var recordingStarted: Date?
     @Published var audioLevel: Float = 0 {
         didSet { waveform.append(audioLevel) }
     }
