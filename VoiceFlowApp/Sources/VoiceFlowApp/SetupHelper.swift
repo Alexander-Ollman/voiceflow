@@ -161,6 +161,13 @@ final class SetupHelper: ObservableObject {
     @MainActor
     func runSetup() async {
         phase = .idle
+        // Without this, App Nap throttles the multi-GB download whenever the
+        // wizard is behind another app: measured 251 KB/s in the background vs
+        // 1,870 KB/s frontmost on the same connection.
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: "Downloading VoiceFlow models")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
         do {
             if !bonsaiInstalled {
                 try await downloadBonsai()
