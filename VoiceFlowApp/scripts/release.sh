@@ -3,6 +3,7 @@
 #
 #   NOTARIZE_KEYCHAIN_PROFILE=<profile> VoiceFlowApp/scripts/release.sh 3.0.0            # build, verify, upload to the draft
 #   NOTARIZE_KEYCHAIN_PROFILE=<profile> VoiceFlowApp/scripts/release.sh 3.0.0 --publish  # ...then publish as Latest
+#   ... release.sh 3.0.0 --reuse-build   # re-verify and upload an already-built, notarized dist/
 #
 # Requirements (checked before anything is built):
 #   - clean checkout of main, up to date with origin
@@ -16,8 +17,16 @@
 # VoiceFlow.dmg. Nothing is uploaded unless both pass Gatekeeper as notarized.
 set -euo pipefail
 
-VERSION="${1:-}"; PUBLISH="${2:-}"
-[ -n "$VERSION" ] || { echo "usage: $0 <version> [--publish]"; exit 64; }
+VERSION="${1:-}"; shift || true
+PUBLISH=""; REUSE_BUILD=""
+for arg in "$@"; do
+    case "$arg" in
+        --publish) PUBLISH="--publish" ;;
+        --reuse-build) REUSE_BUILD=1 ;;   # verify + upload the existing dist/ artifacts, no rebuild
+        *) echo "unknown option: $arg"; exit 64 ;;
+    esac
+done
+[ -n "$VERSION" ] || { echo "usage: $0 <version> [--reuse-build] [--publish]"; exit 64; }
 TAG="v$VERSION"
 TEAM_ID="JVSQ3LCY64"
 IDENTITY="Developer ID Application: Era Laboratories Inc. ($TEAM_ID)"
@@ -43,7 +52,8 @@ PLIST_VERSION="$(grep -A1 'CFBundleShortVersionString' "$APP_ROOT/build.sh" | ta
 [ "$PLIST_VERSION" = "$VERSION" ] || fail "build.sh bundle version is $PLIST_VERSION, expected $VERSION"
 ok "bundle version $VERSION"
 
-security find-identity -v -p codesigning | grep -q "$IDENTITY" || fail "missing signing identity: $IDENTITY"
+identities="$(security find-identity -v -p codesigning || true)"
+[[ "$identities" == *"$IDENTITY"* ]] || fail "missing signing identity: $IDENTITY"
 ok "Developer ID present"
 
 if [ -n "${NOTARIZE_KEYCHAIN_PROFILE:-}" ]; then
@@ -61,20 +71,29 @@ gh auth status >/dev/null 2>&1 || fail "gh is not authenticated"
     || fail "no draft release $TAG on $REPO (create it with the release notes first)"
 ok "draft release $TAG exists"
 
-echo "== Building (build.sh signs, notarizes and staples the app and disk image)"
-bash "$APP_ROOT/build.sh"
+if [ -n "$REUSE_BUILD" ]; then
+    echo "== Reusing existing build (no rebuild); every check below still applies"
+    [ -d "$APP" ] && [ -f "$ZIP" ] && [ -f "$DMG" ] || fail "no existing build to reuse"
+else
+    echo "== Building (build.sh signs, notarizes and staples the app and disk image)"
+    bash "$APP_ROOT/build.sh"
+fi
 
 echo "== Verifying"
 [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$VERSION" ] \
     || fail "built app reports a different version"
 codesign --verify --deep --strict "$APP" || fail "app signature invalid"
+# Capture output before matching: with pipefail, `cmd | grep -q` fails when
+# grep exits early on a match and cmd gets SIGPIPE.
 for artifact in "$APP" "$DMG"; do
-    codesign -dv "$artifact" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" || fail "$(basename "$artifact") not signed by $TEAM_ID"
+    info="$(codesign -dv "$artifact" 2>&1 || true)"
+    [[ "$info" == *"TeamIdentifier=$TEAM_ID"* ]] || fail "$(basename "$artifact") not signed by $TEAM_ID"
     xcrun stapler validate "$artifact" >/dev/null || fail "$(basename "$artifact") has no stapled notarization ticket"
 done
-spctl -a -vv -t exec "$APP" 2>&1 | grep -q "Notarized Developer ID" || fail "Gatekeeper does not accept the app as notarized"
-spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 | grep -q "Notarized Developer ID" \
-    || fail "Gatekeeper does not accept the disk image as notarized"
+gatekeeper="$(spctl -a -vv -t exec "$APP" 2>&1 || true)"
+[[ "$gatekeeper" == *"Notarized Developer ID"* ]] || fail "Gatekeeper does not accept the app as notarized"
+gatekeeper="$(spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 || true)"
+[[ "$gatekeeper" == *"Notarized Developer ID"* ]] || fail "Gatekeeper does not accept the disk image as notarized"
 # The zip the updater downloads must contain the same stapled app.
 UNZIP_DIR="$(mktemp -d)"; trap 'rm -rf "$UNZIP_DIR"' EXIT
 ditto -x -k "$ZIP" "$UNZIP_DIR"
