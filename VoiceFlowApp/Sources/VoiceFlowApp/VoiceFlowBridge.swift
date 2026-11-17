@@ -585,7 +585,14 @@ final class VoiceFlowBridge: ObservableObject {
         }
     }
 
-    /// Get library version
+    /// The app's release version (CFBundleShortVersionString), e.g. "3.0.1".
+    /// Use this anywhere users see a version: it matches the updater and the
+    /// GitHub release. `version` below is the Rust engine's crate version.
+    nonisolated static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? version
+    }
+
+    /// Get the Rust engine (voiceflow-ffi crate) version — not the app release.
     nonisolated static var version: String {
         guard let versionPtr = voiceflow_version() else {
             return "unknown"
