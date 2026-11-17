@@ -1,5 +1,9 @@
 # Release Notes
 
+## v3.0.2 — Correct version in the menu bar
+
+- Fixed: the menu bar and the Settings sidebar showed "VoiceFlow v2.0.0" instead of the installed version.
+
 ## v3.0.1 — Reliability fixes
 
 - Fixed: VoiceFlow could reuse a leftover language-model server from an earlier session that kept running in the background. It now stops leftover VoiceFlow servers and starts a fresh one, and never uses another program's server on its port.
