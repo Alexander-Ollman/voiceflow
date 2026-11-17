@@ -1,5 +1,11 @@
 # Release Notes
 
+## v3.0.1 — Reliability fixes
+
+- Fixed: VoiceFlow could reuse a leftover language-model server from an earlier session that kept running in the background. It now stops leftover VoiceFlow servers and starts a fresh one, and never uses another program's server on its port.
+- Fixed: background helpers could outlive VoiceFlow if they were slow to shut down.
+- Fixed: Settings → Permissions kept showing "Grant" for Accessibility after you had turned it on in System Settings. It now updates on its own.
+
 ## v3.0.0 — A new look, a voice overlay that shows it heard you, and Dynamic Island support
 
 ### A new voice overlay
