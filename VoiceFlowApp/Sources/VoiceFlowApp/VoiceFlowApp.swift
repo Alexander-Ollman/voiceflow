@@ -2781,7 +2781,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMenu() {
         let menu = NSMenu()
 
-        let statusMenuItem = NSMenuItem(title: "VoiceFlow v\(VoiceFlowBridge.version)", action: nil, keyEquivalent: "")
+        let statusMenuItem = NSMenuItem(title: "VoiceFlow v\(VoiceFlowBridge.appVersion)", action: nil, keyEquivalent: "")
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
@@ -6261,7 +6261,7 @@ struct SettingsHeaderView: View {
                 Text("VoiceFlow")
                     .font(.title2)
                     .fontWeight(.semibold)
-                Text("v\(VoiceFlowBridge.version)")
+                Text("v\(VoiceFlowBridge.appVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
