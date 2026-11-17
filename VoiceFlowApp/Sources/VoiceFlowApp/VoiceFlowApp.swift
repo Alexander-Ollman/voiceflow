@@ -5863,6 +5863,15 @@ struct AccessibilityPermissionButton: View {
         .onAppear {
             isGranted = AXIsProcessTrusted()
         }
+        // Granting happens in System Settings and usually takes longer than a
+        // second; keep the row current instead of checking only on appear.
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            let trusted = AXIsProcessTrusted()
+            if trusted != isGranted { isGranted = trusted }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            isGranted = AXIsProcessTrusted()
+        }
     }
 }
 
