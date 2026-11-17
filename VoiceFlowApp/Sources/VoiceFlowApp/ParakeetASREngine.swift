@@ -109,11 +109,14 @@ final class ParakeetASREngine: ObservableObject {
         state = .unloaded
         let owned = daemonProcess
         daemonProcess = nil
-        if !(await ManagedProcessShutdown.stop(owned)) {
-            NSLog("[Parakeet] Owned daemon did not exit within shutdown deadline")
+        if await ManagedProcessShutdown.stop(owned) {
+            watchdog?.stop()
+            watchdog = nil
+        } else {
+            // Leave the watchdog armed: it terminates the daemon once VoiceFlow
+            // exits. Disarming here is how a live helper becomes an orphan.
+            NSLog("[Parakeet] Owned daemon did not exit within shutdown deadline; watchdog stays armed")
         }
-        watchdog?.stop()
-        watchdog = nil
         stopping = false
     }
 

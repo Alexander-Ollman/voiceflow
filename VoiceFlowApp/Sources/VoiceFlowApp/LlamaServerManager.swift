@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Manages the lifecycle of a local llama-server (PrismML fork) serving Bonsai-8B.
 /// Spawns on app launch with VoiceFlow's chosen flags, monitors liveness, restarts
@@ -82,12 +83,28 @@ final class LlamaServerManager: ObservableObject {
             return
         }
 
-        // If something is already serving the port, just adopt it.
-        if await isPortServing() {
+        // Something already on our port: only reuse it if it is a VoiceFlow
+        // server that another running VoiceFlow owns. A VoiceFlow server whose
+        // app has exited is an orphan: stop it and start our own. Anything else
+        // is another program; never format with someone else's model.
+        if let listener = await Self.portListener() {
             guard lifecycleID == attempt else { return }
-            NSLog("[LlamaServer] External server already on :%d, adopting.", Self.port)
-            state = .ready
-            return
+            switch Self.classify(listener) {
+            case .sharedVoiceFlow:
+                NSLog("[LlamaServer] Reusing VoiceFlow server PID %d owned by running VoiceFlow PID %d",
+                      listener, Self.parentPID(of: listener) ?? -1)
+                state = .ready
+                return
+            case .orphanedVoiceFlow:
+                NSLog("[LlamaServer] Stopping orphaned VoiceFlow server PID %d on :%d", listener, Self.port)
+                await Self.terminateOrphan(listener)
+                guard lifecycleID == attempt else { return }
+            case .foreign(let name):
+                lastError = "Port \(Self.port) is in use by \(name) (PID \(listener)). Quit it, then restart VoiceFlow's language model."
+                NSLog("[LlamaServer] %@", lastError ?? "")
+                state = .crashed(lastError!)
+                return
+            }
         }
 
         guard lifecycleID == attempt else { return }
@@ -183,13 +200,83 @@ final class LlamaServerManager: ObservableObject {
         lifecycleID = UUID()
         watchdogTimer?.invalidate()
         watchdogTimer = nil
-        if !(await ManagedProcessShutdown.stop(process)) {
-            NSLog("[LlamaServer] Owned server did not exit within shutdown deadline")
+        if await ManagedProcessShutdown.stop(process) {
+            childWatchdog?.stop()
+            childWatchdog = nil
+        } else {
+            // Leave the watchdog armed: it terminates the server once VoiceFlow
+            // exits. Disarming here is how a live helper becomes an orphan.
+            NSLog("[LlamaServer] Owned server did not exit within shutdown deadline; watchdog stays armed")
         }
-        childWatchdog?.stop()
-        childWatchdog = nil
         process = nil
         state = .stopped
+    }
+
+    // MARK: - Port ownership
+
+    enum PortListenerKind: Equatable {
+        case sharedVoiceFlow          // a VoiceFlow server whose VoiceFlow is still running
+        case orphanedVoiceFlow        // a VoiceFlow server whose VoiceFlow has exited
+        case foreign(String)          // anything else
+    }
+
+    /// PID listening on our TCP port, if any.
+    static func portListener() async -> pid_t? {
+        await Task.detached(priority: .userInitiated) { () -> pid_t? in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+            task.arguments = ["-nP", "-t", "-iTCP:\(port)", "-sTCP:LISTEN"]
+            let out = Pipe()
+            task.standardOutput = out
+            task.standardError = FileHandle.nullDevice
+            guard (try? task.run()) != nil else { return nil }
+            task.waitUntilExit()
+            let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            return text.split(whereSeparator: \.isNewline).compactMap { pid_t($0) }.first
+        }.value
+    }
+
+    static func executablePath(of pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        return length > 0 ? String(cString: buffer) : nil
+    }
+
+    static func parentPID(of pid: pid_t) -> pid_t? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return pid_t(info.pbi_ppid)
+    }
+
+    /// A VoiceFlow server is the llama-server bundled inside a VoiceFlow app.
+    /// It is shared when its parent is a running VoiceFlow, orphaned when its
+    /// parent is gone (re-parented to launchd).
+    static func classify(_ pid: pid_t) -> PortListenerKind {
+        let path = executablePath(of: pid) ?? ""
+        guard path.hasSuffix(".app/Contents/MacOS/llama-server"), path.contains("VoiceFlow") else {
+            return .foreign(path.isEmpty ? "another program" : (path as NSString).lastPathComponent)
+        }
+        guard let parent = parentPID(of: pid), parent > 1,
+              let parentPath = executablePath(of: parent),
+              parentPath.hasSuffix(".app/Contents/MacOS/VoiceFlow") else {
+            return .orphanedVoiceFlow
+        }
+        return .sharedVoiceFlow
+    }
+
+    /// Stop an orphaned VoiceFlow server we did not spawn: TERM, then KILL.
+    static func terminateOrphan(_ pid: pid_t) async {
+        kill(pid, SIGTERM)
+        for _ in 0..<30 {
+            if kill(pid, 0) != 0 { return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        kill(pid, SIGKILL)
+        for _ in 0..<20 {
+            if kill(pid, 0) != 0 { return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     /// Quick health probe — hit /v1/models and check for HTTP 200.
